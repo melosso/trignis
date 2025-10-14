@@ -40,7 +40,7 @@ namespace Trignis.MicrosoftSQL.Services
             var current = new DirectoryInfo(startPath);
             while (current != null)
             {
-                if (Directory.Exists(Path.Combine(current.FullName, "Environments")))
+                if (Directory.Exists(Path.Combine(current.FullName, "environments")))
                 {
                     return current.FullName;
                 }
@@ -205,7 +205,7 @@ namespace Trignis.MicrosoftSQL.Services
 
         public void EncryptConfigFiles()
         {
-            var envDir = Path.Combine(AppContext.BaseDirectory, "Environments");
+            var envDir = Path.Combine(Path.GetDirectoryName(_certsPath)!, "environments");
             if (!Directory.Exists(envDir))
                 return;
 

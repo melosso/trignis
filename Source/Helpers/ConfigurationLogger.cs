@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Serilog;
 using Microsoft.Data.SqlClient;
 using System;
+using System.Linq;
 using Trignis.MicrosoftSQL.Models;
 
 namespace Trignis.MicrosoftSQL.Helpers;
@@ -26,30 +27,54 @@ public static class ConfigurationLogger
         Log.Information("");
         Log.Information("[Configuration]");
 
-        // Tracking Objects
+        // Show loaded environments
+        var loadedEnvironments = configuration.GetSection("ChangeTracking:LoadedEnvironments").Get<string[]>() ?? Array.Empty<string>();
+        if (loadedEnvironments.Any())
+        {
+            Log.Information($"├─ Loaded Environment Files: {string.Join(", ", loadedEnvironments)}");
+        }
+
+        // Tracking Objects - grouped by environment
         var trackingObjects = configuration.GetSection("ChangeTracking:TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
         Log.Information($"├─ Tracking Objects: {trackingObjects.Length}");
-        for (int i = 0; i < trackingObjects.Length; i++)
+        
+        var groupedByEnv = trackingObjects.GroupBy(o => string.IsNullOrEmpty(o.EnvironmentFile) ? "Unknown" : o.EnvironmentFile).OrderBy(g => g.Key);
+        
+        var envIndex = 0;
+        var totalEnvs = groupedByEnv.Count();
+        
+        foreach (var envGroup in groupedByEnv)
         {
-            var obj = trackingObjects[i];
-            var isLast = i == trackingObjects.Length - 1;
-            var prefix = isLast ? "└─" : "├─";
+            envIndex++;
+            var isLastEnv = envIndex == totalEnvs;
+            var envPrefix = isLastEnv ? "└─" : "├─";
+            var envVertical = isLastEnv ? " " : "│";
             
-            var connString = configuration.GetConnectionString(obj.Database);
-            if (string.IsNullOrEmpty(connString))
+            Log.Information($"│  {envPrefix} Environment: [{envGroup.Key}] ({envGroup.Count()} objects)");
+            
+            var objects = envGroup.ToArray();
+            for (int i = 0; i < objects.Length; i++)
             {
-                Log.Warning($"│  {prefix} ❌ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
-            }
-            else
-            {
-                try
+                var obj = objects[i];
+                var isLastObj = i == objects.Length - 1;
+                var objPrefix = isLastObj ? "└─" : "├─";
+                
+                var connString = configuration.GetConnectionString(obj.Database);
+                if (string.IsNullOrEmpty(connString))
                 {
-                    var builder = new SqlConnectionStringBuilder(connString);
-                    Log.Information($"│  {prefix} ✅ '{obj.Name}' ({obj.TableName}) → DB: {builder.InitialCatalog ?? "N/A"}, SP: {obj.StoredProcedureName}");
+                    Log.Warning($"│  {envVertical}  {objPrefix} ❌ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
                 }
-                catch (Exception ex)
+                else
                 {
-                    Log.Error($"│  {prefix} ❌ '{obj.Name}' ({obj.TableName}): Invalid connection - {ex.Message}");
+                    try
+                    {
+                        var builder = new SqlConnectionStringBuilder(connString);
+                        Log.Information($"│  {envVertical}  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) → DB: {builder.InitialCatalog ?? "N/A"}, SP: {obj.StoredProcedureName}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error($"│  {envVertical}  {objPrefix} ❌ '{obj.Name}' ({obj.TableName}): Invalid connection - {ex.Message}");
+                    }
                 }
             }
         }
@@ -88,20 +113,34 @@ public static class ConfigurationLogger
         else
         {
             var filePrefix = exportToApi ? "├─" : "└─";
-            Log.Information($"│     {filePrefix} 📁 File Export: DISABLED");
+            Log.Information($"│     {filePrefix} 🗁 File Export: DISABLED");
         }
 
         if (exportToApi)
         {
-            var apiUrl = configuration.GetValue<string>("ChangeTracking:ApiUrl");
-            var authType = configuration.GetValue<string>("ChangeTracking:ApiAuth:Type");
-            Log.Information($"│     └─ 🌐 API Export: ENABLED");
-            Log.Information($"│        ├─ URL: {apiUrl}");
-            Log.Information($"│        └─ Auth: {authType ?? "None"}");
+            var apiEndpoints = configuration.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>();
+            if (apiEndpoints != null && apiEndpoints.Length > 0)
+            {
+                Log.Information($"│     └─ ☁  API Export: ENABLED");
+                for (int i = 0; i < apiEndpoints.Length; i++)
+                {
+                    var endpoint = apiEndpoints[i];
+                    var isLastEndpoint = i == apiEndpoints.Length - 1;
+                    var prefix = isLastEndpoint ? "└─" : "├─";
+                    var verticalBar = isLastEndpoint ? " " : "│";
+                    Log.Information($"│        {prefix} Endpoint '{endpoint.Key ?? $"#{i+1}"}'");
+                    Log.Information($"│        {verticalBar}  ├─ URL: {endpoint.Url}");
+                    Log.Information($"│        {verticalBar}  └─ Auth: {endpoint.Auth?.Type ?? "None"}");
+                }
+            }
+            else
+            {
+                Log.Information($"│     └─ ☁ API Export: DISABLED (no endpoints configured)");
+            }
         }
         else
         {
-            Log.Information($"│     └─ 🌐 API Export: DISABLED");
+            Log.Information($"│     └─ ☁ API Export: DISABLED");
         }
 
         // Failover Settings

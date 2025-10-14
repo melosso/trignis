@@ -6,4 +6,5 @@ public class TrackingObject
     public required string Database { get; set; }
     public required string TableName { get; set; }
     public required string StoredProcedureName { get; set; }
+    public string? EnvironmentFile { get; set; }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
@@ -59,6 +60,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
             .Or<SqlException>()
             .WaitAndRetryAsync(retryCount, attempt => retryDelay, (exception, timeSpan, attempt, context) =>
             {
+                if (context.ContainsKey("CancellationToken") && ((CancellationToken)context["CancellationToken"]).IsCancellationRequested)
+                {
+                    throw new OperationCanceledException();
+                }
                 _logger.LogWarning($"Retry {attempt} after {timeSpan.TotalSeconds}s due to {exception.Message}");
             });
 
@@ -212,7 +217,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
         // Check cancellation before starting
         stoppingToken.ThrowIfCancellationRequested();
 
-        await _retryPolicy.ExecuteAsync(async () =>
+        var context = new Polly.Context("ProcessChanges", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken });
+        await _retryPolicy.ExecuteAsync(async (ctx) =>
         {
             using var conn = new SqlConnection(connectionString);
             var lastVersion = await GetLastProcessedVersionAsync(trackingObject.Name);
@@ -292,7 +298,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 // Update last version to current if no changes or to ensure it's up to date
                 await SetLastProcessedVersionAsync(trackingObject.Name, version);
             }
-        });
+        }, context);
     }
 
     private async Task<int> GetLastProcessedVersionAsync(string objectName)
@@ -328,13 +334,13 @@ public class ChangeTrackingBackgroundService : BackgroundService
         if (exportToFile)
         {
             stoppingToken.ThrowIfCancellationRequested();
-            await _retryPolicy.ExecuteAsync(async () => await ExportToFileAsync(trackingObject, data));
+            await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToFileAsync(trackingObject, data), new Polly.Context("ExportToFile", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
         }
 
         if (exportToApi)
         {
             stoppingToken.ThrowIfCancellationRequested();
-            await _retryPolicy.ExecuteAsync(async () => await ExportToApiAsync(trackingObject, data));
+            await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToApiAsync(trackingObject, data), new Polly.Context("ExportToApi", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
         }
     }
 
@@ -410,66 +416,82 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
     private async Task ExportToApiAsync(TrackingObject trackingObject, JsonElement data)
     {
-        var apiUrlTemplate = _config.GetValue<string>("ChangeTracking:ApiUrl");
-        if (string.IsNullOrEmpty(apiUrlTemplate))
+        var apiEndpoints = _config.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>();
+        if (apiEndpoints == null || apiEndpoints.Length == 0)
         {
-            _logger.LogWarning("API URL not configured for export.");
+            _logger.LogWarning("API endpoints not configured for export.");
+            return;
+        }
+
+        // Filter endpoints to only those from the same environment as the tracking object
+        apiEndpoints = apiEndpoints.Where(e => e.EnvironmentFile == trackingObject.EnvironmentFile).ToArray();
+        if (apiEndpoints.Length == 0)
+        {
+            _logger.LogDebug($"No API endpoints configured for environment '{trackingObject.EnvironmentFile}'.");
             return;
         }
 
         var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-        var apiUrl = apiUrlTemplate
-            .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
-            .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
-            .Replace("{database}", Uri.EscapeDataString(trackingObject.Database));
 
-        var client = _httpClientFactory.CreateClient();
-        
-        // Add authentication header
-        var authType = _config.GetValue<string>("ChangeTracking:ApiAuth:Type");
-        if (!string.IsNullOrEmpty(authType))
+        foreach (var endpoint in apiEndpoints)
         {
-            switch (authType.ToLower())
+            if (string.IsNullOrEmpty(endpoint.Url))
+                continue;
+
+            var apiUrl = endpoint.Url
+                .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
+                .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
+                .Replace("{database}", Uri.EscapeDataString(trackingObject.Database))
+                .Replace("{key}", Uri.EscapeDataString(endpoint.Key ?? ""));
+
+            var client = _httpClientFactory.CreateClient();
+            
+            // Add authentication header
+            if (endpoint.Auth != null && !string.IsNullOrEmpty(endpoint.Auth.Type))
             {
-                case "bearer":
-                    var token = _config.GetValue<string>("ChangeTracking:ApiAuth:Token");
-                    if (!string.IsNullOrEmpty(token))
-                    {
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                    }
-                    break;
-                case "basic":
-                    var username = _config.GetValue<string>("ChangeTracking:ApiAuth:Username");
-                    var password = _config.GetValue<string>("ChangeTracking:ApiAuth:Password");
-                    if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
-                    {
-                        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-                    }
-                    break;
-                case "apikey":
-                    var apiKey = _config.GetValue<string>("ChangeTracking:ApiAuth:ApiKey");
-                    var headerName = _config.GetValue<string>("ChangeTracking:ApiAuth:HeaderName", "X-API-Key");
-                    if (!string.IsNullOrEmpty(apiKey))
-                    {
-                        client.DefaultRequestHeaders.Add(headerName, apiKey);
-                    }
-                    break;
-                default:
-                    _logger.LogWarning($"Unsupported authentication type: {authType}");
-                    break;
+                var authType = endpoint.Auth.Type.ToLower();
+                switch (authType)
+                {
+                    case "bearer":
+                        var token = endpoint.Auth.Token;
+                        if (!string.IsNullOrEmpty(token))
+                        {
+                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                        }
+                        break;
+                    case "basic":
+                        var username = endpoint.Auth.Username;
+                        var password = endpoint.Auth.Password;
+                        if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
+                        {
+                            var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+                        }
+                        break;
+                    case "apikey":
+                        var apiKey = endpoint.Auth.ApiKey;
+                        var headerName = endpoint.Auth.HeaderName ?? "X-API-Key";
+                        if (!string.IsNullOrEmpty(apiKey))
+                        {
+                            client.DefaultRequestHeaders.Add(headerName, apiKey);
+                        }
+                        break;
+                    default:
+                        _logger.LogWarning($"Unsupported authentication type: {authType} for endpoint '{endpoint.Key}'");
+                        break;
+                }
             }
+
+            var content = new StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
+            var response = await client.PostAsync(apiUrl, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new HttpRequestException($"API export to '{endpoint.Key ?? apiUrl}' failed with status {response.StatusCode}");
+            }
+
+            _logger.LogInformation($" └─ Exported changes to API endpoint '{endpoint.Key ?? "unnamed"}': {apiUrl}");
         }
-
-        var content = new StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
-        var response = await client.PostAsync(apiUrl, content);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"API export failed with status {response.StatusCode}");
-        }
-
-        _logger.LogInformation(" └─ Exported changes to API.");
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

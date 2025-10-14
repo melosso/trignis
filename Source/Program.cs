@@ -10,6 +10,11 @@ using System;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
+using System.Linq;
+using Trignis.MicrosoftSQL.Models;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Text;
 
 var tempConfig = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: true)
@@ -42,12 +47,144 @@ try
 
     var builder = WebApplication.CreateBuilder(args);
 
-    // Load environment-specific configuration from Environments folder
-    var envConfigPath = Path.Combine("Environments", $"{builder.Environment.EnvironmentName}.json");
-    builder.Configuration.AddEncryptedJsonFile(envConfigPath, encryptionService, optional: true, reloadOnChange: true);
+    // Determine which environment file(s) to load
+    var envDir = Directory.GetDirectories(".").FirstOrDefault(d => d.Equals("environments", StringComparison.OrdinalIgnoreCase)) ?? "environments";
+    var selectedEnvironment = Environment.GetEnvironmentVariable("TRIGNIS_ENVIRONMENT") 
+        ?? builder.Configuration.GetValue<string>("SelectedEnvironment");
+    
+    List<TrackingObject> allTrackingObjects = new();
+    List<ApiEndpoint> allApiEndpoints = new();
+    Dictionary<string, string> allConnectionStrings = new();
+    List<string> loadedEnvironments = new();
+    IConfiguration? firstEnvironmentConfig = null;
+    
+    if (Directory.Exists(envDir))
+    {
+        var jsonFiles = Directory.GetFiles(envDir, "*.json").OrderBy(f => Path.GetFileName(f)).ToList();
+        
+        // Filter files based on selected environment
+        if (!string.IsNullOrEmpty(selectedEnvironment))
+        {
+            var targetFile = jsonFiles.FirstOrDefault(f => 
+                Path.GetFileNameWithoutExtension(f).Equals(selectedEnvironment, StringComparison.OrdinalIgnoreCase));
+            
+            if (targetFile != null)
+            {
+                jsonFiles = new List<string> { targetFile };
+                Log.Information($"Loading specific environment: {selectedEnvironment}");
+            }
+            else
+            {
+                Log.Warning($"Environment '{selectedEnvironment}' not found. Available: {string.Join(", ", jsonFiles.Select(f => Path.GetFileNameWithoutExtension(f)))}");
+                Log.Information("Loading all environment files...");
+            }
+        }
+        else
+        {
+            Log.Information("No specific environment selected (TRIGNIS_ENVIRONMENT or SelectedEnvironment). Loading all environment files...");
+        }
 
-    // Load example.json if present
-    builder.Configuration.AddEncryptedJsonFile("Environments/example.json", encryptionService, optional: true, reloadOnChange: true);
+        foreach (var file in jsonFiles)
+        {
+            var relativePath = Path.GetRelativePath(".", file);
+            var environmentName = Path.GetFileNameWithoutExtension(file);
+            loadedEnvironments.Add(environmentName);
+            
+            // Load configuration WITH encrypted JSON support
+            var tempBuilder = new ConfigurationBuilder();
+            tempBuilder.AddEncryptedJsonFile(relativePath, encryptionService, optional: true);
+            var tempCfg = tempBuilder.Build();
+            
+            // Collect connection strings from this file
+            var connStrings = tempCfg.GetSection("ConnectionStrings").GetChildren();
+            foreach (var connString in connStrings)
+            {
+                var key = connString.Key;
+                var value = connString.Value;
+                if (!string.IsNullOrEmpty(value))
+                {
+                    // If connection string already exists from another file, warn about conflict
+                    if (allConnectionStrings.ContainsKey(key))
+                    {
+                        Log.Warning($"Connection string '{key}' from '{environmentName}' overwrites previous definition");
+                    }
+                    allConnectionStrings[key] = value;
+                }
+            }
+            
+            // Collect TrackingObjects from this file and tag with environment
+            var trackingObjects = tempCfg.GetSection("ChangeTracking:TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
+            
+            foreach (var obj in trackingObjects)
+            {
+                obj.EnvironmentFile = environmentName;
+            }
+            allTrackingObjects.AddRange(trackingObjects);
+            
+            // Collect ApiEndpoints from this file
+            var apiEndpoints = tempCfg.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>() ?? Array.Empty<ApiEndpoint>();
+            foreach (var endpoint in apiEndpoints)
+            {
+                endpoint.EnvironmentFile = environmentName;
+            }
+            allApiEndpoints.AddRange(apiEndpoints);
+            
+            Log.Debug($"Loaded environment file: {environmentName} ({trackingObjects.Length} objects, {apiEndpoints.Length} endpoints, {connStrings.Count()} connection strings)");
+            
+            // Store the first environment config for later use
+            if (firstEnvironmentConfig == null)
+            {
+                firstEnvironmentConfig = tempCfg;
+            }
+        }
+    }
+
+    // Add connection strings to main configuration
+    if (allConnectionStrings.Any())
+    {
+        var connectionStringsJson = JsonSerializer.Serialize(new { ConnectionStrings = allConnectionStrings });
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(connectionStringsJson));
+        builder.Configuration.AddJsonStream(stream);
+    }
+
+    // Add combined TrackingObjects and ApiEndpoints to configuration
+    if (allTrackingObjects.Any() || allApiEndpoints.Any() || firstEnvironmentConfig != null)
+    {
+        object changeTrackingObj;
+        if (firstEnvironmentConfig != null)
+        {
+            var ct = firstEnvironmentConfig.GetSection("ChangeTracking");
+            changeTrackingObj = new
+            {
+                TrackingObjects = allTrackingObjects,
+                ApiEndpoints = allApiEndpoints,
+                LoadedEnvironments = loadedEnvironments,
+                PollingIntervalSeconds = ct.GetValue<int>("PollingIntervalSeconds", 30),
+                ExportToFile = ct.GetValue<bool>("ExportToFile", false),
+                FilePath = ct.GetValue<string>("FilePath", "exports/{object}/{database}/changes-{timestamp}.json"),
+                FilePathSizeLimit = ct.GetValue<int>("FilePathSizeLimit", 500),
+                ExportToApi = ct.GetValue<bool>("ExportToApi", false),
+                RetryCount = ct.GetValue<int>("RetryCount", 3),
+                RetryDelaySeconds = ct.GetValue<int>("RetryDelaySeconds", 5)
+            };
+        }
+        else
+        {
+            changeTrackingObj = new
+            {
+                TrackingObjects = allTrackingObjects,
+                ApiEndpoints = allApiEndpoints,
+                LoadedEnvironments = loadedEnvironments
+            };
+        }
+        var combinedObj = new
+        {
+            ChangeTracking = changeTrackingObj
+        };
+        var combinedJson = JsonSerializer.Serialize(combinedObj);
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(combinedJson));
+        builder.Configuration.AddJsonStream(stream);
+    }
 
     // Configure Serilog from configuration
     builder.Services.AddSerilog((services, configuration) => configuration
