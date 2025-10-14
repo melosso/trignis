@@ -239,7 +239,7 @@ Then, reference this procedure in your environment configuration under `StoredPr
 
 ### 5. Deploy as Windows Service
 
-Before continueing, make sure you've set-up everything. On initial run, all secrets will be stored safely (meaning: they'll be hashed). For production deployment:
+Before continuing, make sure you've set-up everything. On initial run, all secrets will be stored safely (meaning: they'll be hashed). For production deployment:
 
 1. Run `TrignisBackgroundService.bat install` as Administrator
 2. Run `TrignisBackgroundService.bat start` to start the service
@@ -315,14 +315,16 @@ Configure webhook-style exports:
 
 ## 🔄 Compatibility
 
-Compatibility with all SQL Server versions is **not** guaranteed. Note that SQL Server 2025 introduced changes to change tracking autocleanup. In SQL Server 2025 (17.x) Preview and later versions, the autocleanup process introduces an adaptive shallow cleanup approach for large side tables, which is enabled by default. 
+Compatibility with all SQL Server versions is **not** guaranteed. This application may not work at all on deprecated versions of Microsoft SQL Server.
+
+Note that SQL Server 2025 introduced changes to change tracking autocleanup. In SQL Server 2025 (17.x) Preview and later versions, the autocleanup process introduces an adaptive shallow cleanup approach for large side tables, which is enabled by default. 
 
 This differs from the deep cleanup in earlier versions. Note that the `sp_flush_CT_internal_table_on_demand [@TableToClean =] 'tablename'` procedure must be handled manually outside of Trignis.
 
 For more details, refer to [About Change Tracking (SQL Server)](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-tracking-sql-server?view=sql-server-ver17) and [KB3173157](https://support.microsoft.com/en-us/topic/kb3173157-adds-a-stored-procedure-for-the-manual-cleanup-of-the-change-tracking-side-table-in-sql-server-2fe76677-8687-acc0-12a9-78f3709fc621).
 
 > [!CAUTION]
-> Before installing Trignis (or any change tracking application that leverages the same mechanism), make sure that you've read and understood these procedures. Failing to do so may result in data loss, degraded performance or incorrect change tracking behavior.
+> Before installing Trignis (or any change tracking application that leverages the same mechanism), make sure that you've read and understood these **cleanup** procedures. Failing to do so may result in data loss, degraded performance or incorrect change tracking behavior.
 
 ## 📊 Logging & Monitoring
 
