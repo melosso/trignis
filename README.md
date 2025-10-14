@@ -91,9 +91,13 @@ ALTER TABLE dbo.YourTable ENABLE CHANGE_TRACKING;
 
 To configure Trignis for data retrieval, you need to create a stored procedure that leverages SQL Server change tracking to fetch changes from your tables. This procedure should handle both full synchronization (when `fromVersion` is 0) and incremental changes (diff sync).
 
-For example, for the table `dbo.Items` with columns `ItemCode`, `Description`, `Assortment`, and `sysguid`, you can create a procedure like this:
+For example, for the table `dbo.Items` with columns `ItemCode`, `Description`, `Assortment`, and `sysguid`, you can create a procedure like shown here below.
+
+> [!TIP]
+> You can choose between table or [column](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/work-with-change-tracking-sql-server?view=sql-server-ver17#use-column-tracking) tracking. The code snippet herebelow will shown both:
 
 ```sql
+-- Table change tracking
 CREATE OR ALTER PROCEDURE web.get_itemssync
     @json NVARCHAR(MAX)
 AS
@@ -152,6 +156,80 @@ BEGIN
                 ))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
         END
+
+    COMMIT TRAN;
+END
+```
+
+```sql
+-- Column (specific) change tracking
+CREATE OR ALTER PROCEDURE web.get_itemssync
+    @json NVARCHAR(MAX)
+AS
+BEGIN
+    DECLARE @fromVersion INT = JSON_VALUE(@json, '$.fromVersion');
+
+    -- Column IDs for change tracking (used to check which columns changed in updates)
+    DECLARE @Description INT = COLUMNPROPERTY(OBJECT_ID('dbo.Items'), 'Description', 'ColumnId');
+    DECLARE @Assortment INT = COLUMNPROPERTY(OBJECT_ID('dbo.Items'), 'Assortment', 'ColumnId');
+    DECLARE @Sysguid INT = COLUMNPROPERTY(OBJECT_ID('dbo.Items'), 'sysguid', 'ColumnId');
+
+    SET XACT_ABORT ON;
+    SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
+
+    BEGIN TRAN;
+        DECLARE @reason INT;
+
+        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
+
+        IF (@fromVersion = 0)
+        BEGIN
+            SET @reason = 0; -- First Sync
+        END
+        ELSE IF (@fromVersion < @minVer)
+        BEGIN
+            SET @fromVersion = 0;
+            SET @reason = 1; -- fromVersion too old. New full sync needed
+        END
+
+        IF (@fromVersion = 0)
+        BEGIN
+            SELECT
+                @curVer AS 'Metadata.Sync.Version',
+                'Full' AS 'Metadata.Sync.Type',
+                @reason AS 'Metadata.Sync.ReasonCode',
+                [Data] = JSON_QUERY((
+                    SELECT ItemCode, Description, Assortment, sysguid
+                    FROM dbo.Items
+                    FOR JSON AUTO
+                ))
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+        END
+        ELSE
+		BEGIN
+			SELECT
+				@curVer AS 'Metadata.Sync.Version',
+				'Diff' AS 'Metadata.Sync.Type',
+				[Data] = JSON_QUERY((
+					SELECT
+						ct.SYS_CHANGE_OPERATION AS '$operation',
+						ct.SYS_CHANGE_VERSION AS '$version',
+						ct.ItemCode,
+						CASE WHEN ct.SYS_CHANGE_OPERATION != 'U' OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Description, ct.SYS_CHANGE_COLUMNS) = 1 THEN i.Description ELSE NULL END AS Description,
+						CASE WHEN ct.SYS_CHANGE_OPERATION != 'U' OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Assortment, ct.SYS_CHANGE_COLUMNS) = 1 THEN i.Assortment ELSE NULL END AS Assortment,
+						CASE WHEN ct.SYS_CHANGE_OPERATION != 'U' OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Sysguid, ct.SYS_CHANGE_COLUMNS) = 1 THEN i.sysguid ELSE NULL END AS sysguid
+					FROM dbo.Items AS i
+					RIGHT OUTER JOIN CHANGETABLE(CHANGES dbo.Items, @fromVersion) AS ct
+						ON ct.ItemCode = i.ItemCode
+					WHERE ct.SYS_CHANGE_OPERATION != 'U'  -- Include all inserts and deletes
+					   OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Description, ct.SYS_CHANGE_COLUMNS) = 1
+					   OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Assortment, ct.SYS_CHANGE_COLUMNS) = 1
+					   OR CHANGE_TRACKING_IS_COLUMN_IN_MASK(@Sysguid, ct.SYS_CHANGE_COLUMNS) = 1
+					FOR JSON PATH
+				))
+			FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+		END
 
     COMMIT TRAN;
 END

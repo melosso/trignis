@@ -235,11 +235,34 @@ public class ChangeTrackingBackgroundService : BackgroundService
             // Check cancellation before database call
             stoppingToken.ThrowIfCancellationRequested();
 
-            var result = await conn.ExecuteScalarAsync<string>(
-                sql: trackingObject.StoredProcedureName,
-                param: parameters,
-                commandType: CommandType.StoredProcedure
-            );
+            string result = string.Empty;
+            using (var command = new SqlCommand(trackingObject.StoredProcedureName, conn))
+            {
+                command.CommandType = CommandType.StoredProcedure;
+                command.Parameters.AddWithValue("@Json", json);
+                await conn.OpenAsync();
+                using (var reader = await command.ExecuteReaderAsync())
+                {
+                    if (await reader.ReadAsync())
+                    {
+                        // Read large string data in chunks to avoid loading entire value into memory at once
+                        var sb = new StringBuilder();
+                        char[] buffer = new char[4096];
+                        long fieldOffset = 0;
+                        int charsRead;
+                        do
+                        {
+                            charsRead = (int)reader.GetChars(0, fieldOffset, buffer, 0, buffer.Length);
+                            if (charsRead > 0)
+                            {
+                                sb.Append(buffer, 0, charsRead);
+                                fieldOffset += charsRead;
+                            }
+                        } while (charsRead == buffer.Length);
+                        result = sb.ToString();
+                    }
+                }
+            }
 
             if (!string.IsNullOrEmpty(result))
             {
