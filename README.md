@@ -353,7 +353,7 @@ Built with:
 
 ## License
 
-Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [LICENSE](license) file.
+Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [license](LICENSE) file.
 
 ## Contributing
 

@@ -104,7 +104,7 @@ try
 }
 catch (Exception ex)
 {
-    Log.Fatal(ex, "❌ Application terminated unexpectedly");
+    Log.Fatal(ex, "Application terminated unexpectedly");
     
     // If running as console, wait for user input
     if (!OperatingSystem.IsWindows() || Environment.UserInteractive)

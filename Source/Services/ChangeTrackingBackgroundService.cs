@@ -334,7 +334,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         if (exportToApi)
         {
             stoppingToken.ThrowIfCancellationRequested();
-            await _retryPolicy.ExecuteAsync(async () => await ExportToApiAsync(data));
+            await _retryPolicy.ExecuteAsync(async () => await ExportToApiAsync(trackingObject, data));
         }
     }
 
@@ -408,14 +408,20 @@ public class ChangeTrackingBackgroundService : BackgroundService
         CleanupOldFiles("exports", _maxExportDirectorySizeBytes);
     }
 
-    private async Task ExportToApiAsync(JsonElement data)
+    private async Task ExportToApiAsync(TrackingObject trackingObject, JsonElement data)
     {
-        var apiUrl = _config.GetValue<string>("ChangeTracking:ApiUrl");
-        if (string.IsNullOrEmpty(apiUrl))
+        var apiUrlTemplate = _config.GetValue<string>("ChangeTracking:ApiUrl");
+        if (string.IsNullOrEmpty(apiUrlTemplate))
         {
             _logger.LogWarning("API URL not configured for export.");
             return;
         }
+
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        var apiUrl = apiUrlTemplate
+            .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
+            .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
+            .Replace("{database}", Uri.EscapeDataString(trackingObject.Database));
 
         var client = _httpClientFactory.CreateClient();
         
