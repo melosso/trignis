@@ -1,0 +1,34 @@
+{
+  "ConnectionStrings": {
+    "PrimaryDatabase": "Server=localhost;Database=Database1;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;",
+    "SecondaryDatabase": "Server=localhost;Database=Database2;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;"
+  },
+  "ChangeTracking": {
+    "TrackingObjects": [
+      {
+        "Name": "TrainingSessions", 
+        "Database": "PrimaryDatabase", 
+        "TableName": "dbo.TrainingSessions",
+        "StoredProcedureName": "web.get_trainingsessionsync"
+      },
+      {
+        "Name": "TrainingSessionsSecondary",
+        "Database": "SecondaryDatabase", 
+        "TableName": "dbo.TrainingSessions",
+        "StoredProcedureName": "web.get_trainingsessionsync"
+      }
+    ],
+    "ExportToFile": true,
+    "FilePath": "exports/{object}/{database}/changes-{timestamp}.json",
+    "FilePathSizeLimit": 500,
+    "ExportToApi": true,
+    "ApiUrl": "http://portway/v1/api/prod/Webhook/webhook1",
+    "ApiAuth": {
+      "Type": "Bearer",
+      "Token": "<my_token_here>"
+    },
+    "PollingIntervalSeconds": 60,
+    "RetryCount": 5,
+    "RetryDelaySeconds": 10
+  }
+}
