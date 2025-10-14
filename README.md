@@ -1,0 +1,267 @@
+# Trignis
+
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
+[![Latest Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
+
+**Trignis** is a high-performance change tracking service for SQL Server databases. It monitors database changes in real-time, processes them efficiently, and exports data to either files - or external API's.
+
+Ideal for data synchronization, audit trails, ETL processes, and integration scenarios where you need to track and propagate database changes reliably.
+
+A quick example of Trignis in action:
+
+![Screenshot of Trignis](https://github.com/melosso/trignis/blob/main/.github/images/screenshot.png?raw=true)
+
+## 🧩 Key Features
+
+Trignis is designed for reliability and performance in enterprise environments. It provides seamless change tracking with flexible export options and comprehensive security.
+
+* **Real-time change tracking**: Monitors SQL Server change tracking tables and processes updates automatically
+* **Multiple export destinations**: Export changes to JSON files or REST APIs
+* **Built-in encryption**: Secure configuration files with RSA+AES hybrid encryption
+* **Environment-aware**: Isolated configurations for dev/staging/prod environments
+* **Comprehensive logging**: Detailed request/response tracing with Serilog
+* **Windows service support**: Runs as a background service with proper lifecycle management
+* **State persistence**: Uses SQLite to track processing state and avoid duplicates
+* **Configurable polling**: Adjustable polling intervals and retry policies
+* **File management**: Automatic cleanup of old export files with size limits
+
+## ⚙️ Requirements
+
+Before deploying Trignis, ensure your environment meets these requirements:
+
+* [.NET 9+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
+* SQL Server with Change Tracking enabled
+* Windows Server (for service hosting) or any OS supporting .NET 9
+* Local filesystem access for configuration and logging
+
+## 🚀 Getting Started
+
+Follow these steps to get Trignis running in your environment.
+
+### 1. Download & Extract
+
+Download the [latest release](https://github.com/melosso/trignis/releases) and extract to your deployment folder.
+
+### 2. Configure Environments
+
+Set up environment-specific configurations in the `environments/` folder.
+
+**`environments/example.json`**
+
+```json
+{
+  "ConnectionStrings": {
+    "PrimaryDatabase": "Server=localhost;Database=PrimaryDB;Trusted_Connection=True;",
+    "SecondaryDatabase": "Server=localhost;Database=SecondaryDB;Trusted_Connection=True;"
+  },
+  "ChangeTracking": {
+    "TrackingObjects": [
+      {
+        "Name": "Customers",
+        "Database": "PrimaryDatabase",
+        "TableName": "dbo.Customers",
+        "StoredProcedureName": "sp_GetCustomerChanges"
+      }
+    ],
+    "PollingIntervalSeconds": 30,
+    "ExportToFile": true,
+    "ExportToApi": false,
+    "FilePath": "exports/{object}/{database}/changes-{timestamp}.json",
+    "FilePathSizeLimit": 500,
+    "RetryCount": 3,
+    "RetryDelaySeconds": 5
+  }
+}
+```
+
+### 3. Enable Change Tracking
+
+Ensure change tracking is enabled on your SQL Server databases:
+
+```sql
+-- Enable change tracking at database level
+ALTER DATABASE YourDatabase SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+
+-- Enable change tracking on tables
+ALTER TABLE dbo.YourTable ENABLE CHANGE_TRACKING;
+```
+
+### 4. Configure
+
+To configure Trignis for data retrieval, you need to create a stored procedure that leverages SQL Server change tracking to fetch changes from your tables. This procedure should handle both full synchronization (when `fromVersion` is 0) and incremental changes (diff sync).
+
+For example, for the table `dbo.Items` with columns `ItemCode`, `Description`, `Assortment`, and `sysguid`, you can create a procedure like this:
+
+```sql
+CREATE OR ALTER PROCEDURE web.get_itemssync
+    @json NVARCHAR(MAX)
+AS
+BEGIN
+    DECLARE @fromVersion INT = JSON_VALUE(@json, '$.fromVersion');
+
+    SET XACT_ABORT ON;
+    SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
+
+    BEGIN TRAN;
+        DECLARE @reason INT;
+
+        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
+
+        IF (@fromVersion = 0)
+        BEGIN
+            SET @reason = 0; -- First Sync
+        END
+        ELSE IF (@fromVersion < @minVer)
+        BEGIN
+            SET @fromVersion = 0;
+            SET @reason = 1; -- fromVersion too old. New full sync needed
+        END
+
+        IF (@fromVersion = 0)
+        BEGIN
+            SELECT
+                @curVer AS 'Metadata.Sync.Version',
+                'Full' AS 'Metadata.Sync.Type',
+                @reason AS 'Metadata.Sync.ReasonCode',
+                [Data] = JSON_QUERY((
+                    SELECT ItemCode, Description, Assortment, sysguid
+                    FROM dbo.Items
+                    FOR JSON AUTO
+                ))
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+        END
+        ELSE
+        BEGIN
+            SELECT
+                @curVer AS 'Metadata.Sync.Version',
+                'Diff' AS 'Metadata.Sync.Type',
+                [Data] = JSON_QUERY((
+                    SELECT
+                        ct.SYS_CHANGE_OPERATION AS '$operation',
+                        ct.SYS_CHANGE_VERSION AS '$version',
+                        ct.ItemCode,
+                        i.Description,
+                        i.Assortment,
+                        i.sysguid
+                    FROM dbo.Items AS i
+                    RIGHT OUTER JOIN CHANGETABLE(CHANGES dbo.Items, @fromVersion) AS ct
+                        ON ct.ItemCode = i.ItemCode
+                    FOR JSON PATH
+                ))
+            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+        END
+
+    COMMIT TRAN;
+END
+```
+
+Then, reference this procedure in your environment configuration under `StoredProcedureName`.
+
+### 5. Deploy as Windows Service
+
+Before continueing, make sure you've set-up everything. On initial run, all secrets will be stored safely (meaning: they'll be hashed). For production deployment:
+
+1. Run `TrignisBackgroundService.bat install` as Administrator
+2. Run `TrignisBackgroundService.bat start` to start the service
+3. Check the log output to make sure you've succesefully configured Trignis.
+
+## 🔐 Security & Encryption
+
+### Configuration Encryption
+
+Trignis automatically encrypts sensitive configuration data using RSA+AES hybrid encryption. Both the database connection strings and any API-security information are stored safely.
+
+### Authentication
+
+When exporting to APIs, configure authentication in your environment files:
+
+```json
+{
+  "ChangeTracking": {
+    "ApiUrl": "https://your-api.com/webhook",
+    "ApiAuth": {
+      "Type": "Bearer",
+      "Token": "your-token-here"
+    }
+  }
+}
+```
+
+Supported auth types: `Bearer`, `Basic`, `APIKey`.
+
+## 📡 Usage Examples
+
+### Monitoring Changes
+
+Trignis automatically monitors configured tables and exports changes:
+
+```json
+// Example exported change file
+{
+  "timestamp": "2025-10-14T10:30:00Z",
+  "object": "Items",
+  "database": "PrimaryDatabase",
+  "changes": [
+    {
+      "operation": "INSERT",
+      "primaryKey": "ABC123",
+      "data": {
+        "ItemCode": "ABC123",
+        "Description": "Sample Item Description",
+        "Assortment": "Electronics",
+        "sysguid": "550e8400-e29b-41d4-a716-446655440000"
+      }
+    }
+  ]
+}
+```
+
+### API Export
+
+Configure webhook-style exports:
+
+```json
+{
+  "ChangeTracking": {
+    "ExportToApi": true,
+    "ApiUrl": "https://your-webhook.com/trignis",
+    "ApiAuth": {
+      "Type": "Bearer",
+      "Token": "your-secure-token"
+    }
+  }
+}
+```
+
+## 📊 Logging & Monitoring
+
+Trignis provides comprehensive logging:
+
+* Application logs: `log/trignis-.log` (daily rotation)
+* Configuration status on startup
+* Change processing details
+* Error handling with retry logic
+
+### Health Checks
+
+Basic health endpoint available at `/health` when running as web app.
+
+## 🤝 Credits
+
+Built with:
+
+* [ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/)
+* [Dapper](https://github.com/DapperLib/Dapper)
+* [Serilog](https://serilog.net/)
+* [SQLite](https://www.sqlite.org/)
+* [Polly](https://github.com/App-vNext/Polly)
+
+## License
+
+Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [LICENSE](LICENSE) file.
+
+## Contributing
+
+Contributions welcome! Please submit issues and pull requests.
