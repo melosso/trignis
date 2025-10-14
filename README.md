@@ -1,24 +1,26 @@
 # Trignis
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGPL%203.0-blue)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
 [![Latest Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
 
 **Trignis** is a high-performance change tracking service for SQL Server databases. It monitors database changes in real-time, processes them efficiently, and exports data to either files - or external API's.
 
-Ideal for data synchronization, audit trails, ETL processes, and integration scenarios where you need to track and propagate database changes reliably.
+Useful for data synchronization, audit trails, ETL processes, and integration scenarios where you need to track and propagate database changes reliably.
 
 A quick example of Trignis in action:
 
 ![Screenshot of Trignis](https://github.com/melosso/trignis/blob/main/.github/images/screenshot.png?raw=true)
 
+We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through an SDK or extension methods.
+
 ## 🧩 Key Features
 
-Trignis is designed for reliability and performance in enterprise environments. It provides seamless change tracking with flexible export options and comprehensive security.
+This application is designed for reliability and performance, predominantly in Windows Server environments. It offers flexible change tracking, versatile export options, and comprehensive security.
 
 * **Real-time change tracking**: Monitors SQL Server change tracking tables and processes updates automatically
 * **Multiple export destinations**: Export changes to JSON files or REST APIs
-* **Built-in encryption**: Secure configuration files with RSA+AES hybrid encryption
+* **Built-in encryption**: Secure configuration files with modern encryption standards
 * **Environment-aware**: Isolated configurations for dev/staging/prod environments
 * **Comprehensive logging**: Detailed request/response tracing with Serilog
 * **Windows service support**: Runs as a background service with proper lifecycle management
@@ -28,12 +30,13 @@ Trignis is designed for reliability and performance in enterprise environments. 
 
 ## ⚙️ Requirements
 
-Before deploying Trignis, ensure your environment meets these requirements:
+Before deploying **Trignis**, ensure your environment meets the following requirements:
 
-* [.NET 9+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
-* SQL Server with Change Tracking enabled
-* Windows Server (for service hosting) or any OS supporting .NET 9
-* Local filesystem access for configuration and logging
+- [.NET 9+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
+- **SQL Server** with *Change Tracking* enabled (we’ll walk you through this later)
+- **Windows Server** (for hosting the background service)
+- **Database and filesystem access** for configuration and logging
+
 
 ## 🚀 Getting Started
 
@@ -335,6 +338,9 @@ Trignis provides comprehensive logging:
 * Change processing details
 * Error handling with retry logic
 
+> [!TIP]
+> If the application isn't starting, consider changing value `UseEventLog` in the `appsettings.json` configuration file to true. To prevent your Windows Event Viewer from bloating, make sure to disable when you're done troubleshooting.
+
 ## 🤝 Credits
 
 Built with:
@@ -347,7 +353,7 @@ Built with:
 
 ## License
 
-Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [LICENSE](LICENSE) file.
+Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [LICENSE](license) file.
 
 ## Contributing
 
