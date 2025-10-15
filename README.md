@@ -333,6 +333,9 @@ Using change tracking may slow database writes (for the tables that have this fe
 
 The dead letter mechanism does not automatically resync or retry failed messages when the application starts up/is running. The dead letters are stored in `sinkhole.db` as a sinkhole - they're saved for auditing/debugging purposes **but not automatically retried.**
 
+> [!TIP]
+> You can read more information about the performance risks (and relevant query's) of change tracking at this Brent Ozar article: [Performance Tuning SQL Server Change Tracking](https://www.brentozar.com/archive/2014/06/performance-tuning-sql-server-change-tracking/).
+
 ## 🔄 Compatibility
 
 Compatibility with all SQL Server versions is **not** guaranteed. This application may not work at all on deprecated versions of Microsoft SQL Server.
