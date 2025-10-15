@@ -264,11 +264,11 @@ When exporting to APIs, configure authentication in your environment files:
     "ExportToApi": true,
     "ApiEndpoints": [
       {
-        "Key": "production_webhook1",
-        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
+        "Key": "PowerAutomate",
+        "Url": "https://your-powerautomate-webhook-url",
         "Auth": {
           "Type": "Bearer",
-          "Token": "<my_token_here>"
+          "Token": "your-token-here"
         }
       }
     ]
