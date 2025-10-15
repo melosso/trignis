@@ -261,12 +261,17 @@ When exporting to APIs, configure authentication in your environment files:
 ```json
 {
   "ChangeTracking": {
-    "ApiUrl": "https://your-api.com/webhook",
-    "ApiAuth": {
-      "Type": "Bearer",
-      "Token": "your-token-here"
-    }
-  }
+    "ExportToApi": true,
+    "ApiEndpoints": [
+      {
+        "Key": "production_webhook1",
+        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
+        "Auth": {
+          "Type": "Bearer",
+          "Token": "<my_token_here>"
+        }
+      }
+    ]
 }
 ```
 
@@ -307,11 +312,16 @@ Configure webhook-style exports:
 {
   "ChangeTracking": {
     "ExportToApi": true,
-    "ApiUrl": "https://your-webhook.com/trignis",
-    "ApiAuth": {
-      "Type": "Bearer",
-      "Token": "your-secure-token"
-    }
+    "ApiEndpoints": [
+      {
+        "Key": "production_webhook1",
+        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
+        "Auth": {
+          "Type": "Bearer",
+          "Token": "<my_token_here>"
+        }
+      }
+    ]
   }
 }
 ```
