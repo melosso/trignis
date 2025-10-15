@@ -81,7 +81,7 @@ try
         }
         else
         {
-            Log.Information("No specific environment selected (TRIGNIS_ENVIRONMENT or SelectedEnvironment). Loading all environment files...");
+            Log.Debug("No specific environment selected (TRIGNIS_ENVIRONMENT or SelectedEnvironment). Loading all environment files...");
         }
 
         foreach (var file in jsonFiles)
@@ -205,6 +205,7 @@ try
 
     // Add services to the container
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
+    builder.Services.AddSingleton<DeadLetterService>();
     builder.Services.AddSingleton(encryptionService);
     builder.Services.AddHttpClient();
 

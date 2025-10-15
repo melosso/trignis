@@ -31,20 +31,24 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly AsyncRetryPolicy _retryPolicy;
     private readonly string _stateConnectionString;
     private readonly long _maxExportDirectorySizeBytes;
+    private readonly DeadLetterService _deadLetterService;
     private bool _isProcessing = false;
+    private DateTime _lastPurgeTime = DateTime.MinValue;
 
     public ChangeTrackingBackgroundService(
         ILogger<ChangeTrackingBackgroundService> logger,
         IConfiguration config,
         IServiceProvider serviceProvider,
         IHttpClientFactory httpClientFactory,
-        IHostApplicationLifetime lifetime)
+        IHostApplicationLifetime lifetime,
+        DeadLetterService deadLetterService)
     {
         _logger = logger;
         _config = config;
         _serviceProvider = serviceProvider;
         _httpClientFactory = httpClientFactory;
         _lifetime = lifetime;
+        _deadLetterService = deadLetterService;
 
         var stateDbPath = _config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
         _stateConnectionString = $"Data Source={stateDbPath}";
@@ -79,6 +83,9 @@ public class ChangeTrackingBackgroundService : BackgroundService
             // Initialize state database
             await InitializeStateDbAsync();
             _logger.LogDebug("State database initialized");
+            
+            // Initialize dead letter database
+            await _deadLetterService.InitializeAsync();
             
             // Validate configuration
             var trackingObjects = _config.GetSection("ChangeTracking:TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
@@ -132,6 +139,13 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 try
                 {
                     _logger.LogDebug($"Starting change tracking cycle at {cycleStartTime:HH:mm:ss}");
+
+                    // Purge old dead letters once per day
+                    if ((DateTime.UtcNow - _lastPurgeTime).TotalHours >= 24)
+                    {
+                        await _deadLetterService.PurgeOldDeadLettersAsync();
+                        _lastPurgeTime = DateTime.UtcNow;
+                    }
 
                     foreach (var trackingObject in trackingObjects)
                     {
@@ -334,13 +348,29 @@ public class ChangeTrackingBackgroundService : BackgroundService
         if (exportToFile)
         {
             stoppingToken.ThrowIfCancellationRequested();
-            await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToFileAsync(trackingObject, data), new Polly.Context("ExportToFile", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
+            try
+            {
+                await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToFileAsync(trackingObject, data), new Polly.Context("ExportToFile", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"File export failed for {trackingObject.Name}, saving to dead letter");
+                await _deadLetterService.SaveDeadLetterAsync(trackingObject.Name, trackingObject.Database, data, ex);
+            }
         }
 
         if (exportToApi)
         {
             stoppingToken.ThrowIfCancellationRequested();
-            await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToApiAsync(trackingObject, data), new Polly.Context("ExportToApi", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
+            try
+            {
+                await _retryPolicy.ExecuteAsync(async (ctx) => await ExportToApiAsync(trackingObject, data), new Polly.Context("ExportToApi", new Dictionary<string, object> { ["CancellationToken"] = stoppingToken }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"API export failed for {trackingObject.Name}, saving to dead letter");
+                await _deadLetterService.SaveDeadLetterAsync(trackingObject.Name, trackingObject.Database, data, ex);
+            }
         }
     }
 

@@ -57,7 +57,7 @@ namespace Trignis.MicrosoftSQL.Services
 
             if (!File.Exists(privateKeyPath))
             {
-                Log.Information("Private key not found. Generating new keypair...");
+                Log.Debug("Private key not found. Generating new keypair...");
 
                 // Generate new keypair
                 using var rsa = RSA.Create(2048);
@@ -66,15 +66,15 @@ namespace Trignis.MicrosoftSQL.Services
 
                 // Save private key
                 File.WriteAllText(privateKeyPath, privateKeyPem);
-                Log.Information("Private key saved to: {PrivateKeyPath}", privateKeyPath);
+                Log.Debug("Private key saved to: {PrivateKeyPath}", privateKeyPath);
 
                 // Save public key
                 File.WriteAllText(publicKeyPath, publicKeyPem);
-                Log.Information("Public key saved to: {PublicKeyPath}", publicKeyPath);
+                Log.Debug("Public key saved to: {PublicKeyPath}", publicKeyPath);
 
                 // Update current public key
                 _currentPublicKeyPem = publicKeyPem;
-                Log.Information("Generated new keypair.");
+                Log.Debug("Generated new keypair.");
             }
             else
             {

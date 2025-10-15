@@ -34,6 +34,7 @@
     ],
     "PollingIntervalSeconds": 60,
     "RetryCount": 5,
-    "RetryDelaySeconds": 10
+    "RetryDelaySeconds": 10,
+    "DeadletterRetentionDays": 60
   }
 }

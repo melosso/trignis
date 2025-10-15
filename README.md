@@ -321,10 +321,17 @@ Configure webhook-style exports:
           "Token": "<my_token_here>"
         }
       }
-    ]
+    ],
+    "DeadletterRetentionDays": 60
   }
 }
 ```
+
+## ⚡ Risks
+
+Using change tracking may slow database writes (for the tables that have this feature enabled) by approximately 5-10% because it tracks every single change. The tracking tables keep growing and need regular cleanup (see: [Compatibility](#-compatibility)) 
+
+The dead letter mechanism does not automatically resync or retry failed messages when the application starts up/is running. The dead letters are stored in `sinkhole.db` as a sinkhole - they're saved for auditing/debugging purposes **but not automatically retried.**
 
 ## 🔄 Compatibility
 
@@ -351,10 +358,6 @@ Trignis provides comprehensive logging:
 > [!TIP]
 > If the application isn't starting, consider changing value `UseEventLog` in the `appsettings.json` configuration file to true. To prevent your Windows Event Viewer from bloating, make sure to disable when you're done troubleshooting.
 
-## 🔮 Lore
-
-The name Trignis is derived from Trigger and Ignis, Latin for fire or spark respectively. In databases, a trigger automates actions in response to specific events. Combined with Ignis, it captures the essence of a spark that ignites automation. Trignis represents the moment where automation starts.
-
 ## 🤝 Credits
 
 Built with:
@@ -365,10 +368,16 @@ Built with:
 * [SQLite](https://www.sqlite.org/)
 * [Polly](https://github.com/App-vNext/Polly)
 
+## 🔮 Lore
+
+For those curious:
+
+> Trignis blends the words Trigger and Ignis — Latin for fire or spark. In the world of databases, a trigger initiates automated actions in response to specific events. Combined with Ignis, it symbolizes the spark that sets automation in motion. Trignis meddles in that precise moment when automation should ignite.
+
 ## License
 
 Free for open source projects and personal use under the **AGPL 3.0** license. For more information, please see the [license](LICENSE) file.
 
 ## Contributing
 
-Contributions welcome! Please submit issues and pull requests.
+Contributions welcome! Please submit issues and pull requests, using the templates we provided.
