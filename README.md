@@ -12,7 +12,7 @@ A quick example of Trignis in action:
 
 ![Screenshot of Trignis](https://github.com/melosso/trignis/blob/main/.github/images/screenshot.png?raw=true)
 
-We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through an SDK or extension methods.
+We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or alternative extension methods.
 
 ## 🧩 Key Features
 
@@ -350,6 +350,10 @@ Trignis provides comprehensive logging:
 
 > [!TIP]
 > If the application isn't starting, consider changing value `UseEventLog` in the `appsettings.json` configuration file to true. To prevent your Windows Event Viewer from bloating, make sure to disable when you're done troubleshooting.
+
+## 🔮 Lore
+
+The name Trignis is derived from Trigger and Ignis, Latin for fire or spark respectively. In databases, a trigger automates actions in response to specific events. Combined with Ignis, it captures the essence of a spark that ignites automation. Trignis represents the moment where automation starts.
 
 ## 🤝 Credits
 
