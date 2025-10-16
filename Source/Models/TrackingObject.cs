@@ -7,5 +7,5 @@ public class TrackingObject
     public required string TableName { get; set; }
     public required string StoredProcedureName { get; set; }
     public string? EnvironmentFile { get; set; }
-    public string InitialSyncMode { get; set; } = "Incremental"; // "Full" or "Incremental"
+    public string InitialSyncMode { get; set; } = "Incremental";
 }

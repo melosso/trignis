@@ -16,7 +16,8 @@
         "Name": "TrainingSessionsSecondary",
         "Database": "SecondaryDatabase", 
         "TableName": "dbo.TrainingSessions",
-        "StoredProcedureName": "web.get_trainingsessionsync"
+        "StoredProcedureName": "web.get_trainingsessionsync",
+        "InitialSyncMode": "Incremental"
       }
     ],
     "ExportToFile": true,
