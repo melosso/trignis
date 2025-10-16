@@ -237,16 +237,32 @@ public class ChangeTrackingBackgroundService : BackgroundService
             using var conn = new SqlConnection(connectionString);
             var lastVersion = await GetLastProcessedVersionAsync(trackingObject.Name);
 
-            // On first run, initialize last version to current change tracking version
+            int fromVersion;
+            // On first run, determine sync mode
             if (lastVersion == 0)
             {
-                var currentVersion = await conn.ExecuteScalarAsync<long>("SELECT CHANGE_TRACKING_CURRENT_VERSION()");
-                lastVersion = (int)currentVersion;
-                await SetLastProcessedVersionAsync(trackingObject.Name, lastVersion);
-                _logger.LogInformation($"Initialized last processed version for {trackingObject.Name} to {lastVersion} (current database version)");
+                if (string.Equals(trackingObject.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Send all data by starting from version 0
+                    fromVersion = 0;
+                    _logger.LogInformation($"Performing initial full sync for {trackingObject.Name} (sending all data)");
+                }
+                else
+                {
+                    // Default: initialize to current version
+                    var currentVersion = await conn.ExecuteScalarAsync<long>("SELECT CHANGE_TRACKING_CURRENT_VERSION()");
+                    lastVersion = (int)currentVersion;
+                    await SetLastProcessedVersionAsync(trackingObject.Name, lastVersion);
+                    fromVersion = lastVersion;
+                    _logger.LogInformation($"Initialized last processed version for {trackingObject.Name} to {lastVersion} (current database version)");
+                }
+            }
+            else
+            {
+                fromVersion = lastVersion;
             }
 
-            var payload = new { fromVersion = lastVersion };
+            var payload = new { fromVersion = fromVersion };
             var json = JsonSerializer.Serialize(payload);
 
             DynamicParameters parameters = new DynamicParameters();

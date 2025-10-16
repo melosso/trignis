@@ -9,7 +9,8 @@
         "Name": "TrainingSessions", 
         "Database": "PrimaryDatabase", 
         "TableName": "dbo.TrainingSessions",
-        "StoredProcedureName": "web.get_trainingsessionsync"
+        "StoredProcedureName": "web.get_trainingsessionsync",
+        "InitialSyncMode": "Full"
       },
       {
         "Name": "TrainingSessionsSecondary",

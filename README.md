@@ -64,7 +64,8 @@ Set up environment-specific configurations in the `environments/` folder.
         "Name": "Customers",
         "Database": "PrimaryDatabase",
         "TableName": "dbo.Customers",
-        "StoredProcedureName": "sp_GetCustomerChanges"
+        "StoredProcedureName": "sp_GetCustomerChanges",
+        "InitialSyncMode": "Incremental"
       }
     ],
     "PollingIntervalSeconds": 30,
@@ -78,6 +79,9 @@ Set up environment-specific configurations in the `environments/` folder.
 }
 ```
 
+> [!TIP] 
+> You can determine if you'd like to send all data (e.g. for propagation) or only the changed data. Switch the property `InitialSyncMode` between `"Full"` to send all existing data on first run, or `"Incremental"` (default) to start from the current change tracking version without sending data.
+
 ### 3. Enable Change Tracking
 
 Ensure change tracking is enabled on your SQL Server databases:
@@ -87,7 +91,7 @@ Ensure change tracking is enabled on your SQL Server databases:
 ALTER DATABASE YourDatabase SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
 -- Enable change tracking on tables
-ALTER TABLE dbo.YourTable ENABLE CHANGE_TRACKING;
+ALTER TABLE dbo.YourTable ENABLE CHANGE TRACKING;
 ```
 
 ### 4. Configure
