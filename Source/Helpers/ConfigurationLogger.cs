@@ -62,18 +62,18 @@ public static class ConfigurationLogger
                 var connString = configuration.GetConnectionString(obj.Database);
                 if (string.IsNullOrEmpty(connString))
                 {
-                    Log.Warning($"│  {envVertical}  {objPrefix} ❌ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
+                    Log.Warning($"│  {envVertical}  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
                 }
                 else
                 {
                     try
                     {
                         var builder = new SqlConnectionStringBuilder(connString);
-                        Log.Information($"│  {envVertical}  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) → DB: {builder.InitialCatalog ?? "N/A"}, SP: {obj.StoredProcedureName}");
+                        Log.Information($"│  {envVertical}  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) – DB: {builder.InitialCatalog ?? "N/A"}, SP: {obj.StoredProcedureName}");
                     }
                     catch (Exception ex)
                     {
-                        Log.Error($"│  {envVertical}  {objPrefix} ❌ '{obj.Name}' ({obj.TableName}): Invalid connection - {ex.Message}");
+                        Log.Error($"│  {envVertical}  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Invalid connection - {ex.Message}");
                     }
                 }
             }
@@ -95,7 +95,7 @@ public static class ConfigurationLogger
         {
             var filePrefix = exportToApi ? "├─" : "└─";
             var filePath = configuration.GetValue<string>("ChangeTracking:FilePath", "exports/{object}/{database}/changes-{timestamp}.json");
-            Log.Information($"│     {filePrefix} 📁 File Export: ENABLED");
+            Log.Information($"│     {filePrefix} ✉ File Export: ENABLED");
             
             if (exportToApi)
             {
@@ -113,7 +113,7 @@ public static class ConfigurationLogger
         else
         {
             var filePrefix = exportToApi ? "├─" : "└─";
-            Log.Information($"│     {filePrefix} 🗁 File Export: DISABLED");
+            Log.Information($"│     {filePrefix} 🗲 File Export: DISABLED");
         }
 
         if (exportToApi)
@@ -121,7 +121,7 @@ public static class ConfigurationLogger
             var apiEndpoints = configuration.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>();
             if (apiEndpoints != null && apiEndpoints.Length > 0)
             {
-                Log.Information($"│     └─ ☁  API Export: ENABLED");
+                Log.Information($"│     └─ ✉ API Export: ENABLED");
                 for (int i = 0; i < apiEndpoints.Length; i++)
                 {
                     var endpoint = apiEndpoints[i];
@@ -135,12 +135,12 @@ public static class ConfigurationLogger
             }
             else
             {
-                Log.Information($"│     └─ ☁ API Export: DISABLED (no endpoints configured)");
+                Log.Information($"│     └─ ✉ API Export: DISABLED (no endpoints configured)");
             }
         }
         else
         {
-            Log.Information($"│     └─ ☁ API Export: DISABLED");
+            Log.Information($"│     └─ ✉ API Export: DISABLED");
         }
 
         // Failover Settings

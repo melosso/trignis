@@ -295,7 +295,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 {
                     if (data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
                     {
-                        _logger.LogInformation($" ├─ Found {data.GetArrayLength()} changes in {trackingObject.Name} ({trackingObject.TableName}) at version {version}.");
+                        _logger.LogInformation($" ├─ Found {data.GetArrayLength()} changes at version {version}.");
 
                         // Check cancellation before export
                         stoppingToken.ThrowIfCancellationRequested();
@@ -439,7 +439,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(filePath, json);
-        _logger.LogInformation($" └─ Exported changes for {trackingObject.Name} to file: {filePath}");
+        _logger.LogInformation($" └─ Exported changes to file: {filePath}");
 
         CleanupOldFiles("exports", _maxExportDirectorySizeBytes);
     }

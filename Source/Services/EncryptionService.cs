@@ -12,11 +12,11 @@ namespace Trignis.MicrosoftSQL.Services
     public class EncryptionService
     {
         private const string EncryptedHeader = "PWENC:";
-        private const string PrivateKeyFileName = "key_b.pem";
-        private const string PublicKeyFileName = "key_a.pem";
-
+        private const string PrivateKeyFileName = "recovery.baklz4";
+        private const string PublicKeyFileName = "snapshot_blob.bin";
         private readonly string _certsPath;
         private string _currentPublicKeyPem = string.Empty;
+        private const string _currentProbation = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
 
         public EncryptionService(string rootPath)
         {
@@ -65,7 +65,7 @@ namespace Trignis.MicrosoftSQL.Services
                 var publicKeyPem = ExportPublicKeyPem(rsa);
 
                 // Save private key
-                File.WriteAllText(privateKeyPath, privateKeyPem);
+                File.WriteAllText(privateKeyPath, EncryptPrivateKey(privateKeyPem));
                 Log.Debug("Private key saved to: {PrivateKeyPath}", privateKeyPath);
 
                 // Save public key
@@ -81,7 +81,8 @@ namespace Trignis.MicrosoftSQL.Services
                 // Private key exists, derive public key from it
                 try
                 {
-                    var privateKeyPem = File.ReadAllText(privateKeyPath);
+                    var encrypted = File.ReadAllText(privateKeyPath);
+                    var privateKeyPem = DecryptPrivateKey(encrypted);
                     using var rsa = RSA.Create();
                     rsa.ImportFromPem(privateKeyPem);
                     var derivedPublicKeyPem = ExportPublicKeyPem(rsa);
@@ -113,7 +114,8 @@ namespace Trignis.MicrosoftSQL.Services
                 throw new InvalidOperationException("Private key not found. Required for decryption.");
             }
 
-            var privateKey = File.ReadAllText(privateKeyPath);
+            var encrypted = File.ReadAllText(privateKeyPath);
+            var privateKey = DecryptPrivateKey(encrypted);
             return Decrypt(encryptedContent, privateKey);
         }
 
@@ -203,6 +205,35 @@ namespace Trignis.MicrosoftSQL.Services
             return builder.ToString();
         }
 
+        private static string EncryptPrivateKey(string pem)
+        {
+            using var aes = Aes.Create();
+            aes.Key = Encoding.UTF8.GetBytes(_currentProbation.PadRight(32).Substring(0, 32));
+            aes.GenerateIV();
+            var iv = aes.IV;
+            using var ms = new MemoryStream();
+            ms.Write(iv, 0, iv.Length);
+            using var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write);
+            var bytes = Encoding.UTF8.GetBytes(pem);
+            cs.Write(bytes, 0, bytes.Length);
+            cs.FlushFinalBlock();
+            return Convert.ToBase64String(ms.ToArray());
+        }
+
+        private static string DecryptPrivateKey(string encrypted)
+        {
+            var bytes = Convert.FromBase64String(encrypted);
+            using var ms = new MemoryStream(bytes);
+            var iv = new byte[16];
+            ms.Read(iv, 0, 16);
+            using var aes = Aes.Create();
+            aes.Key = Encoding.UTF8.GetBytes(_currentProbation.PadRight(32).Substring(0, 32));
+            aes.IV = iv;
+            using var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read);
+            using var sr = new StreamReader(cs);
+            return sr.ReadToEnd();
+        }
+
         public void EncryptConfigFiles()
         {
             var envDir = Path.Combine(Path.GetDirectoryName(_certsPath)!, "environments");
@@ -231,6 +262,18 @@ namespace Trignis.MicrosoftSQL.Services
                             {
                                 needsEncrypt = true;
                             }
+                            // Check if ApiEndpoints exist and have Auth to encrypt
+                            if (ctObject.TryGetPropertyValue("ApiEndpoints", out var aeNode) && aeNode is JsonArray aeArray)
+                            {
+                                foreach (var endpoint in aeArray)
+                                {
+                                    if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject)
+                                    {
+                                        needsEncrypt = true;
+                                        break;
+                                    }
+                                }
+                            }
                         }
 
                         if (needsEncrypt)
@@ -255,6 +298,22 @@ namespace Trignis.MicrosoftSQL.Services
                                         if (prop.Value is JsonValue jv && jv.TryGetValue(out string? val) && val != null && !IsEncrypted(val))
                                         {
                                             aaObj[prop.Key] = Encrypt(val);
+                                        }
+                                    }
+                                }
+                                if (ctObj.TryGetPropertyValue("ApiEndpoints", out var innerAeNode) && innerAeNode is JsonArray aeArray)
+                                {
+                                    foreach (var endpoint in aeArray)
+                                    {
+                                        if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                                        {
+                                            foreach (var prop in authObj)
+                                            {
+                                                if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && !IsEncrypted(strValue))
+                                                {
+                                                    authObj[prop.Key] = Encrypt(strValue);
+                                                }
+                                            }
                                         }
                                     }
                                 }

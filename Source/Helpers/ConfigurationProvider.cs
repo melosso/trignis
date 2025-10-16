@@ -47,6 +47,30 @@ namespace Trignis.MicrosoftSQL.Helpers
                 if (jsonObject.TryGetPropertyValue("ChangeTracking", out var changeTrackingNode) && changeTrackingNode is JsonObject ctObject)
                 {
                     DecryptJsonSection(ctObject, "ApiAuth");
+                    if (ctObject.TryGetPropertyValue("ApiEndpoints", out var ApiEndpointsNode) && ApiEndpointsNode is JsonArray aeArray)
+                    {
+                        foreach (var endpoint in aeArray)
+                        {
+                            if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                            {
+                                foreach (var prop in authObj)
+                                {
+                                    if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && _encryptionService.IsEncrypted(strValue))
+                                    {
+                                        try
+                                        {
+                                            authObj[prop.Key] = _encryptionService.Decrypt(strValue);
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            Log.Error(ex, "Failed to decrypt ApiEndpoints.Auth.{Key}, configuration may be corrupted", prop.Key);
+                                            throw;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Serialize back
