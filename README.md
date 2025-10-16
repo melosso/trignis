@@ -248,6 +248,43 @@ Before continuing, make sure you've set-up everything. On initial run, all secre
 2. Run `TrignisBackgroundService.bat start` to start the service
 3. Check the log output to make sure you've succesefully configured Trignis.
 
+## 📋 Change Tracking Output Structure
+
+The change tracking mechanism relies on a consistent JSON output structure from the configured stored procedures. Each procedure must return a JSON object with the following format:
+
+```json
+{
+  "Metadata": {
+    "Sync": {
+      "Version": 12345,
+      "Type": "Full|Diff",
+      "ReasonCode": 0
+    }
+  },
+  "Data": [
+    {
+      "$operation": "INSERT|UPDATE|DELETE",
+      "$version": 12345,
+      "primaryKey": "value",
+      "data": {
+        "field1": "value1",
+        "field2": "value2"
+      }
+    }
+  ]
+}
+```
+
+- **Metadata.Sync.Version**: The current change tracking version (integer).
+- **Metadata.Sync.Type**: Synchronization type ("Full" for initial sync, "Diff" for incremental changes).
+- **Metadata.Sync.ReasonCode**: Reason code (e.g., 0 for first sync, 1 if fromVersion is too old).
+- **Data**: Array of change records. Each record includes:
+  - `$operation`: The operation type.
+  - `$version`: The version of the change.
+  - Primary key and data fields (structure depends on table schema and tracking mode).
+
+Inconsistent or malformed JSON will cause processing failures. Ensure stored procedures adhere to this structure for reliable change detection and export. For column-level tracking, unchanged fields may be `null` in updates. In other words, prevent using the `INCLUDE_NULL_VALUES` when using column tracking.
+
 ## 🔐 Security & Encryption
 
 ### Configuration Encryption
@@ -286,19 +323,21 @@ Trignis automatically monitors configured tables and exports changes:
 ```json
 // Example exported change file
 {
-  "timestamp": "2025-10-14T10:30:00Z",
-  "object": "Items",
-  "database": "PrimaryDatabase",
-  "changes": [
+  "Metadata": {
+    "Sync": {
+      "Version": 12345,
+      "Type": "Diff",
+      "ReasonCode": 0
+    }
+  },
+  "Data": [
     {
-      "operation": "INSERT",
-      "primaryKey": "ABC123",
-      "data": {
-        "ItemCode": "ABC123",
-        "Description": "Sample Item Description",
-        "Assortment": "Electronics",
-        "sysguid": "550e8400-e29b-41d4-a716-446655440000"
-      }
+      "$operation": "INSERT",
+      "$version": 12345,
+      "ItemCode": "ABC123",
+      "Description": "Sample Item",
+      "Assortment": "Electronics",
+      "sysguid": "550e8400-e29b-41d4-a716-446655440000"
     }
   ]
 }
@@ -315,7 +354,7 @@ Configure webhook-style exports:
     "ApiEndpoints": [
       {
         "Key": "production_webhook1",
-        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
+        "Url": "http://portway/v1/api/prod/Webhook/{object}",
         "Auth": {
           "Type": "Bearer",
           "Token": "<my_token_here>"
