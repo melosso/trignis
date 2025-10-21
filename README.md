@@ -394,6 +394,8 @@ For more details, refer to [About Change Tracking (SQL Server)](https://learn.mi
 
 ## 📊 Logging & Monitoring
 
+#### Logging
+
 Trignis provides comprehensive logging:
 
 * Application logs: `log/trignis-.log` (daily rotation)
@@ -403,6 +405,62 @@ Trignis provides comprehensive logging:
 
 > [!TIP]
 > If the application isn't starting, consider changing value `UseEventLog` in the `appsettings.json` configuration file to true. To prevent your Windows Event Viewer from bloating, make sure to disable when you're done troubleshooting.
+
+#### Monitoring
+
+Trignis includes an optional health check endpoint for monitoring service availability and database connectivity. This is useful for integration with monitoring tools (Prometheus, Nagios, Datadog) and container orchestration platforms (Kubernetes health probes, Docker Swarm) to ensure the change tracking service is operational and can reach all configured environments.
+
+```json
+// Example configuration for health monitoring
+{
+  "Health": {
+    "Enabled": true,
+    "Port": 2455,
+    "Host": "*",
+    "CacheDurationSeconds": 120
+  }
+}
+```
+
+**Configuration Options:**
+- `Enabled`: Enable or disable the health endpoint (default: `false`)
+- `Port`: Port number for the health endpoint (default: `2455`)
+- `Host`: Binding host - use `*` for all interfaces, `localhost` for local only, or a specific IP address (default: `*`)
+- `CacheDurationSeconds`: Duration to cache health check results to reduce database load (default: `10` seconds)
+
+**Endpoint:**
+```
+GET http://localhost:2455/health
+```
+
+**Response Example:**
+```json
+{
+  "status": "healthy",
+  "service": "trignis-service",
+  "uptime": "43200s",
+  "timestamp": "2025-10-21T13:08:00Z",
+  "version": "2025.12.2",
+  "checks": {
+    "database": {
+      "status": "ok (all)",
+      "response_time_ms": 12
+    }
+  }
+}
+```
+
+**Status Values:**
+- `healthy`: All database connections are working
+- `degraded`: Some database connections failed (returns HTTP 200 with degraded status)
+
+**Database Check Values:**
+- `ok (all)`: All configured databases are reachable
+- `degraded (X/Y)`: X out of Y databases are reachable
+- `failed (all)`: No databases are reachable
+- `no databases configured`: No tracking objects configured
+
+The health endpoint uses caching to prevent excessive database queries. Adjust the property `CacheDurationSeconds` based on your monitoring frequency to balance freshness with database load.
 
 ## 🤝 Credits
 

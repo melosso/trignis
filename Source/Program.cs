@@ -15,6 +15,7 @@ using Trignis.MicrosoftSQL.Models;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text;
+using Microsoft.AspNetCore.Http;
 
 var tempConfig = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: true)
@@ -206,13 +207,29 @@ try
     // Add services to the container
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterService>();
+    builder.Services.AddSingleton<HealthCheckService>();
     builder.Services.AddSingleton(encryptionService);
     builder.Services.AddHttpClient();
-
+        
     var app = builder.Build();
 
+    // Configure health endpoint
+    var healthEnabled = builder.Configuration.GetValue<bool>("Health:Enabled", false);
+    var healthPort = builder.Configuration.GetValue<int>("Health:Port", 2455);
+    var healthHost = builder.Configuration.GetValue<string>("Health:Host", "*");
+
+    if (healthEnabled)
+    {
+        app.Urls.Add($"http://{healthHost}:{healthPort}");
+        
+        app.MapGet("/health", async (HealthCheckService healthService) =>
+        {
+            var health = await healthService.GetHealthStatusAsync();
+            return Results.Content(health, "application/json");
+        });
+    }
     // Log configuration status
-    ConfigurationLogger.LogConfigurationStatus(app.Services.GetRequiredService<IConfiguration>());
+    ConfigurationLogger.LogConfigurationStatus(builder.Configuration);
 
     // Register shutdown handler for graceful exit
     var lifetime = app.Lifetime;

@@ -143,6 +143,19 @@ public static class ConfigurationLogger
             Log.Information($"│     └─ ✉ API Export: DISABLED");
         }
 
+        // Health Endpoint
+        var healthEnabled = configuration.GetValue<bool>("Health:Enabled", false);
+        var healthPort = configuration.GetValue<int>("Health:Port", 2455);
+        var healthHost = configuration.GetValue<string>("Health:Host", "*");
+
+        if (healthEnabled)
+        {
+            Log.Information($"│");
+            Log.Information($"├─ Health Endpoint:");
+            Log.Information($"│  ├─ Status: ENABLED");
+            Log.Information($"│  └─ URL: http://{healthHost}:{healthPort}/health");
+        }
+
         // Failover Settings
         var retryCount = configuration.GetValue<int>("ChangeTracking:RetryCount", 3);
         var retryDelay = configuration.GetValue<int>("ChangeTracking:RetryDelaySeconds", 5);
