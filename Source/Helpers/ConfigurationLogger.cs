@@ -99,13 +99,13 @@ public static class ConfigurationLogger
             
             if (exportToApi)
             {
-                Log.Information($"│     │  └─ Path: {filePath}");
+                Log.Information($"│     │  ├─ Path: {filePath}");
                 var maxSizeMB = configuration.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
                 Log.Information($"│     │  └─ Max Size: {maxSizeMB} MB");
             }
             else
             {
-                Log.Information($"│        └─ Path: {filePath}");
+                Log.Information($"│        ├─ Path: {filePath}");
                 var maxSizeMB = configuration.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
                 Log.Information($"│        └─ Max Size: {maxSizeMB} MB");
             }
@@ -113,7 +113,7 @@ public static class ConfigurationLogger
         else
         {
             var filePrefix = exportToApi ? "├─" : "└─";
-            Log.Information($"│     {filePrefix} 🗲 File Export: DISABLED");
+            Log.Information($"│     {filePrefix} ✗ File Export: DISABLED");
         }
 
         if (exportToApi)
@@ -128,9 +128,48 @@ public static class ConfigurationLogger
                     var isLastEndpoint = i == apiEndpoints.Length - 1;
                     var prefix = isLastEndpoint ? "└─" : "├─";
                     var verticalBar = isLastEndpoint ? " " : "│";
+                    
                     Log.Information($"│        {prefix} Endpoint '{endpoint.Key ?? $"#{i+1}"}'");
-                    Log.Information($"│        {verticalBar}  ├─ URL: {endpoint.Url}");
-                    Log.Information($"│        {verticalBar}  └─ Auth: {endpoint.Auth?.Type ?? "None"}");
+                    
+                    // Message Queue endpoint
+                    if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
+                    {
+                        Log.Information($"│        {verticalBar}  ├─ Type: {endpoint.MessageQueueType}");
+                        
+                        if (endpoint.MessageQueue != null)
+                        {
+                            switch (endpoint.MessageQueueType.ToLower())
+                            {
+                                case "rabbitmq":
+                                    var mqTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName) 
+                                        ? $"Queue: {endpoint.MessageQueue.QueueName}"
+                                        : $"Exchange: {endpoint.MessageQueue.Exchange}" + 
+                                          (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (Key: {endpoint.MessageQueue.RoutingKey})" : "");
+                                    Log.Information($"│        {verticalBar}  └─ {mqTarget}");
+                                    break;
+                                case "azureservicebus":
+                                    var asbTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
+                                        ? $"Queue: {endpoint.MessageQueue.QueueName}"
+                                        : $"Topic: {endpoint.MessageQueue.TopicName}";
+                                    Log.Information($"│        {verticalBar}  └─ {asbTarget}");
+                                    break;
+                                case "awssqs":
+                                    Log.Information($"│        {verticalBar}  └─ Queue: {endpoint.MessageQueue.QueueUrl}");
+                                    break;
+                            }
+                        }
+                    }
+                    // HTTP endpoint
+                    else
+                    {
+                        Log.Information($"│        {verticalBar}  ├─ URL: {endpoint.Url}");
+                        var authType = endpoint.Auth?.Type ?? "None";
+                        if (endpoint.EnableCompression)
+                        {
+                            authType += " (Compressed)";
+                        }
+                        Log.Information($"│        {verticalBar}  └─ Auth: {authType}");
+                    }
                 }
             }
             else
@@ -147,7 +186,7 @@ public static class ConfigurationLogger
         var healthEnabled = configuration.GetValue<bool>("Health:Enabled", false);
         var healthPort = configuration.GetValue<int>("Health:Port", 2455);
         var healthHost = configuration.GetValue<string>("Health:Host", "*");
-
+        
         if (healthEnabled)
         {
             Log.Information($"│");

@@ -20,67 +20,119 @@ namespace Trignis.MicrosoftSQL.Helpers
             _encryptionService = encryptionService;
         }
 
-        public override void Load()
+    public override void Load()
+    {
+        var fileProvider = Source.FileProvider ?? new PhysicalFileProvider(Directory.GetCurrentDirectory());
+        var path = Source.Path ?? throw new InvalidOperationException("Path is required");
+        var fileInfo = fileProvider.GetFileInfo(path);
+        if (!fileInfo.Exists)
         {
-            var fileProvider = Source.FileProvider ?? new PhysicalFileProvider(Directory.GetCurrentDirectory());
-            var path = Source.Path ?? throw new InvalidOperationException("Path is required");
-            var fileInfo = fileProvider.GetFileInfo(path);
-            if (!fileInfo.Exists)
+            if (!Source.Optional)
             {
-                if (!Source.Optional)
-                {
-                    throw new FileNotFoundException($"The configuration file '{path}' was not found and is not optional.");
-                }
-                return;
+                throw new FileNotFoundException($"The configuration file '{path}' was not found and is not optional.");
             }
+            return;
+        }
 
-            using var stream = fileInfo.CreateReadStream();
-            using var reader = new StreamReader(stream);
-            var content = reader.ReadToEnd();
+        using var stream = fileInfo.CreateReadStream();
+        using var reader = new StreamReader(stream);
+        var content = reader.ReadToEnd();
 
-            // Parse JSON
-            var jsonNode = JsonNode.Parse(content);
-            if (jsonNode is JsonObject jsonObject)
+        // Parse JSON
+        var jsonNode = JsonNode.Parse(content);
+        if (jsonNode is JsonObject jsonObject)
+        {
+            // Decrypt ConnectionStrings
+            DecryptJsonSection(jsonObject, "ConnectionStrings");
+            
+            if (jsonObject.TryGetPropertyValue("ChangeTracking", out var changeTrackingNode) && changeTrackingNode is JsonObject ctObject)
             {
-                // Decrypt sections
-                DecryptJsonSection(jsonObject, "ConnectionStrings");
-                if (jsonObject.TryGetPropertyValue("ChangeTracking", out var changeTrackingNode) && changeTrackingNode is JsonObject ctObject)
+                // Decrypt legacy ApiAuth
+                DecryptJsonSection(ctObject, "ApiAuth");
+                
+                // Decrypt ApiEndpoints
+                if (ctObject.TryGetPropertyValue("ApiEndpoints", out var ApiEndpointsNode) && ApiEndpointsNode is JsonArray aeArray)
                 {
-                    DecryptJsonSection(ctObject, "ApiAuth");
-                    if (ctObject.TryGetPropertyValue("ApiEndpoints", out var ApiEndpointsNode) && ApiEndpointsNode is JsonArray aeArray)
+                    foreach (var endpoint in aeArray)
                     {
-                        foreach (var endpoint in aeArray)
+                        if (endpoint is JsonObject epObj)
                         {
-                            if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                            // Decrypt Auth section
+                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
                             {
-                                foreach (var prop in authObj)
-                                {
-                                    if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && _encryptionService.IsEncrypted(strValue))
-                                    {
-                                        try
-                                        {
-                                            authObj[prop.Key] = _encryptionService.Decrypt(strValue);
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Log.Error(ex, "Failed to decrypt ApiEndpoints.Auth.{Key}, configuration may be corrupted", prop.Key);
-                                            throw;
-                                        }
-                                    }
-                                }
+                                DecryptAuthObject(authObj);
+                            }
+                            
+                            // Decrypt MessageQueue section
+                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
+                            {
+                                DecryptMessageQueueObject(mqObj);
                             }
                         }
                     }
                 }
-
-                // Serialize back
-                content = jsonObject.ToJsonString();
             }
 
-            // Load from modified content
-            using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-            Load(memoryStream);
+            // Serialize back
+            content = jsonObject.ToJsonString();
         }
+
+        // Load from modified content
+        using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
+        Load(memoryStream);
+    }
+
+    private void DecryptAuthObject(JsonObject authObj)
+    {
+        // Decrypt sensitive Auth properties
+        var sensitiveProps = new[] { "Token", "Password", "ApiKey", "ClientSecret", "ClientId" };
+        
+        foreach (var propName in sensitiveProps)
+        {
+            if (authObj.TryGetPropertyValue(propName, out var propValue) && 
+                propValue is JsonValue jsonValue && 
+                jsonValue.TryGetValue(out string? strValue) && 
+                strValue != null && 
+                _encryptionService.IsEncrypted(strValue))
+            {
+                try
+                {
+                    authObj[propName] = _encryptionService.Decrypt(strValue);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Failed to decrypt ApiEndpoints.Auth.{Key}, configuration may be corrupted", propName);
+                    throw;
+                }
+            }
+        }
+    }
+
+    private void DecryptMessageQueueObject(JsonObject mqObj)
+    {
+        // Decrypt sensitive MessageQueue properties
+        var sensitiveProps = new[] { "Password", "ConnectionString", "SecretAccessKey", "AccessKeyId" };
+        
+        foreach (var propName in sensitiveProps)
+        {
+            if (mqObj.TryGetPropertyValue(propName, out var propValue) && 
+                propValue is JsonValue jsonValue && 
+                jsonValue.TryGetValue(out string? strValue) && 
+                strValue != null && 
+                _encryptionService.IsEncrypted(strValue))
+            {
+                try
+                {
+                    mqObj[propName] = _encryptionService.Decrypt(strValue);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Failed to decrypt ApiEndpoints.MessageQueue.{Key}, configuration may be corrupted", propName);
+                    throw;
+                }
+            }
+        }
+    }
 
         private void DecryptJsonSection(JsonObject jsonObject, string sectionName)
         {

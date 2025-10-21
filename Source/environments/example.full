@@ -1,0 +1,141 @@
+{
+  "ConnectionStrings": {
+    "PrimaryDatabase": "Server=localhost;Database=Database1;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;",
+    "SecondaryDatabase": "Server=localhost;Database=Database2;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;"
+  },
+  "ChangeTracking": {
+    "TrackingObjects": [
+      {
+        "Name": "TrainingSessions",
+        "Database": "PrimaryDatabase",
+        "TableName": "dbo.TrainingSessions",
+        "StoredProcedureName": "web.get_trainingsessionsync",
+        "InitialSyncMode": "Full"
+      },
+      {
+        "Name": "TrainingSessionsSecondary",
+        "Database": "SecondaryDatabase",
+        "TableName": "dbo.TrainingSessions",
+        "StoredProcedureName": "web.get_trainingsessionsync",
+        "InitialSyncMode": "Incremental"
+      }
+    ],
+    "ExportToFile": true,
+    "FilePath": "exports/{object}/{database}/changes-{timestamp}.json",
+    "FilePathSizeLimit": 500,
+    "ExportToApi": true,
+    "ApiEndpoints": [
+      {
+        "Key": "production_webhook1",
+        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
+        "Auth": {
+          "Type": "Bearer",
+          "Token": "<my_token_here>"
+        }
+      },
+      {
+        "Key": "oauth2_api",
+        "Url": "https://api.example.com/webhook",
+        "Auth": {
+          "Type": "OAuth2ClientCredentials",
+          "TokenEndpoint": "https://auth.example.com/oauth/token",
+          "ClientId": "your-client-id",
+          "ClientSecret": "your-client-secret",
+          "Scope": "api.write"
+        },
+        "CustomHeaders": {
+          "X-Correlation-Id": "{guid}",
+          "X-Source": "trignis-{database}",
+          "X-Timestamp": "{timestamp}"
+        },
+        "EnableCompression": true
+      },
+      {
+        "Key": "rabbitmq_direct_queue",
+        "MessageQueueType": "RabbitMQ",
+        "MessageQueue": {
+          "HostName": "localhost",
+          "Port": 5672,
+          "VirtualHost": "/",
+          "Username": "guest",
+          "Password": "guest",
+          "QueueName": "trignis-demo"
+        }
+      },
+      {
+        "Key": "rabbitmq_exchange_direct",
+        "MessageQueueType": "RabbitMQ",
+        "MessageQueue": {
+          "HostName": "rabbitmq.example.com",
+          "Port": 5672,
+          "Username": "trignis",
+          "Password": "PWENC:...",
+          "Exchange": "data-changes",
+          "RoutingKey": "database.trainingsessions"
+        }
+      },
+      {
+        "Key": "rabbitmq_exchange_fanout",
+        "MessageQueueType": "RabbitMQ",
+        "MessageQueue": {
+          "HostName": "rabbitmq.example.com",
+          "Port": 5672,
+          "Username": "trignis",
+          "Password": "PWENC:...",
+          "Exchange": "broadcasts"
+        }
+      },
+      {
+        "Key": "azure_servicebus",
+        "MessageQueueType": "AzureServiceBus",
+        "MessageQueue": {
+          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=...",
+          "QueueName": "change-tracking"
+        }
+      },
+      {
+        "Key": "azure_servicebus_topic",
+        "MessageQueueType": "AzureServiceBus",
+        "MessageQueue": {
+          "ConnectionString": "PWENC:...",
+          "TopicName": "data-changes"
+        }
+      },
+      {
+        "Key": "aws_sqs",
+        "MessageQueueType": "AWSSQS",
+        "MessageQueue": {
+          "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/change-tracking",
+          "Region": "us-east-1",
+          "AccessKeyId": "AKIA...",
+          "SecretAccessKey": "PWENC:..."
+        }
+      },
+      {
+        "Key": "aws_sqs_iam_role",
+        "MessageQueueType": "AWSSQS",
+        "MessageQueue": {
+          "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/changes",
+          "Region": "us-east-1"
+        }
+      },
+      {
+        "Key": "compressed_webhook",
+        "Url": "https://api.example.com/data/changes",
+        "Auth": {
+          "Type": "Bearer",
+          "Token": "your-bearer-token"
+        },
+        "CustomHeaders": {
+          "X-Request-Id": "{guid}",
+          "X-Environment": "production"
+        },
+        "EnableCompression": true
+      }
+    ],
+    "PollingIntervalSeconds": 60,
+    "RetryCount": 5,
+    "RetryDelaySeconds": 10,
+    "DeadletterRetentionDays": 60
+  }
+}

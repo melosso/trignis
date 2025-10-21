@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Text;
 using Microsoft.AspNetCore.Http;
+using Amazon.SQS;
 
 var tempConfig = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: true)
@@ -208,6 +209,8 @@ try
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterService>();
     builder.Services.AddSingleton<HealthCheckService>();
+    builder.Services.AddSingleton<MessageQueueService>();
+    builder.Services.AddSingleton<OAuth2TokenService>();
     builder.Services.AddSingleton(encryptionService);
     builder.Services.AddHttpClient();
         

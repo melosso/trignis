@@ -370,6 +370,105 @@ Configure webhook-style exports:
 }
 ```
 
+### OAuth 2.0 Client Credentials
+
+Automatically manage token acquisition and renewal for OAuth-protected APIs:
+
+```json
+{
+  "ChangeTracking": {
+    "ApiEndpoints": [
+      {
+        "Key": "oauth_api",
+        "Url": "https://api.example.com/webhook",
+        "Auth": {
+          "Type": "OAuth2ClientCredentials",
+          "TokenEndpoint": "https://auth.example.com/oauth/token",
+          "ClientId": "your-client-id",
+          "ClientSecret": "your-client-secret",
+          "Scope": "api.write"
+        }
+      }
+    ]
+  }
+}
+```
+
+Trignis handles token caching and automatic refresh, in either case no manual intervention is needed unless you've reached the token expiry time window.
+
+### Message Queues
+
+Export changes to message queues for asynchronous processing and decoupled architectures:
+
+```json
+{
+  "ChangeTracking": {
+    "ApiEndpoints": [
+      {
+        "Key": "rabbitmq_direct_queue",
+        "MessageQueueType": "RabbitMQ",
+        "MessageQueue": {
+          "HostName": "localhost",
+          "Port": 5672,
+          "VirtualHost": "/",
+          "Username": "guest",
+          "Password": "guest",
+          "QueueName": "trignis-changes"  // Direct queue publish
+        }
+      },
+      {
+        "Key": "rabbitmq_exchange",
+        "MessageQueueType": "RabbitMQ",
+        "MessageQueue": {
+          "HostName": "rabbitmq.example.com",
+          "Port": 5672,
+          "Username": "trignis",
+          "Password": "your-password",
+          "Exchange": "data-changes",         // Exchange-based routing
+          "RoutingKey": "database.trainingsessions"
+        }
+      }
+    ]
+  }
+}
+```
+
+**Supported message queues:**
+- **RabbitMQ** (`RabbitMQ`): Direct queue (`QueueName`) or exchange-based routing (properties `Exchange` and `RoutingKey`)
+- **Azure Service Bus** (`AzureServiceBus`): Queues and topics
+- **AWS SQS** (`AWSSQS`): With IAM role or explicit credentials
+
+RabbitMQ supports two patterns: publish directly to a queue using `QueueName`, or route through an exchange using `Exchange` and `RoutingKey` for pattern matching.
+
+### Custom Headers & Compression
+
+Add correlation tracking and reduce bandwidth usage:
+
+```json
+{
+  "Key": "compressed_webhook",
+  "Url": "https://api.example.com/data/changes",
+  "Auth": {
+    "Type": "Bearer",
+    "Token": "your-token"
+  },
+  "CustomHeaders": {
+    "X-Correlation-Id": "{guid}",
+    "X-Source": "trignis-{database}",
+    "X-Timestamp": "{timestamp}"
+  },
+  "EnableCompression": true
+}
+```
+
+**Variable substitution in headers:**
+- `{guid}`: Generates unique correlation ID
+- `{timestamp}`: Current timestamp
+- `{object}`: Tracking object name
+- `{database}`: Database name
+
+Compression uses gzip encoding and can significantly reduce payload sizes for large change sets, though the recipient must support gzip decompression (which most modern servers do, but is not guaranteed).
+
 ## ⚡ Risks
 
 Using change tracking may slow database writes (for the tables that have this feature enabled) by approximately 5-10% because it tracks every single change. The tracking tables keep growing and need regular cleanup (see: [Compatibility](#-compatibility)) 

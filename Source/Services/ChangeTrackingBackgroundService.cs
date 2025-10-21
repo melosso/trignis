@@ -32,6 +32,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly string _stateConnectionString;
     private readonly long _maxExportDirectorySizeBytes;
     private readonly DeadLetterService _deadLetterService;
+    private readonly MessageQueueService _messageQueueService;
+    private readonly OAuth2TokenService _oauth2TokenService;
     private bool _isProcessing = false;
     private DateTime _lastPurgeTime = DateTime.MinValue;
 
@@ -41,14 +43,19 @@ public class ChangeTrackingBackgroundService : BackgroundService
         IServiceProvider serviceProvider,
         IHttpClientFactory httpClientFactory,
         IHostApplicationLifetime lifetime,
-        DeadLetterService deadLetterService)
+        DeadLetterService deadLetterService,
+        MessageQueueService messageQueueService,
+        OAuth2TokenService oauth2TokenService)
     {
         _logger = logger;
+        _logger.LogDebug("ChangeTrackingBackgroundService constructor called");
         _config = config;
         _serviceProvider = serviceProvider;
         _httpClientFactory = httpClientFactory;
         _lifetime = lifetime;
         _deadLetterService = deadLetterService;
+        _messageQueueService = messageQueueService;
+        _oauth2TokenService = oauth2TokenService;
 
         var stateDbPath = _config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
         _stateConnectionString = $"Data Source={stateDbPath}";
@@ -481,6 +488,17 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         foreach (var endpoint in apiEndpoints)
         {
+            try
+            {
+                // Handle Message Queue endpoints
+                if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
+                {
+                    await _messageQueueService.SendToQueueAsync(endpoint, data);
+                    // Note: MessageQueueService logs the actual publish, so we don't duplicate here
+                    continue;
+                }
+
+            // Handle HTTP endpoints
             if (string.IsNullOrEmpty(endpoint.Url))
                 continue;
 
@@ -505,6 +523,13 @@ public class ChangeTrackingBackgroundService : BackgroundService
                             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
                         }
                         break;
+                        
+                    case "oauth2clientcredentials":
+                        var cacheKey = $"{endpoint.Key}_{endpoint.Auth.ClientId}";
+                        var accessToken = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, cacheKey);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                        break;
+                        
                     case "basic":
                         var username = endpoint.Auth.Username;
                         var password = endpoint.Auth.Password;
@@ -514,6 +539,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
                         }
                         break;
+                        
                     case "apikey":
                         var apiKey = endpoint.Auth.ApiKey;
                         var headerName = endpoint.Auth.HeaderName ?? "X-API-Key";
@@ -522,13 +548,46 @@ public class ChangeTrackingBackgroundService : BackgroundService
                             client.DefaultRequestHeaders.Add(headerName, apiKey);
                         }
                         break;
+                        
                     default:
                         _logger.LogWarning($"Unsupported authentication type: {authType} for endpoint '{endpoint.Key}'");
                         break;
                 }
             }
 
-            var content = new StringContent(JsonSerializer.Serialize(data), Encoding.UTF8, "application/json");
+            // Add custom headers
+            if (endpoint.CustomHeaders != null)
+            {
+                foreach (var header in endpoint.CustomHeaders)
+                {
+                    // Support variable substitution in header values
+                    var headerValue = header.Value
+                        .Replace("{timestamp}", timestamp)
+                        .Replace("{object}", trackingObject.Name)
+                        .Replace("{database}", trackingObject.Database)
+                        .Replace("{guid}", Guid.NewGuid().ToString());
+                        
+                    client.DefaultRequestHeaders.Add(header.Key, headerValue);
+                }
+            }
+
+            var jsonContent = JsonSerializer.Serialize(data);
+            HttpContent content;
+
+            // Apply compression if enabled
+            if (endpoint.EnableCompression)
+            {
+                var compressedBytes = CompressString(jsonContent);
+                content = new ByteArrayContent(compressedBytes);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+                content.Headers.ContentEncoding.Add("gzip");
+                _logger.LogDebug($"Compressed payload from {jsonContent.Length} to {compressedBytes.Length} bytes");
+            }
+            else
+            {
+                content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+            }
+
             var response = await client.PostAsync(apiUrl, content);
 
             if (!response.IsSuccessStatusCode)
@@ -537,7 +596,24 @@ public class ChangeTrackingBackgroundService : BackgroundService
             }
 
             _logger.LogInformation($" └─ Exported changes to API endpoint '{endpoint.Key ?? "unnamed"}': {apiUrl}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Export failed for endpoint '{endpoint.Key ?? "unnamed"}'");
+                throw; // Re-throw to be caught by retry policy and dead letter service
+            }
         }
+    }
+
+    private byte[] CompressString(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        using var outputStream = new System.IO.MemoryStream();
+        using (var gzipStream = new System.IO.Compression.GZipStream(outputStream, System.IO.Compression.CompressionMode.Compress))
+        {
+            gzipStream.Write(bytes, 0, bytes.Length);
+        }
+        return outputStream.ToArray();
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

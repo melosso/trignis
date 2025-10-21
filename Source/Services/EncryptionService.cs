@@ -250,27 +250,37 @@ namespace Trignis.MicrosoftSQL.Services
                     if (jsonNode is JsonObject jsonObject)
                     {
                         bool needsEncrypt = false;
+
+                        // Encrypt ConnectionStrings
                         if (jsonObject.TryGetPropertyValue("ConnectionStrings", out var csNode) && csNode is JsonObject)
                         {
                             needsEncrypt = true;
                         }
+
                         JsonNode? ctNode = null;
-                        JsonNode? aaNode = null;
                         if (jsonObject.TryGetPropertyValue("ChangeTracking", out ctNode) && ctNode is JsonObject ctObject)
                         {
-                            if (ctObject.TryGetPropertyValue("ApiAuth", out aaNode) && aaNode is JsonObject)
+                            // Check ApiAuth (legacy)
+                            if (ctObject.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject)
                             {
                                 needsEncrypt = true;
                             }
-                            // Check if ApiEndpoints exist and have Auth to encrypt
+
+                            // Check if ApiEndpoints exist and have Auth or MessageQueue to encrypt
                             if (ctObject.TryGetPropertyValue("ApiEndpoints", out var aeNode) && aeNode is JsonArray aeArray)
                             {
                                 foreach (var endpoint in aeArray)
                                 {
-                                    if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject)
+                                    if (endpoint is JsonObject epObj)
                                     {
-                                        needsEncrypt = true;
-                                        break;
+                                        if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject)
+                                        {
+                                            needsEncrypt = true;
+                                        }
+                                        if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject)
+                                        {
+                                            needsEncrypt = true;
+                                        }
                                     }
                                 }
                             }
@@ -278,7 +288,7 @@ namespace Trignis.MicrosoftSQL.Services
 
                         if (needsEncrypt)
                         {
-                            // Encrypt the sections
+                            // Encrypt ConnectionStrings
                             if (jsonObject.TryGetPropertyValue("ConnectionStrings", out csNode) && csNode is JsonObject csObj)
                             {
                                 foreach (var prop in csObj)
@@ -289,30 +299,33 @@ namespace Trignis.MicrosoftSQL.Services
                                     }
                                 }
                             }
+
+                            // Encrypt ChangeTracking sections
                             if (ctNode is JsonObject ctObj)
                             {
-                                if (aaNode is JsonObject aaObj)
+                                // Encrypt legacy ApiAuth
+                                if (ctObj.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject aaObj)
                                 {
-                                    foreach (var prop in aaObj)
-                                    {
-                                        if (prop.Value is JsonValue jv && jv.TryGetValue(out string? val) && val != null && !IsEncrypted(val))
-                                        {
-                                            aaObj[prop.Key] = Encrypt(val);
-                                        }
-                                    }
+                                    EncryptJsonObject(aaObj);
                                 }
+
+                                // Encrypt ApiEndpoints
                                 if (ctObj.TryGetPropertyValue("ApiEndpoints", out var innerAeNode) && innerAeNode is JsonArray aeArray)
                                 {
                                     foreach (var endpoint in aeArray)
                                     {
-                                        if (endpoint is JsonObject epObj && epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                                        if (endpoint is JsonObject epObj)
                                         {
-                                            foreach (var prop in authObj)
+                                            // Encrypt Auth section
+                                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
                                             {
-                                                if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && !IsEncrypted(strValue))
-                                                {
-                                                    authObj[prop.Key] = Encrypt(strValue);
-                                                }
+                                                EncryptAuthObject(authObj);
+                                            }
+
+                                            // Encrypt MessageQueue section
+                                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
+                                            {
+                                                EncryptMessageQueueObject(mqObj);
                                             }
                                         }
                                     }
@@ -329,6 +342,53 @@ namespace Trignis.MicrosoftSQL.Services
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Failed to encrypt config file: {File}", file);
+                }
+            }
+        }
+
+        private void EncryptJsonObject(JsonObject obj)
+        {
+            foreach (var prop in obj.ToList())
+            {
+                if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && !IsEncrypted(strValue))
+                {
+                    obj[prop.Key] = Encrypt(strValue);
+                }
+            }
+        }
+
+        private void EncryptAuthObject(JsonObject authObj)
+        {
+            // Encrypt sensitive Auth properties
+            var sensitiveProps = new[] { "Token", "Password", "ApiKey", "ClientSecret", "ClientId" };
+
+            foreach (var propName in sensitiveProps)
+            {
+                if (authObj.TryGetPropertyValue(propName, out var propValue) &&
+                    propValue is JsonValue jsonValue &&
+                    jsonValue.TryGetValue(out string? strValue) &&
+                    strValue != null &&
+                    !IsEncrypted(strValue))
+                {
+                    authObj[propName] = Encrypt(strValue);
+                }
+            }
+        }
+
+        private void EncryptMessageQueueObject(JsonObject mqObj)
+        {
+            // Encrypt sensitive MessageQueue properties
+            var sensitiveProps = new[] { "Password", "ConnectionString", "SecretAccessKey", "AccessKeyId" };
+
+            foreach (var propName in sensitiveProps)
+            {
+                if (mqObj.TryGetPropertyValue(propName, out var propValue) &&
+                    propValue is JsonValue jsonValue &&
+                    jsonValue.TryGetValue(out string? strValue) &&
+                    strValue != null &&
+                    !IsEncrypted(strValue))
+                {
+                    mqObj[propName] = Encrypt(strValue);
                 }
             }
         }
