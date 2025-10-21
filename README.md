@@ -394,6 +394,8 @@ For more details, refer to [About Change Tracking (SQL Server)](https://learn.mi
 
 ## 📊 Logging & Monitoring
 
+We've implemented both logging and a separate health mechanism.
+
 #### Logging
 
 Trignis provides comprehensive logging:
