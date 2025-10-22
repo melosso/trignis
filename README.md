@@ -19,21 +19,23 @@ We've chosen to use a timed propagation mechanism due to various legacy applicat
 This application is designed for reliability and performance, predominantly in Windows Server environments. It offers flexible change tracking, versatile export options, and comprehensive security.
 
 * **Real-time change tracking**: Monitors SQL Server change tracking tables and processes updates automatically
-* **Multiple export destinations**: Export changes to JSON files or REST APIs
+* **Multiple export destinations**: Export changes to JSON files, REST APIs, or message queues (RabbitMQ, Azure Service Bus, AWS SQS)
+* **Multi-environment support**: Isolated configurations for dev/staging/prod with separate processing threads
+* **Large payload handling**: Automatic batching for full synchronization scenarios with thousands of records
 * **Built-in encryption**: Secure configuration files with modern encryption standards
-* **Environment-aware**: Isolated configurations for dev/staging/prod environments
 * **Comprehensive logging**: Detailed request/response tracing with Serilog
 * **Windows service support**: Runs as a background service with proper lifecycle management
 * **State persistence**: Uses SQLite to track processing state and avoid duplicates
 * **Configurable polling**: Adjustable polling intervals and retry policies
 * **File management**: Automatic cleanup of old export files with size limits
+* **Health monitoring**: Built-in endpoints for service health, state tracking, and dead letter monitoring
 
 ## ⚙️ Requirements
 
 Before deploying **Trignis**, ensure your environment meets the following requirements:
 
 - [.NET 9+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
-- **SQL Server** with *Change Tracking* enabled (we’ll walk you through this later)
+- **SQL Server** with *Change Tracking* enabled (we'll walk you through this later)
 - **Windows Server** (for hosting the background service)
 - **Database and filesystem access** for configuration and logging
 
@@ -48,15 +50,15 @@ Download the [latest release](https://github.com/melosso/trignis/releases) and e
 
 ### 2. Configure Environments
 
-Set up environment-specific configurations in the `environments/` folder.
+Set up environment-specific configurations in the `environments/` folder. Each environment file is completely self-contained with its own connection strings, tracking objects, and API endpoints.
 
-**`environments/example.json`**
+**`environments/production.json`**
 
 ```json
 {
   "ConnectionStrings": {
-    "PrimaryDatabase": "Server=localhost;Database=PrimaryDB;Trusted_Connection=True;",
-    "SecondaryDatabase": "Server=localhost;Database=SecondaryDB;Trusted_Connection=True;"
+    "PrimaryDatabase": "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;",
+    "SecondaryDatabase": "Server=prod-sql.company.com;Database=SecondaryDB;Trusted_Connection=True;"
   },
   "ChangeTracking": {
     "TrackingObjects": [
@@ -68,21 +70,81 @@ Set up environment-specific configurations in the `environments/` folder.
         "InitialSyncMode": "Incremental"
       }
     ],
-    "PollingIntervalSeconds": 30,
+    "ApiEndpoints": [
+      {
+        "Key": "production_webhook",
+        "Url": "https://api.company.com/webhooks/changes",
+        "Auth": {
+          "Type": "Bearer",
+          "Token": "<token_here>"
+        }
+      }
+    ],
+    "PollingIntervalSeconds": 60,
     "ExportToFile": true,
-    "ExportToApi": false,
-    "FilePath": "exports/{object}/{database}/changes-{timestamp}.json",
-    "FilePathSizeLimit": 500,
-    "RetryCount": 3,
-    "RetryDelaySeconds": 5
+    "ExportToApi": true
   }
 }
 ```
 
+**`environments/development.json`**
+
+```json
+{
+  "ConnectionStrings": {
+    "TestDatabase": "Server=localhost;Database=TestDB;Trusted_Connection=True;"
+  },
+  "ChangeTracking": {
+    "TrackingObjects": [
+      {
+        "Name": "TestCustomers",
+        "Database": "TestDatabase",
+        "TableName": "dbo.Customers",
+        "StoredProcedureName": "sp_GetCustomerChanges",
+        "InitialSyncMode": "Full"
+      }
+    ],
+    "ApiEndpoints": [
+      {
+        "Key": "dev_webhook",
+        "Url": "http://localhost:5000/api/webhooks/changes"
+      }
+    ],
+    "PollingIntervalSeconds": 15
+  }
+}
+```
+
+Each environment runs independently in its own thread, allowing different polling intervals and configurations without interference.
+
 > [!TIP] 
 > You can determine if you'd like to send all data (e.g. for propagation) or only the changed data. Switch the property `InitialSyncMode` between `"Full"` to send all existing data on first run, or `"Incremental"` (default) to start from the current change tracking version without sending data.
 
-### 3. Enable Change Tracking
+### 3. Configure Global Settings
+
+Set application-wide defaults in `appsettings.json`:
+
+```json
+{
+  "ChangeTracking": {
+    "GlobalSettings": {
+      "PollingIntervalSeconds": 30,
+      "MaxRecordsPerBatch": 1000,
+      "EnablePayloadBatching": true,
+      "DeadLetterThreshold": 100,
+      "HealthCheckEnabled": true
+    }
+  },
+  "Health": {
+    "Enabled": true,
+    "Port": 2455
+  }
+}
+```
+
+Environments can override these global settings as needed.
+
+### 4. Enable Change Tracking
 
 Ensure change tracking is enabled on your SQL Server databases:
 
@@ -94,7 +156,7 @@ ALTER DATABASE YourDatabase SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS,
 ALTER TABLE dbo.YourTable ENABLE CHANGE TRACKING;
 ```
 
-### 4. Configure
+### 5. Configure Stored Procedures
 
 To configure Trignis for data retrieval, you need to create a stored procedure that leverages SQL Server change tracking to fetch changes from your tables. This procedure should handle both full synchronization (when `fromVersion` is 0) and incremental changes (diff sync).
 
@@ -244,17 +306,29 @@ END
 
 Then, reference this procedure in your environment configuration under `StoredProcedureName`.
 
-### 5. Deploy as Windows Service
+### 6. Prepare your Deployment
+
+If you're choosing to deploy the services on Windows, please make sure to prepare your environment: you'll need to safely store the application encryption key. On containerized environments, this can be done with the identically named `TRIGNIS_ENCRYPTION_KEY` variable.
+
+```powershell
+# Immediately stores the encryption key to your System Environment Variables
+$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); [Environment]::SetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", [Convert]::ToBase64String($bytes), "Machine")
+```
+
+### 7. Deploy as Windows Service
 
 Before continuing, make sure you've set-up everything. On initial run, all secrets will be stored safely (meaning: they'll be hashed). For production deployment:
 
 1. Run `TrignisBackgroundService.bat install` as Administrator
 2. Run `TrignisBackgroundService.bat start` to start the service
-3. Check the log output to make sure you've succesefully configured Trignis.
+3. Check the log output to make sure you've successfully configured Trignis.
 
-## 📋 Change Tracking Output Structure
+> [!TIP]
+> If you'd like to verify if you have succesfully configured Trignis, you can run `TrignisBackgroundService.bat test` to run the application in the console instead. 
 
-The change tracking mechanism relies on a consistent JSON output structure from the configured stored procedures. Each procedure must return a JSON object with the following format:
+## 📑 Output Structure
+
+The change tracking mechanism (in the database) relies on a **consistent** JSON output structure from the configured stored procedures. Each procedure must return a JSON object with the following format:
 
 ```json
 {
@@ -316,7 +390,7 @@ When exporting to APIs, configure authentication in your environment files:
 }
 ```
 
-Supported auth types: `Bearer`, `Basic`, `APIKey`.
+Supported auth types: `Bearer`, `Basic`, `ApiKey`, `OAuth2ClientCredentials`.
 
 ## 📡 Usage Examples
 
@@ -364,8 +438,7 @@ Configure webhook-style exports:
           "Token": "<my_token_here>"
         }
       }
-    ],
-    "DeadletterRetentionDays": 60
+    ]
   }
 }
 ```
@@ -455,7 +528,8 @@ Add correlation tracking and reduce bandwidth usage:
   "CustomHeaders": {
     "X-Correlation-Id": "{guid}",
     "X-Source": "trignis-{database}",
-    "X-Timestamp": "{timestamp}"
+    "X-Timestamp": "{timestamp}",
+    "X-Environment": "{environment}"
   },
   "EnableCompression": true
 }
@@ -466,8 +540,30 @@ Add correlation tracking and reduce bandwidth usage:
 - `{timestamp}`: Current timestamp
 - `{object}`: Tracking object name
 - `{database}`: Database name
+- `{environment}`: Environment name
 
 Compression uses gzip encoding and can significantly reduce payload sizes for large change sets, though the recipient must support gzip decompression (which most modern servers do, but is not guaranteed).
+
+### Large Payload Batching
+
+When `InitialSyncMode: "Full"` returns thousands of records, Trignis automatically splits them into batches:
+
+```json
+{
+  "ChangeTracking": {
+    "GlobalSettings": {
+      "MaxRecordsPerBatch": 1000,
+      "EnablePayloadBatching": true
+    }
+  }
+}
+```
+
+Each batch includes headers for tracking:
+- `X-Batch-Number`: Current batch (1, 2, 3...)
+- `X-Total-Batches`: Total number of batches
+
+Your API should buffer batches and process the complete dataset when all batches are received.
 
 ## ⚡ Risks
 
@@ -497,10 +593,11 @@ We've implemented both logging and a separate health mechanism.
 
 #### Logging
 
-Trignis provides comprehensive logging:
+Trignis provides comprehensive logging with environment prefixes:
 
 * Application logs: `log/trignis-.log` (daily rotation)
 * Configuration status on startup
+* Environment-specific processing: `[prod]`, `[dev]`, `[staging]`
 * Change processing details
 * Error handling with retry logic
 
@@ -509,10 +606,9 @@ Trignis provides comprehensive logging:
 
 #### Monitoring
 
-Trignis includes an optional health check endpoint for monitoring service availability and database connectivity. This is useful for integration with monitoring tools (Prometheus, Nagios, Datadog) and container orchestration platforms (Kubernetes health probes, Docker Swarm) to ensure the change tracking service is operational and can reach all configured environments.
+Trignis includes health check endpoints for monitoring service availability, database connectivity, and state tracking:
 
 ```json
-// Example configuration for health monitoring
 {
   "Health": {
     "Enabled": true,
@@ -523,18 +619,24 @@ Trignis includes an optional health check endpoint for monitoring service availa
 }
 ```
 
-**Configuration Options:**
-- `Enabled`: Enable or disable the health endpoint (default: `false`)
-- `Port`: Port number for the health endpoint (default: `2455`)
-- `Host`: Binding host - use `*` for all interfaces, `localhost` for local only, or a specific IP address (default: `*`)
-- `CacheDurationSeconds`: Duration to cache health check results to reduce database load (default: `10` seconds)
+**Available Endpoints:**
 
-**Endpoint:**
-```
+```bash
+# Service health and database connectivity
 GET http://localhost:2455/health
+
+# Dead letter statistics
+GET http://localhost:2455/health/deadletters
+
+# Message queue connection health
+GET http://localhost:2455/health/connections
+
+# State tracking per environment
+GET http://localhost:2455/health/state
+GET http://localhost:2455/health/state/production
 ```
 
-**Response Example:**
+**Example Response:**
 ```json
 {
   "status": "healthy",
@@ -551,17 +653,27 @@ GET http://localhost:2455/health
 }
 ```
 
-**Status Values:**
-- `healthy`: All database connections are working
-- `degraded`: Some database connections failed (returns HTTP 200 with degraded status)
+The state endpoint shows tracking versions per environment:
 
-**Database Check Values:**
-- `ok (all)`: All configured databases are reachable
-- `degraded (X/Y)`: X out of Y databases are reachable
-- `failed (all)`: No databases are reachable
-- `no databases configured`: No tracking objects configured
-
-The health endpoint uses caching to prevent excessive database queries. Adjust the property `CacheDurationSeconds` based on your monitoring frequency to balance freshness with database load.
+```json
+{
+  "timestamp": "2025-01-15T10:30:00Z",
+  "total_environments": 2,
+  "environments": [
+    {
+      "name": "production",
+      "object_count": 3,
+      "objects": [
+        {
+          "object_name": "Orders",
+          "last_version": 1543,
+          "last_updated": "2025-01-15T10:29:45Z"
+        }
+      ]
+    }
+  ]
+}
+```
 
 ## 🤝 Credits
 
@@ -572,6 +684,9 @@ Built with:
 * [Serilog](https://serilog.net/)
 * [SQLite](https://www.sqlite.org/)
 * [Polly](https://github.com/App-vNext/Polly)
+* [RabbitMQ.Client](https://github.com/rabbitmq/rabbitmq-dotnet-client)
+* [Azure.Messaging.ServiceBus](https://github.com/Azure/azure-sdk-for-net)
+* [AWSSDK.SQS](https://github.com/aws/aws-sdk-net)
 
 ## 🔮 Lore
 

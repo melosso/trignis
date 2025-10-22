@@ -16,7 +16,11 @@ namespace Trignis.MicrosoftSQL.Services
         private const string PublicKeyFileName = "snapshot_blob.bin";
         private readonly string _certsPath;
         private string _currentPublicKeyPem = string.Empty;
-        private const string _currentProbation = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
+        
+        // Fallback key - only used if no environment variable is set
+        private const string _fallbackKey = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
+        
+        private readonly string _encryptionKey;
 
         public EncryptionService(string rootPath)
         {
@@ -32,7 +36,69 @@ namespace Trignis.MicrosoftSQL.Services
                     dirInfo.Attributes |= FileAttributes.Hidden;
                 }
             }
+
+            // Load encryption key from environment variable or .env file
+            _encryptionKey = LoadEncryptionKey();
+            
             InitializeKeyPair();
+        }
+
+        private string LoadEncryptionKey()
+        {
+            // Priority 1: Check Windows environment variable
+            var envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", EnvironmentVariableTarget.Machine);
+            if (!string.IsNullOrWhiteSpace(envKey))
+            {
+                Log.Debug("Using encryption key from Windows system environment variable");
+                return envKey;
+            }
+
+            // Priority 2: Check process environment variable
+            envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", EnvironmentVariableTarget.Process);
+            if (!string.IsNullOrWhiteSpace(envKey))
+            {
+                Log.Debug("Using encryption key from process environment variable");
+                return envKey;
+            }
+
+            // Priority 3: Check .env file (for Docker)
+            var projectRoot = FindProjectRoot(AppContext.BaseDirectory);
+            var envFilePath = Path.Combine(projectRoot, ".env");
+            
+            if (File.Exists(envFilePath))
+            {
+                try
+                {
+                    var envLines = File.ReadAllLines(envFilePath);
+                    foreach (var line in envLines)
+                    {
+                        var trimmed = line.Trim();
+                        if (trimmed.StartsWith("#") || string.IsNullOrWhiteSpace(trimmed))
+                            continue;
+
+                        var parts = trimmed.Split('=', 2);
+                        if (parts.Length == 2 && parts[0].Trim() == "TRIGNIS_ENCRYPTION_KEY")
+                        {
+                            var key = parts[1].Trim().Trim('"', '\'');
+                            if (!string.IsNullOrWhiteSpace(key))
+                            {
+                                Log.Debug("Using encryption key from .env file");
+                                return key;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to read environment file at {Path}", envFilePath);
+                }
+            }
+
+            // Priority 4: Fallback to hardcoded key (with warning)
+            Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +
+                        "For production, set TRIGNIS_ENCRYPTION_KEY environment variable or create .env file.");
+            
+            return _fallbackKey;
         }
 
         private static string FindProjectRoot(string startPath)
@@ -40,7 +106,9 @@ namespace Trignis.MicrosoftSQL.Services
             var current = new DirectoryInfo(startPath);
             while (current != null)
             {
-                if (Directory.Exists(Path.Combine(current.FullName, "environments")))
+                // Look for environments folder or .env file
+                if (Directory.Exists(Path.Combine(current.FullName, "environments")) ||
+                    File.Exists(Path.Combine(current.FullName, ".env")))
                 {
                     return current.FullName;
                 }
@@ -74,7 +142,7 @@ namespace Trignis.MicrosoftSQL.Services
 
                 // Update current public key
                 _currentPublicKeyPem = publicKeyPem;
-                Log.Debug("Generated new keypair.");
+                Log.Information("Generated new RSA keypair for encryption");
             }
             else
             {
@@ -91,12 +159,14 @@ namespace Trignis.MicrosoftSQL.Services
                     // Also save/update public key file
                     File.WriteAllText(publicKeyPath, derivedPublicKeyPem);
 
-                    Log.Debug("Loaded existing private key and derived public key.");
+                    Log.Debug("Loaded existing private key and derived public key");
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("Failed to load private key: {Error}", ex.Message);
-                    throw;
+                    Log.Error(ex, "Failed to load private key. The encryption key may have changed.");
+                    throw new InvalidOperationException(
+                        "Failed to decrypt private key. If you changed TRIGNIS_ENCRYPTION_KEY, " +
+                        "you must delete the .core folder to regenerate keys.", ex);
                 }
             }
         }
@@ -205,10 +275,10 @@ namespace Trignis.MicrosoftSQL.Services
             return builder.ToString();
         }
 
-        private static string EncryptPrivateKey(string pem)
+        private string EncryptPrivateKey(string pem)
         {
             using var aes = Aes.Create();
-            aes.Key = Encoding.UTF8.GetBytes(_currentProbation.PadRight(32).Substring(0, 32));
+            aes.Key = Encoding.UTF8.GetBytes(_encryptionKey.PadRight(32).Substring(0, 32));
             aes.GenerateIV();
             var iv = aes.IV;
             using var ms = new MemoryStream();
@@ -220,14 +290,14 @@ namespace Trignis.MicrosoftSQL.Services
             return Convert.ToBase64String(ms.ToArray());
         }
 
-        private static string DecryptPrivateKey(string encrypted)
+        private string DecryptPrivateKey(string encrypted)
         {
             var bytes = Convert.FromBase64String(encrypted);
             using var ms = new MemoryStream(bytes);
             var iv = new byte[16];
             ms.Read(iv, 0, 16);
             using var aes = Aes.Create();
-            aes.Key = Encoding.UTF8.GetBytes(_currentProbation.PadRight(32).Substring(0, 32));
+            aes.Key = Encoding.UTF8.GetBytes(_encryptionKey.PadRight(32).Substring(0, 32));
             aes.IV = iv;
             using var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read);
             using var sr = new StreamReader(cs);

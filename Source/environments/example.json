@@ -37,6 +37,8 @@
     "PollingIntervalSeconds": 60,
     "RetryCount": 5,
     "RetryDelaySeconds": 10,
-    "DeadletterRetentionDays": 60
+    "DeadletterRetentionDays": 60,
+    "HealthCheckEnabled": true,
+    "HealthCheckIntervalMinutes": 15
   }
 }

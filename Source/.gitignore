@@ -46,6 +46,9 @@ Generated\ Files/
 # Ignore all database files
 *.db
 
+# Ignore template files
+*.template
+
 # MSTest test Results
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*

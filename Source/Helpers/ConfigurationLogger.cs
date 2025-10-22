@@ -14,172 +14,142 @@ public static class ConfigurationLogger
         var version = typeof(ConfigurationLogger).Assembly.GetName().Version?.ToString() ?? "0.0.0";
 
         Log.Information("");
-        Log.Information("████████╗██████╗ ██╗ ██████╗ ███╗   ██╗██╗███████╗");
-        Log.Information("╚══██╔══╝██╔══██╗██║██╔════╝ ████╗  ██║██║██╔════╝");
-        Log.Information("   ██║   ██████╔╝██║██║  ███╗██╔██╗ ██║██║███████╗");
-        Log.Information("   ██║   ██╔══██╗██║██║   ██║██║╚██╗██║██║╚════██║");
-        Log.Information("   ██║   ██║  ██║██║╚██████╔╝██║ ╚████║██║███████║");
-        Log.Information("   ╚═╝   ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚══════╝");
-        Log.Information("");
         Log.Information("Application is booting up...");
         Log.Information($" ├─ Version: {version}");
         Log.Information($" └─ Environment: {Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production"}");
         Log.Information("");
         Log.Information("[Configuration]");
 
-        // Show loaded environments
-        var loadedEnvironments = configuration.GetSection("ChangeTracking:LoadedEnvironments").Get<string[]>() ?? Array.Empty<string>();
-        if (loadedEnvironments.Any())
-        {
-            Log.Information($"├─ Loaded Environment Files: {string.Join(", ", loadedEnvironments)}");
-        }
+        // Global Settings
+        var globalSettings = configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
+        Log.Information("├─ Global Settings:");
+        Log.Information($"│  ├─ Default Polling Interval: {globalSettings.PollingIntervalSeconds}s");
+        Log.Information($"│  ├─ Max Payload Size: {globalSettings.MaxPayloadSizeBytes / 1024 / 1024}MB");
+        Log.Information($"│  ├─ Max Records Per Batch: {globalSettings.MaxRecordsPerBatch}");
+        Log.Information($"│  ├─ Payload Batching: {(globalSettings.EnablePayloadBatching ? "ENABLED" : "DISABLED")}");
+        Log.Information($"│  ├─ Retry Count: {globalSettings.RetryCount}");
+        Log.Information($"│  ├─ Retry Delay: {globalSettings.RetryDelaySeconds}s");
+        Log.Information($"│  ├─ Dead Letter Retention: {globalSettings.DeadletterRetentionDays} days");
+        Log.Information($"│  ├─ Dead Letter Monitor: {(globalSettings.DeadLetterMonitorEnabled ? $"{globalSettings.DeadLetterThreshold} messages / Every {globalSettings.DeadLetterCheckIntervalMinutes}min" : "DISABLED")}");
+        Log.Information($"│  └─ Connection Health Check: {(globalSettings.HealthCheckEnabled ? $"Every {globalSettings.HealthCheckIntervalMinutes}min" : "DISABLED")}");
+        Log.Information("│");
 
-        // Tracking Objects - grouped by environment
-        var trackingObjects = configuration.GetSection("ChangeTracking:TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
-        Log.Information($"├─ Tracking Objects: {trackingObjects.Length}");
+        // Environments
+        var environments = configuration.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
+        Log.Information($"├─ Environments: {environments.Length}");
         
-        var groupedByEnv = trackingObjects.GroupBy(o => string.IsNullOrEmpty(o.EnvironmentFile) ? "Unknown" : o.EnvironmentFile).OrderBy(g => g.Key);
-        
-        var envIndex = 0;
-        var totalEnvs = groupedByEnv.Count();
-        
-        foreach (var envGroup in groupedByEnv)
+        for (int envIndex = 0; envIndex < environments.Length; envIndex++)
         {
-            envIndex++;
-            var isLastEnv = envIndex == totalEnvs;
+            var env = environments[envIndex];
+            var isLastEnv = envIndex == environments.Length - 1;
             var envPrefix = isLastEnv ? "└─" : "├─";
             var envVertical = isLastEnv ? " " : "│";
             
-            Log.Information($"│  {envPrefix} Environment: [{envGroup.Key}] ({envGroup.Count()} objects)");
+            var totalObjects = env.ChangeTracking.TrackingObjects.Length;
+            var totalEndpoints = env.ChangeTracking.ApiEndpoints.Length;
             
-            var objects = envGroup.ToArray();
-            for (int i = 0; i < objects.Length; i++)
+            Log.Information($"│  {envPrefix} Environment: [{env.Name}] ({totalObjects} objects, {totalEndpoints} endpoints)");
+            
+            // Environment-specific settings
+            var pollingInterval = env.ChangeTracking.PollingIntervalSeconds ?? globalSettings.PollingIntervalSeconds;
+            var exportToFile = env.ChangeTracking.ExportToFile ?? globalSettings.ExportToFile;
+            var exportToApi = env.ChangeTracking.ExportToApi ?? globalSettings.ExportToApi;
+            
+            Log.Information($"│  {envVertical}  ├─ Settings:");
+            Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "(custom)" : "(default)")}");
+            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "(custom)" : "(default)")}");
+            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "(custom)" : "(default)")}");
+            
+            // Connection Strings
+            Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
+            var connIndex = 0;
+            foreach (var conn in env.ConnectionStrings)
             {
-                var obj = objects[i];
-                var isLastObj = i == objects.Length - 1;
+                connIndex++;
+                var isLastConn = connIndex == env.ConnectionStrings.Count;
+                var connPrefix = isLastConn ? "└─" : "├─";
+                
+                try
+                {
+                    var builder = new SqlConnectionStringBuilder(conn.Value);
+                    Log.Information($"│  {envVertical}  │  {connPrefix} {conn.Key}: {builder.DataSource}/{builder.InitialCatalog ?? "N/A"}");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error($"│  {envVertical}  │  {connPrefix} {conn.Key}: Invalid connection - {ex.Message}");
+                }
+            }
+            
+            // Tracking Objects
+            Log.Information($"│  {envVertical}  ├─ Tracking Objects: {totalObjects}");
+            for (int i = 0; i < env.ChangeTracking.TrackingObjects.Length; i++)
+            {
+                var obj = env.ChangeTracking.TrackingObjects[i];
+                var isLastObj = i == env.ChangeTracking.TrackingObjects.Length - 1;
                 var objPrefix = isLastObj ? "└─" : "├─";
                 
-                var connString = configuration.GetConnectionString(obj.Database);
-                if (string.IsNullOrEmpty(connString))
+                if (env.ConnectionStrings.ContainsKey(obj.Database))
                 {
-                    Log.Warning($"│  {envVertical}  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
+                    var syncMode = string.Equals(obj.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase) ? "Full" : "Incremental";
+                    Log.Information($"│  {envVertical}  │  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) — DB: {obj.Database}, SP: {obj.StoredProcedureName}, Mode: {syncMode}");
                 }
                 else
                 {
-                    try
-                    {
-                        var builder = new SqlConnectionStringBuilder(connString);
-                        Log.Information($"│  {envVertical}  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) – DB: {builder.InitialCatalog ?? "N/A"}, SP: {obj.StoredProcedureName}");
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error($"│  {envVertical}  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Invalid connection - {ex.Message}");
-                    }
+                    Log.Warning($"│  {envVertical}  │  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
                 }
             }
-        }
-
-        // Change Tracking Settings
-        var pollingInterval = configuration.GetValue<int>("ChangeTracking:PollingIntervalSeconds", 30);
-        Log.Information($"│");
-        Log.Information($"├─ Change Tracking:");
-        Log.Information($"│  ├─ Polling Interval: {pollingInterval} seconds");
-
-        // Export Configuration
-        var exportToFile = configuration.GetValue<bool>("ChangeTracking:ExportToFile", false);
-        var exportToApi = configuration.GetValue<bool>("ChangeTracking:ExportToApi", false);
-
-        Log.Information($"│  └─ Export Destinations:");
-        
-        if (exportToFile)
-        {
-            var filePrefix = exportToApi ? "├─" : "└─";
-            var filePath = configuration.GetValue<string>("ChangeTracking:FilePath", "exports/{object}/{database}/changes-{timestamp}.json");
-            Log.Information($"│     {filePrefix} ✉ File Export: ENABLED");
             
-            if (exportToApi)
+            // API Endpoints
+            Log.Information($"│  {envVertical}  └─ API Endpoints: {totalEndpoints}");
+            for (int i = 0; i < env.ChangeTracking.ApiEndpoints.Length; i++)
             {
-                Log.Information($"│     │  ├─ Path: {filePath}");
-                var maxSizeMB = configuration.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
-                Log.Information($"│     │  └─ Max Size: {maxSizeMB} MB");
-            }
-            else
-            {
-                Log.Information($"│        ├─ Path: {filePath}");
-                var maxSizeMB = configuration.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
-                Log.Information($"│        └─ Max Size: {maxSizeMB} MB");
-            }
-        }
-        else
-        {
-            var filePrefix = exportToApi ? "├─" : "└─";
-            Log.Information($"│     {filePrefix} ✗ File Export: DISABLED");
-        }
-
-        if (exportToApi)
-        {
-            var apiEndpoints = configuration.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>();
-            if (apiEndpoints != null && apiEndpoints.Length > 0)
-            {
-                Log.Information($"│     └─ ✉ API Export: ENABLED");
-                for (int i = 0; i < apiEndpoints.Length; i++)
+                var endpoint = env.ChangeTracking.ApiEndpoints[i];
+                var isLastEndpoint = i == env.ChangeTracking.ApiEndpoints.Length - 1;
+                var epPrefix = isLastEndpoint ? "└─" : "├─";
+                var epVertical = isLastEndpoint ? " " : "│";
+                
+                Log.Information($"│  {envVertical}     {epPrefix} Endpoint '{endpoint.Key ?? $"#{i+1}"}'");
+                
+                // Message Queue endpoint
+                if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
                 {
-                    var endpoint = apiEndpoints[i];
-                    var isLastEndpoint = i == apiEndpoints.Length - 1;
-                    var prefix = isLastEndpoint ? "└─" : "├─";
-                    var verticalBar = isLastEndpoint ? " " : "│";
+                    Log.Information($"│  {envVertical}     {epVertical}  ├─ Type: {endpoint.MessageQueueType}");
                     
-                    Log.Information($"│        {prefix} Endpoint '{endpoint.Key ?? $"#{i+1}"}'");
-                    
-                    // Message Queue endpoint
-                    if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
+                    if (endpoint.MessageQueue != null)
                     {
-                        Log.Information($"│        {verticalBar}  ├─ Type: {endpoint.MessageQueueType}");
-                        
-                        if (endpoint.MessageQueue != null)
+                        switch (endpoint.MessageQueueType.ToLower())
                         {
-                            switch (endpoint.MessageQueueType.ToLower())
-                            {
-                                case "rabbitmq":
-                                    var mqTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName) 
-                                        ? $"Queue: {endpoint.MessageQueue.QueueName}"
-                                        : $"Exchange: {endpoint.MessageQueue.Exchange}" + 
-                                          (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (Key: {endpoint.MessageQueue.RoutingKey})" : "");
-                                    Log.Information($"│        {verticalBar}  └─ {mqTarget}");
-                                    break;
-                                case "azureservicebus":
-                                    var asbTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
-                                        ? $"Queue: {endpoint.MessageQueue.QueueName}"
-                                        : $"Topic: {endpoint.MessageQueue.TopicName}";
-                                    Log.Information($"│        {verticalBar}  └─ {asbTarget}");
-                                    break;
-                                case "awssqs":
-                                    Log.Information($"│        {verticalBar}  └─ Queue: {endpoint.MessageQueue.QueueUrl}");
-                                    break;
-                            }
+                            case "rabbitmq":
+                                var mqTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName) 
+                                    ? $"Queue: {endpoint.MessageQueue.QueueName}"
+                                    : $"Exchange: {endpoint.MessageQueue.Exchange}" + 
+                                      (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (Key: {endpoint.MessageQueue.RoutingKey})" : "");
+                                Log.Information($"│  {envVertical}     {epVertical}  └─ {mqTarget}");
+                                break;
+                            case "azureservicebus":
+                                var asbTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
+                                    ? $"Queue: {endpoint.MessageQueue.QueueName}"
+                                    : $"Topic: {endpoint.MessageQueue.TopicName}";
+                                Log.Information($"│  {envVertical}     {epVertical}  └─ {asbTarget}");
+                                break;
+                            case "awssqs":
+                                Log.Information($"│  {envVertical}     {epVertical}  └─ Queue: {endpoint.MessageQueue.QueueUrl}");
+                                break;
                         }
-                    }
-                    // HTTP endpoint
-                    else
-                    {
-                        Log.Information($"│        {verticalBar}  ├─ URL: {endpoint.Url}");
-                        var authType = endpoint.Auth?.Type ?? "None";
-                        if (endpoint.EnableCompression)
-                        {
-                            authType += " (Compressed)";
-                        }
-                        Log.Information($"│        {verticalBar}  └─ Auth: {authType}");
                     }
                 }
+                // HTTP endpoint
+                else
+                {
+                    Log.Information($"│  {envVertical}     {epVertical}  ├─ URL: {endpoint.Url}");
+                    var authType = endpoint.Auth?.Type ?? "None";
+                    if (endpoint.EnableCompression)
+                    {
+                        authType += " (Compressed)";
+                    }
+                    Log.Information($"│  {envVertical}     {epVertical}  └─ Auth: {authType}");
+                }
             }
-            else
-            {
-                Log.Information($"│     └─ ✉ API Export: DISABLED (no endpoints configured)");
-            }
-        }
-        else
-        {
-            Log.Information($"│     └─ ✉ API Export: DISABLED");
         }
 
         // Health Endpoint
@@ -187,21 +157,20 @@ public static class ConfigurationLogger
         var healthPort = configuration.GetValue<int>("Health:Port", 2455);
         var healthHost = configuration.GetValue<string>("Health:Host", "*");
         
+        Log.Information("│");
         if (healthEnabled)
         {
-            Log.Information($"│");
-            Log.Information($"├─ Health Endpoint:");
-            Log.Information($"│  ├─ Status: ENABLED");
-            Log.Information($"│  └─ URL: http://{healthHost}:{healthPort}/health");
+            Log.Information($"└─ Health Endpoint:");
+            Log.Information($"   ├─ Status: ENABLED");
+            Log.Information($"   ├─ URL: http://{healthHost}:{healthPort}/health");
+            Log.Information($"   ├─ Dead Letters: http://{healthHost}:{healthPort}/health/deadletters");
+            Log.Information($"   └─ Connections: http://{healthHost}:{healthPort}/health/connections");
         }
-
-        // Failover Settings
-        var retryCount = configuration.GetValue<int>("ChangeTracking:RetryCount", 3);
-        var retryDelay = configuration.GetValue<int>("ChangeTracking:RetryDelaySeconds", 5);
-        Log.Information($"│");
-        Log.Information($"└─ Failover Settings:");
-        Log.Information($"   ├─ Retry Count: {retryCount}");
-        Log.Information($"   └─ Retry Delay: {retryDelay} seconds");
+        else
+        {
+            Log.Information($"└─ Health Endpoint: DISABLED");
+        }
+        
         Log.Information("");
     }
 }

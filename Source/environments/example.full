@@ -20,10 +20,6 @@
         "InitialSyncMode": "Incremental"
       }
     ],
-    "ExportToFile": true,
-    "FilePath": "exports/{object}/{database}/changes-{timestamp}.json",
-    "FilePathSizeLimit": 500,
-    "ExportToApi": true,
     "ApiEndpoints": [
       {
         "Key": "production_webhook1",
@@ -41,12 +37,15 @@
           "TokenEndpoint": "https://auth.example.com/oauth/token",
           "ClientId": "your-client-id",
           "ClientSecret": "your-client-secret",
-          "Scope": "api.write"
+          "Scope": "api.write",
+          "TokenExpirationSeconds": 3600
         },
         "CustomHeaders": {
           "X-Correlation-Id": "{guid}",
           "X-Source": "trignis-{database}",
-          "X-Timestamp": "{timestamp}"
+          "X-Timestamp": "{timestamp}",
+          "X-Environment": "{environment}",
+          "X-Object": "{object}"
         },
         "EnableCompression": true
       },
@@ -68,6 +67,7 @@
         "MessageQueue": {
           "HostName": "rabbitmq.example.com",
           "Port": 5672,
+          "VirtualHost": "/",
           "Username": "trignis",
           "Password": "PWENC:...",
           "Exchange": "data-changes",
@@ -80,16 +80,17 @@
         "MessageQueue": {
           "HostName": "rabbitmq.example.com",
           "Port": 5672,
+          "VirtualHost": "/",
           "Username": "trignis",
           "Password": "PWENC:...",
           "Exchange": "broadcasts"
         }
       },
       {
-        "Key": "azure_servicebus",
+        "Key": "azure_servicebus_queue",
         "MessageQueueType": "AzureServiceBus",
         "MessageQueue": {
-          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=...",
+          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...",
           "QueueName": "change-tracking"
         }
       },
@@ -102,7 +103,7 @@
         }
       },
       {
-        "Key": "aws_sqs",
+        "Key": "aws_sqs_with_credentials",
         "MessageQueueType": "AWSSQS",
         "MessageQueue": {
           "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/change-tracking",
@@ -128,14 +129,38 @@
         },
         "CustomHeaders": {
           "X-Request-Id": "{guid}",
-          "X-Environment": "production"
+          "X-Environment": "{environment}",
+          "X-Batch-Info": "Batch {batch} of {totalbatches}"
         },
         "EnableCompression": true
+      },
+      {
+        "Key": "basic_auth_api",
+        "Url": "https://api.example.com/sync",
+        "Auth": {
+          "Type": "Basic",
+          "Username": "api_user",
+          "Password": "PWENC:..."
+        }
+      },
+      {
+        "Key": "apikey_auth",
+        "Url": "https://api.example.com/data",
+        "Auth": {
+          "Type": "ApiKey",
+          "ApiKey": "PWENC:...",
+          "HeaderName": "X-API-Key"
+        },
+        "CustomHeaders": {
+          "X-Client": "Trignis"
+        }
       }
     ],
     "PollingIntervalSeconds": 60,
+    "ExportToFile": true,
+    "FilePath": "exports/{environment}/{object}/{database}/changes-{timestamp}.json",
+    "ExportToApi": true,
     "RetryCount": 5,
-    "RetryDelaySeconds": 10,
-    "DeadletterRetentionDays": 60
+    "RetryDelaySeconds": 10
   }
 }

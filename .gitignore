@@ -9,6 +9,7 @@
 
 # Ignore all database files
 *.db
+*.bu
 *.example
 
 # User-specific files
