@@ -56,9 +56,9 @@ public static class ConfigurationLogger
             var exportToApi = env.ChangeTracking.ExportToApi ?? globalSettings.ExportToApi;
             
             Log.Information($"│  {envVertical}  ├─ Settings:");
-            Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "(custom)" : "(default)")}");
-            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "(custom)" : "(default)")}");
-            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "(custom)" : "(default)")}");
+            Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
             
             // Connection Strings
             Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
@@ -141,6 +141,7 @@ public static class ConfigurationLogger
                 // HTTP endpoint
                 else
                 {
+                    Log.Information($"│  {envVertical}     {epVertical}  ├─ Type: HTTP");
                     Log.Information($"│  {envVertical}     {epVertical}  ├─ URL: {endpoint.Url}");
                     var authType = endpoint.Auth?.Type ?? "None";
                     if (endpoint.EnableCompression)

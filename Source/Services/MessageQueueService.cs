@@ -179,8 +179,8 @@ public class MessageQueueService : IDisposable
 
             connection = await factory.CreateConnectionAsync(cancellationToken);
             _rabbitConnections[connectionKey] = connection;
-            _logger.LogInformation("Created new RabbitMQ connection to {ConnectionKey}", connectionKey);
-        }
+            _logger.LogDebug("Created RabbitMQ connection to {Host}:{Port}{VHost}", 
+                            config.HostName, config.Port, config.VirtualHost ?? "/");        }
 
         IChannel? channel = null;
         try
@@ -221,8 +221,8 @@ public class MessageQueueService : IDisposable
                     body: body,
                     cancellationToken: cancellationToken);
 
-                _logger.LogInformation(" └─ Exported to RabbitMQ exchange '{Exchange}' (CorrelationId: {CorrelationId})",
-                    config.Exchange, correlationId);
+                _logger.LogDebug("Published to RabbitMQ exchange '{Exchange}' with key '{Key}' (CorrelationId: {CorrelationId})", 
+                    config.Exchange, config.RoutingKey ?? "", correlationId);
             }
             else if (!string.IsNullOrEmpty(config.QueueName))
             {
@@ -242,7 +242,7 @@ public class MessageQueueService : IDisposable
                     body: body,
                     cancellationToken: cancellationToken);
 
-                _logger.LogInformation(" └─ Exported to RabbitMQ queue '{Queue}' (CorrelationId: {CorrelationId})",
+                _logger.LogDebug("Published to RabbitMQ queue '{Queue}' (CorrelationId: {CorrelationId})", 
                     config.QueueName, correlationId);
             }
             else
@@ -330,8 +330,8 @@ public class MessageQueueService : IDisposable
 
             await sender.SendMessageAsync(busMessage, cancellationToken);
 
-            _logger.LogInformation(" └─ Exported to Azure Service Bus {Type} '{Name}' (CorrelationId: {CorrelationId})",
-                config.QueueName != null ? "queue" : "topic", queueOrTopic, correlationId);
+            _logger.LogDebug("Sent to Azure Service Bus {Type} '{Name}' (CorrelationId: {CorrelationId})",
+                queueOrTopic == "queue" ? "queue" : "topic", queueOrTopic, correlationId);
         }
         catch (ServiceBusException ex) when (ex.Reason == ServiceBusFailureReason.MessageSizeExceeded)
         {
@@ -456,7 +456,7 @@ public class MessageQueueService : IDisposable
                 throw new InvalidOperationException($"AWS SQS returned status code: {response.HttpStatusCode}");
             }
 
-            _logger.LogInformation(" └─ Exported to AWS SQS (MessageId: {MessageId}, CorrelationId: {CorrelationId})",
+            _logger.LogDebug("Sent to AWS SQS (MessageId: {MessageId}, CorrelationId: {CorrelationId})",
                 response.MessageId, correlationId);
         }
         catch (AmazonSQSException ex) when (ex.ErrorCode == "InvalidMessageContents")

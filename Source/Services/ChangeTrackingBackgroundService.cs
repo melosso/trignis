@@ -189,7 +189,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 dropBackup.Transaction = tx;
                 dropBackup.CommandText = "DROP TABLE LastVersions_Backup";
                 await dropBackup.ExecuteNonQueryAsync();
-                _logger.LogInformation("Backup table 'LastVersions_Backup' removed after successful migration.");
+                _logger.LogDebug("Backup table 'LastVersions_Backup' removed after successful migration.");
             }
 
             await tx.CommitAsync();
@@ -526,31 +526,110 @@ public class ChangeTrackingBackgroundService : BackgroundService
         var exportToApi = environment.ChangeTracking.ExportToApi ?? _globalSettings.ExportToApi;
         var retryPolicy = GetRetryPolicy(environment, stoppingToken);
 
+        // Calculate total number of exports
+        var apiEndpoints = exportToApi ? (environment.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()) : Array.Empty<ApiEndpoint>();
+        var totalExports = (exportToFile ? 1 : 0) + apiEndpoints.Length;
+        var currentExportIndex = 0;
+
+        // File export
         if (exportToFile)
         {
+            currentExportIndex++;
+            var isLast = currentExportIndex == totalExports;
+            var prefix = isLast ? "└─" : "├─";
+
             stoppingToken.ThrowIfCancellationRequested();
             try
             {
+                var filePathTemplate = environment.ChangeTracking.FilePath ?? _globalSettings.FilePath;
+                var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+                var filePath = filePathTemplate
+                    .Replace("{timestamp}", timestamp)
+                    .Replace("{object}", trackingObject.Name)
+                    .Replace("{database}", trackingObject.Database)
+                    .Replace("{environment}", environment.Name);
+
                 await retryPolicy.ExecuteAsync(async () => await ExportToFileAsync(environment, trackingObject, data));
+                _logger.LogInformation($"[{environment.Name}]  {prefix} [FILE] Exported to: {filePath}");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"[{environment.Name}] File export failed for {trackingObject.Name}, saving to dead letter");
+                _logger.LogError(ex, $"[{environment.Name}]  {prefix} [FILE] Export FAILED: {ex.Message}");
                 await _deadLetterService.SaveDeadLetterAsync($"{environment.Name}_{trackingObject.Name}", trackingObject.Database, data, ex);
             }
         }
 
-        if (exportToApi)
+        // API/Message Queue exports
+        if (exportToApi && apiEndpoints.Length > 0)
         {
-            stoppingToken.ThrowIfCancellationRequested();
-            try
+            foreach (var endpoint in apiEndpoints)
             {
-                await retryPolicy.ExecuteAsync(async () => await ExportToApiAsync(environment, trackingObject, data, stoppingToken));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"[{environment.Name}] API export failed for {trackingObject.Name}, saving to dead letter");
-                await _deadLetterService.SaveDeadLetterAsync($"{environment.Name}_{trackingObject.Name}", trackingObject.Database, data, ex);
+                currentExportIndex++;
+                var isLast = currentExportIndex == totalExports;
+                var prefix = isLast ? "└─" : "├─";
+
+                stoppingToken.ThrowIfCancellationRequested();
+
+                try
+                {
+                    await retryPolicy.ExecuteAsync(async () =>
+                    {
+                        // Handle Message Queue endpoints
+                        if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
+                        {
+                            await _messageQueueService.SendToQueueAsync(endpoint, data, stoppingToken);
+                        }
+                        else
+                        {
+                            // Handle HTTP endpoints with batching if needed
+                            var recordCount = data.GetArrayLength();
+                            var maxRecordsPerBatch = _globalSettings.MaxRecordsPerBatch;
+                            var enableBatching = _globalSettings.EnablePayloadBatching;
+
+                            if (enableBatching && recordCount > maxRecordsPerBatch)
+                            {
+                                var batches = data.EnumerateArray()
+                                    .Select((record, index) => new { record, index })
+                                    .GroupBy(x => x.index / maxRecordsPerBatch)
+                                    .Select(g => g.Select(x => x.record).ToArray())
+                                    .ToList();
+
+                                _logger.LogDebug($"[{environment.Name}] Batching {recordCount} records into {batches.Count} batches");
+
+                                for (int i = 0; i < batches.Count; i++)
+                                {
+                                    var batch = batches[i];
+                                    var batchJson = JsonSerializer.Serialize(batch);
+                                    var batchElement = JsonDocument.Parse(batchJson).RootElement;
+
+                                    await SendHttpRequestAsync(endpoint, trackingObject, environment, batchElement, i + 1, batches.Count, stoppingToken);
+                                }
+                            }
+                            else
+                            {
+                                await SendHttpRequestAsync(endpoint, trackingObject, environment, data, null, null, stoppingToken);
+                            }
+                        }
+                    });
+
+                    // Log success based on endpoint type
+                    if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
+                    {
+                        var target = GetMessageQueueTarget(endpoint);
+                        _logger.LogInformation($"[{environment.Name}]  {prefix} [MQ] Exported to {endpoint.MessageQueueType} {target}");
+                    }
+                    else
+                    {
+                        var endpointName = endpoint.Key ?? "unnamed";
+                        _logger.LogInformation($"[{environment.Name}]  {prefix} [HTTP] Exported to endpoint '{endpointName}': {endpoint.Url}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    var exportType = !string.IsNullOrEmpty(endpoint.MessageQueueType) ? "MQ" : "HTTP";
+                    _logger.LogError(ex, $"[{environment.Name}]  {prefix} [{exportType}] Export FAILED: {ex.Message}");
+                    await _deadLetterService.SaveDeadLetterAsync($"{environment.Name}_{trackingObject.Name}", trackingObject.Database, data, ex);
+                }
             }
         }
     }
@@ -573,11 +652,152 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
         await File.WriteAllTextAsync(filePath, json);
-        _logger.LogInformation($"[{environment.Name}]  └─ Exported changes to file: {filePath}");
+        
+        // Don't log here - caller logs with proper context
 
         CleanupOldFiles("exports", _maxExportDirectorySizeBytes);
     }
 
+    private async Task SendHttpRequestAsync(
+        ApiEndpoint endpoint,
+        TrackingObject trackingObject,
+        EnvironmentConfig environment,
+        JsonElement data,
+        int? batchNumber,
+        int? totalBatches,
+        CancellationToken stoppingToken)
+    {
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        var apiUrl = endpoint.Url?
+            .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
+            .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
+            .Replace("{database}", Uri.EscapeDataString(trackingObject.Database))
+            .Replace("{environment}", Uri.EscapeDataString(environment.Name))
+            .Replace("{key}", Uri.EscapeDataString(endpoint.Key ?? ""));
+
+        if (string.IsNullOrEmpty(apiUrl))
+            throw new InvalidOperationException("API URL is required for HTTP endpoints");
+
+        using var client = _httpClientFactory.CreateClient();
+        client.Timeout = TimeSpan.FromSeconds(30);
+
+        // Add authentication
+        if (endpoint.Auth != null)
+        {
+            switch (endpoint.Auth.Type?.ToLower())
+            {
+                case "bearer":
+                    if (!string.IsNullOrEmpty(endpoint.Auth.Token))
+                    {
+                        client.DefaultRequestHeaders.Authorization =
+                            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", endpoint.Auth.Token);
+                    }
+                    break;
+                case "basic":
+                    if (!string.IsNullOrEmpty(endpoint.Auth.Username) && !string.IsNullOrEmpty(endpoint.Auth.Password))
+                    {
+                        var credentials = Convert.ToBase64String(
+                            Encoding.UTF8.GetBytes($"{endpoint.Auth.Username}:{endpoint.Auth.Password}"));
+                        client.DefaultRequestHeaders.Authorization =
+                            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+                    }
+                    break;
+                case "apikey":
+                    var apiKey = endpoint.Auth.ApiKey;
+                    var headerName = endpoint.Auth.HeaderName ?? "X-API-Key";
+                    if (!string.IsNullOrEmpty(apiKey))
+                    {
+                        client.DefaultRequestHeaders.Add(headerName, apiKey);
+                    }
+                    break;
+                case "oauth2clientcredentials":
+                    var cacheKey = $"{endpoint.Key ?? "default"}_{endpoint.Auth.ClientId}";
+                    var token = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, cacheKey);
+                    if (!string.IsNullOrEmpty(token))
+                    {
+                        client.DefaultRequestHeaders.Authorization =
+                            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+                    }
+                    break;
+            }
+        }
+
+        // Add custom headers
+        if (endpoint.CustomHeaders != null)
+        {
+            foreach (var header in endpoint.CustomHeaders)
+            {
+                var headerValue = header.Value
+                    .Replace("{timestamp}", timestamp)
+                    .Replace("{object}", trackingObject.Name)
+                    .Replace("{database}", trackingObject.Database)
+                    .Replace("{environment}", environment.Name)
+                    .Replace("{guid}", Guid.NewGuid().ToString());
+
+                if (batchNumber.HasValue && totalBatches.HasValue)
+                {
+                    headerValue = headerValue
+                        .Replace("{batch}", batchNumber.Value.ToString())
+                        .Replace("{totalbatches}", totalBatches.Value.ToString());
+                }
+
+                client.DefaultRequestHeaders.Add(header.Key, headerValue);
+            }
+        }
+
+        // Add batch info to headers if batching
+        if (batchNumber.HasValue && totalBatches.HasValue)
+        {
+            client.DefaultRequestHeaders.Add("X-Batch-Number", batchNumber.Value.ToString());
+            client.DefaultRequestHeaders.Add("X-Total-Batches", totalBatches.Value.ToString());
+        }
+
+        var jsonContent = JsonSerializer.Serialize(data);
+        HttpContent content;
+
+        // Apply compression if enabled
+        if (endpoint.EnableCompression)
+        {
+            var compressedBytes = CompressString(jsonContent);
+            content = new ByteArrayContent(compressedBytes);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            content.Headers.ContentEncoding.Add("gzip");
+            _logger.LogDebug($"[{environment.Name}] Compressed payload from {jsonContent.Length} to {compressedBytes.Length} bytes");
+        }
+        else
+        {
+            content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+        }
+
+        var response = await client.PostAsync(apiUrl, content, stoppingToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"API export to '{endpoint.Key ?? apiUrl}' failed with status {response.StatusCode}");
+        }
+
+        // Don't log here - caller logs with proper context
+    }
+
+    private string GetMessageQueueTarget(ApiEndpoint endpoint)
+    {
+        if (endpoint.MessageQueue == null)
+            return "unknown";
+
+        return endpoint.MessageQueueType?.ToLower() switch
+        {
+            "rabbitmq" => !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
+                ? $"queue '{endpoint.MessageQueue.QueueName}'"
+                : $"exchange '{endpoint.MessageQueue.Exchange}'" +
+                  (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (key: {endpoint.MessageQueue.RoutingKey})" : ""),
+            "azureservicebus" => !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
+                ? $"queue '{endpoint.MessageQueue.QueueName}'"
+                : $"topic '{endpoint.MessageQueue.TopicName}'",
+            "awssqs" => $"queue '{endpoint.MessageQueue.QueueUrl}'",
+            _ => "unknown"
+        };
+    }
+    
     private void CleanupOldFiles(string basePath, long maxSizeBytes)
     {
         if (!Directory.Exists(basePath))
@@ -608,187 +828,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
             }
         }
     }
-
-    private async Task ExportToApiAsync(EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data, CancellationToken stoppingToken)
-    {
-        var apiEndpoints = environment.ChangeTracking.ApiEndpoints;
-        if (apiEndpoints == null || apiEndpoints.Length == 0)
-        {
-            _logger.LogDebug($"[{environment.Name}] No API endpoints configured.");
-            return;
-        }
-
-        var recordCount = data.GetArrayLength();
-        var maxRecordsPerBatch = _globalSettings.MaxRecordsPerBatch;
-        var enableBatching = _globalSettings.EnablePayloadBatching;
-
-        // Check if we need to batch the payload
-        if (enableBatching && recordCount > maxRecordsPerBatch)
-        {
-            _logger.LogInformation($"[{environment.Name}] Large payload detected ({recordCount} records). Batching into chunks of {maxRecordsPerBatch}...");
-            
-            var batches = data.EnumerateArray()
-                .Select((record, index) => new { record, index })
-                .GroupBy(x => x.index / maxRecordsPerBatch)
-                .Select(g => g.Select(x => x.record).ToArray())
-                .ToList();
-
-            _logger.LogInformation($"[{environment.Name}] Split into {batches.Count} batches");
-
-            for (int i = 0; i < batches.Count; i++)
-            {
-                stoppingToken.ThrowIfCancellationRequested();
-                
-                var batch = batches[i];
-                var batchJson = JsonSerializer.Serialize(batch);
-                var batchElement = JsonDocument.Parse(batchJson).RootElement;
-                
-                _logger.LogDebug($"[{environment.Name}] Sending batch {i + 1}/{batches.Count} ({batch.Length} records)");
-                
-                await SendToEndpointsAsync(environment, trackingObject, batchElement, apiEndpoints, i + 1, batches.Count);
-            }
-        }
-        else
-        {
-            await SendToEndpointsAsync(environment, trackingObject, data, apiEndpoints, null, null);
-        }
-    }
-
-    private async Task SendToEndpointsAsync(EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data, ApiEndpoint[] endpoints, int? batchNumber, int? totalBatches)
-    {
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-
-        foreach (var endpoint in endpoints)
-        {
-            try
-            {
-                // Handle Message Queue endpoints
-                if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
-                {
-                    await _messageQueueService.SendToQueueAsync(endpoint, data);
-                    continue;
-                }
-
-                // Handle HTTP endpoints
-                if (string.IsNullOrEmpty(endpoint.Url))
-                    continue;
-
-                var apiUrl = endpoint.Url
-                    .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
-                    .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
-                    .Replace("{database}", Uri.EscapeDataString(trackingObject.Database))
-                    .Replace("{environment}", Uri.EscapeDataString(environment.Name))
-                    .Replace("{key}", Uri.EscapeDataString(endpoint.Key ?? ""));
-
-                var client = _httpClientFactory.CreateClient();
-                client.Timeout = TimeSpan.FromMinutes(5); // Longer timeout for large payloads
-                
-                // Add authentication header
-                if (endpoint.Auth != null && !string.IsNullOrEmpty(endpoint.Auth.Type))
-                {
-                    var authType = endpoint.Auth.Type.ToLower();
-                    switch (authType)
-                    {
-                        case "bearer":
-                            var token = endpoint.Auth.Token;
-                            if (!string.IsNullOrEmpty(token))
-                            {
-                                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                            }
-                            break;
-                            
-                        case "oauth2clientcredentials":
-                            var cacheKey = $"{endpoint.Key}_{endpoint.Auth.ClientId}";
-                            var accessToken = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, cacheKey);
-                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-                            break;
-                            
-                        case "basic":
-                            var username = endpoint.Auth.Username;
-                            var password = endpoint.Auth.Password;
-                            if (!string.IsNullOrEmpty(username) && !string.IsNullOrEmpty(password))
-                            {
-                                var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
-                                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-                            }
-                            break;
-                            
-                        case "apikey":
-                            var apiKey = endpoint.Auth.ApiKey;
-                            var headerName = endpoint.Auth.HeaderName ?? "X-API-Key";
-                            if (!string.IsNullOrEmpty(apiKey))
-                            {
-                                client.DefaultRequestHeaders.Add(headerName, apiKey);
-                            }
-                            break;
-                    }
-                }
-
-                // Add custom headers
-                if (endpoint.CustomHeaders != null)
-                {
-                    foreach (var header in endpoint.CustomHeaders)
-                    {
-                        var headerValue = header.Value
-                            .Replace("{timestamp}", timestamp)
-                            .Replace("{object}", trackingObject.Name)
-                            .Replace("{database}", trackingObject.Database)
-                            .Replace("{environment}", environment.Name)
-                            .Replace("{guid}", Guid.NewGuid().ToString());
-                            
-                        if (batchNumber.HasValue && totalBatches.HasValue)
-                        {
-                            headerValue = headerValue
-                                .Replace("{batch}", batchNumber.Value.ToString())
-                                .Replace("{totalbatches}", totalBatches.Value.ToString());
-                        }
-                            
-                        client.DefaultRequestHeaders.Add(header.Key, headerValue);
-                    }
-                }
-
-                // Add batch info to headers if batching
-                if (batchNumber.HasValue && totalBatches.HasValue)
-                {
-                    client.DefaultRequestHeaders.Add("X-Batch-Number", batchNumber.Value.ToString());
-                    client.DefaultRequestHeaders.Add("X-Total-Batches", totalBatches.Value.ToString());
-                }
-
-                var jsonContent = JsonSerializer.Serialize(data);
-                HttpContent content;
-
-                // Apply compression if enabled
-                if (endpoint.EnableCompression)
-                {
-                    var compressedBytes = CompressString(jsonContent);
-                    content = new ByteArrayContent(compressedBytes);
-                    content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-                    content.Headers.ContentEncoding.Add("gzip");
-                    _logger.LogDebug($"[{environment.Name}] Compressed payload from {jsonContent.Length} to {compressedBytes.Length} bytes");
-                }
-                else
-                {
-                    content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-                }
-
-                var response = await client.PostAsync(apiUrl, content);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new HttpRequestException($"API export to '{endpoint.Key ?? apiUrl}' failed with status {response.StatusCode}");
-                }
-
-                var batchInfo = batchNumber.HasValue ? $" (Batch {batchNumber}/{totalBatches})" : "";
-                _logger.LogInformation($"[{environment.Name}]  └─ Exported changes to API endpoint '{endpoint.Key ?? "unnamed"}'{batchInfo}: {apiUrl}");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"[{environment.Name}] Export failed for endpoint '{endpoint.Key ?? "unnamed"}'");
-                throw;
-            }
-        }
-    }
-
     private byte[] CompressString(string text)
     {
         var bytes = Encoding.UTF8.GetBytes(text);
