@@ -36,14 +36,27 @@ Before deploying **Trignis**, ensure your environment meets the following requir
 - **Windows Server** (for hosting the background service)
 - **Database and filesystem access** for configuration and logging
 
-
 ## 🚀 Getting Started
 
 Follow these steps to get Trignis running in your environment.
 
 ### 1. Download & Extract
 
-Download the [latest release](https://github.com/melosso/trignis/releases) and extract to your deployment folder.
+Choose your deployment environment before continuing:
+
+#### Deployment on Windows
+
+Download the [latest release](https://github.com/melosso/trignis/releases) and extract to your deployment folder. 
+
+#### Deployment on Docker
+
+Before running with Docker Compose, you must configure the `environment/` and `appsettings.json` files before starting the container. You can do this in one-click, by running the following command:
+
+```bash
+sh -c "$(curl -fsSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/docker-setup.sh)"
+```
+
+Prefer the manual method? Use the [docker-compose.yml](docker-compose.yml) example file we have prepared.
 
 ### 2. Configure Environments
 
