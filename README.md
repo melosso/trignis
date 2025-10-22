@@ -44,11 +44,11 @@ Follow these steps to get Trignis running in your environment.
 
 Choose your deployment environment before continuing:
 
-#### Deployment on Windows
+#### Windows (preferred)
 
 Download the [latest release](https://github.com/melosso/trignis/releases) and extract to your deployment folder. 
 
-#### Deployment on Docker
+#### Docker Compose
 
 Before running with Docker Compose, you must configure the `environment/` and `appsettings.json` files before starting the container. You can do this in one-click, by running the following command:
 

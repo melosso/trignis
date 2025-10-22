@@ -77,6 +77,29 @@ public class ChangeTrackingBackgroundService : BackgroundService
         }
     }
 
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Initializing databases...");
+        
+        try
+        {
+            // Initialize state database
+            await InitializeStateDbAsync();
+            
+            // Initialize dead letter database
+            await _deadLetterService.InitializeAsync();
+            
+            _logger.LogDebug("Databases initialized successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex, "Failed to initialize databases during startup");
+            throw;
+        }
+        
+        await base.StartAsync(cancellationToken);
+    }
+
     private async Task InitializeStateDbAsync()
     {
         using var conn = new SqliteConnection(_stateConnectionString);
@@ -179,7 +202,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
             throw;
         }
     }
-
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

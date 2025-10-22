@@ -270,7 +270,7 @@ try
             return Results.Json(status);
         });
 
-        // NEW: State database endpoint showing tracking versions per environment
+        // State database endpoint showing tracking versions per environment
         app.MapGet("/health/state", async () =>
         {
             try
@@ -341,7 +341,7 @@ try
             }
         });
 
-        // NEW: Endpoint to query specific environment state
+        // Endpoint to query specific environment state
         app.MapGet("/health/state/{environmentName}", async (string environmentName) =>
         {
             try
