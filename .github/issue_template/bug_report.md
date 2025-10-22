@@ -38,6 +38,11 @@ Describe the expected behavior
 Insert your config here!
 ```
 
+**Application config:**
+```json
+Insert your appsettings.json here
+```
+
 ## Error Details
 
 **Error message:**
