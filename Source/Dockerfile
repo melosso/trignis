@@ -31,7 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Create directories used by the application
-RUN mkdir -p /app/environments /app/log /app/exports /app/tokens
+RUN mkdir -p /app/environments /app/log /app/exports
 
 # Set environment variables
 ENV ASPNETCORE_URLS=http://+:80
