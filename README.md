@@ -14,21 +14,18 @@ A quick example of Trignis in action:
 
 We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or alternative extension methods.
 
+
 ## 🧩 Key Features
 
-This application is designed for reliability and performance, predominantly in Windows Server environments. It offers flexible change tracking, versatile export options, and comprehensive security.
+Designed for reliability and performance in Windows Server environments, with flexible change tracking, versatile exports, and robust security.
 
-* **Real-time change tracking**: Monitors SQL Server change tracking tables and processes updates automatically
-* **Multiple export destinations**: Export changes to JSON files, REST APIs, or message queues (RabbitMQ, Azure Service Bus, AWS SQS)
-* **Multi-environment support**: Isolated configurations for dev/staging/prod with separate processing threads
-* **Large payload handling**: Automatic batching for full synchronization scenarios with thousands of records
-* **Built-in encryption**: Secure configuration files with modern encryption standards
-* **Comprehensive logging**: Detailed request/response tracing with Serilog
-* **Windows service support**: Runs as a background service with proper lifecycle management
-* **State persistence**: Uses SQLite to track processing state and avoid duplicates
-* **Configurable polling**: Adjustable polling intervals and retry policies
-* **File management**: Automatic cleanup of old export files with size limits
-* **Health monitoring**: Built-in endpoints for service health, state tracking, and dead letter monitoring
+* **Real-time change tracking** – Monitors SQL Server changes automatically.
+* **Flexible exports** – JSON, REST APIs, or message queues (RabbitMQ, Azure Service Bus, AWS SQS).
+* **Multi-environment support** – Separate dev/staging/prod configurations and processing threads.
+* **Large payload handling** – Automatic batching for thousands of records.
+* **Secure & auditable** – Encrypted configs, detailed logging, and state persistence via SQLite.
+* **Service-ready** – Runs as a Windows service with configurable polling, retries, and file cleanup.
+* **Health monitoring** – Built-in endpoints for service status, state, and dead-letter tracking.
 
 ## ⚙️ Requirements
 
