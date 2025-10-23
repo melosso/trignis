@@ -481,12 +481,23 @@ Trignis handles token caching and automatic refresh, in either case no manual in
 
 ### Message Queues
 
-Export changes to message queues for asynchronous processing and decoupled architectures:
+Trignis supports exporting database changes to message queues for asynchronous processing, event-driven architectures, and decoupled microservices.
+
+**Supported Platforms:**
+
+As of right now, we support three major platforms:
+
+- **RabbitMQ** (`RabbitMQ`): Direct queues or exchange-based routing
+- **Azure Service Bus** (`AzureServiceBus`): Queues and topics  
+- **AWS SQS** (`AWSSQS`): Standard queues with IAM or explicit credentials
+
+#### Quick Example (RabbitMQ)
 
 ```json
 {
   "ChangeTracking": {
     "ApiEndpoints": [
+      // Direct queue publish
       {
         "Key": "rabbitmq_direct_queue",
         "MessageQueueType": "RabbitMQ",
@@ -496,32 +507,40 @@ Export changes to message queues for asynchronous processing and decoupled archi
           "VirtualHost": "/",
           "Username": "guest",
           "Password": "guest",
-          "QueueName": "trignis-changes"  // Direct queue publish
+          "QueueName": "trignis-changes"
         }
       },
+      // Exchange-based routing
       {
         "Key": "rabbitmq_exchange",
         "MessageQueueType": "RabbitMQ",
         "MessageQueue": {
           "HostName": "rabbitmq.example.com",
           "Port": 5672,
-          "Username": "trignis",
-          "Password": "your-password",
-          "Exchange": "data-changes",         // Exchange-based routing
+          "Username": "guest",
+          "Password": "guest",
+          "Exchange": "data-changes",
           "RoutingKey": "database.trainingsessions"
         }
+      }
       }
     ]
   }
 }
 ```
 
-**Supported message queues:**
-- **RabbitMQ** (`RabbitMQ`): Direct queue (`QueueName`) or exchange-based routing (properties `Exchange` and `RoutingKey`)
-- **Azure Service Bus** (`AzureServiceBus`): Queues and topics
-- **AWS SQS** (`AWSSQS`): With IAM role or explicit credentials
+**Key Features:**
 
-RabbitMQ supports two patterns: publish directly to a queue using `QueueName`, or route through an exchange using `Exchange` and `RoutingKey` for pattern matching.
+We've baked in a variety of features:
+
+- Automatic message compression for payloads > 1KB
+- Circuit breaker protection (opens after 3 failures, 1-minute recovery)
+- Connection pooling and automatic reconnection (RabbitMQ)
+- Dead letter queue for failed messages
+- Health check endpoints for monitoring
+
+> [!TIP]
+> For complete documentation, configuration examples, and troubleshooting guides, see our [Wiki: About Message Queues](https://github.com/melosso/trignis/wiki/Guide:-Message-Queues).
 
 ### Custom Headers & Compression
 
@@ -545,8 +564,10 @@ Add correlation tracking and reduce bandwidth usage:
 }
 ```
 
-**Variable substitution in headers:**
+The configuration allows usage of variable substitution in headers:
+
 - `{guid}`: Generates unique correlation ID
+- `{key}`: Identifier of the tracking object
 - `{timestamp}`: Current timestamp
 - `{object}`: Tracking object name
 - `{database}`: Database name
