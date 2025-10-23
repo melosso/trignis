@@ -163,9 +163,7 @@ public static class ConfigurationLogger
         {
             Log.Information($"└─ Health Endpoint:");
             Log.Information($"   ├─ Status: ENABLED");
-            Log.Information($"   ├─ URL: http://{healthHost}:{healthPort}/health");
-            Log.Information($"   ├─ Dead Letters: http://{healthHost}:{healthPort}/health/deadletters");
-            Log.Information($"   └─ Connections: http://{healthHost}:{healthPort}/health/connections");
+            Log.Information($"   ├─ URL: http://{healthHost}:{healthPort}");
         }
         else
         {

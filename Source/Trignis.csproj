@@ -4,7 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <RootNamespace>Trignis.MicrosoftSQL</RootNamespace>
     <SatelliteResourceLanguages>en-US;en</SatelliteResourceLanguages>
-    <Version>2025.12.2</Version>
+    <Version>2025.12.3</Version>
     <Nullable>enable</Nullable>
     
     <!-- Assembly Information -->
@@ -16,14 +16,12 @@
 
     <!-- Additional Metadata -->
     <Authors>Melosso</Authors>
+    <ApplicationIcon>logo.ico</ApplicationIcon>
     <RepositoryUrl>https://github.com/melosso/trignis</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageProjectUrl>https://trignis.melosso.com/</PackageProjectUrl>
   </PropertyGroup>
-
-  <ItemGroup>
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="3.7.301" />

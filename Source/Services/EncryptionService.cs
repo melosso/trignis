@@ -140,9 +140,22 @@ namespace Trignis.MicrosoftSQL.Services
                 File.WriteAllText(publicKeyPath, publicKeyPem);
                 Log.Debug("Public key saved to: {PublicKeyPath}", publicKeyPath);
 
+                // Save reference file
+                var referencePath = Path.Combine(_certsPath, "store.jsonc");
+                var machine = Environment.MachineName;
+                var timestamp = DateTimeOffset.Now.ToString("o"); // ISO 8601
+
+                var referenceContent = new
+                {
+                    MachineIdentity = Convert.ToBase64String(Encoding.UTF8.GetBytes(machine)),
+                    Timestamp = timestamp
+                };
+                File.WriteAllText(referencePath, JsonSerializer.Serialize(referenceContent, new JsonSerializerOptions { WriteIndented = true }));
+                Log.Debug("Reference file saved to: {ReferencePath}", referencePath);
+
                 // Update current public key
                 _currentPublicKeyPem = publicKeyPem;
-                Log.Information("Generated new RSA keypair for encryption");
+                Log.Information("⚠ Generated new RSA keypair for encryption");
             }
             else
             {

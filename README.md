@@ -1,4 +1,4 @@
-# Trignis
+# <img src="https://github.com/melosso/trignis/blob/main/Source/logo.webp?raw=true" alt="" width="36" style="vertical-align: middle;">  Trignis
 
 [![License](https://img.shields.io/badge/license-AGPL%203.0-blue)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
@@ -12,8 +12,7 @@ A quick example of Trignis in action:
 
 ![Screenshot of Trignis](https://github.com/melosso/trignis/blob/main/.github/images/screenshot.png?raw=true)
 
-We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or alternative extension methods.
-
+We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or using alternative extension methods.
 
 ## 🧩 Key Features
 

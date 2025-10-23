@@ -26,7 +26,11 @@ jobs:
     - name: Set up .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: |
+          7.0.x
+          9.0.x
+    - name: Install dotnet-project-licenses tool
+      run: dotnet tool install -g dotnet-project-licenses
     - name: Install semver
       run: pip install semver
     - name: Calculate new version
@@ -82,14 +86,20 @@ jobs:
         # Create Environments folder structure
         mkdir -p Deployment/Environments
         # Copy environment config files
-        cp -r Source/Environments/* Deployment/environments/ || true
+        cp -r Source/Environments/* Deployment/Environments/ || true
         # Copy SQL folder
         cp -r Source/SQL Deployment/sql || true
         # Create logs folder
         mkdir -p Deployment/log
-        # Copy LICENSE
+        # Copy LICENSE and create license directory structure
         mkdir -p Deployment/license
         cp LICENSE Deployment/license/license.txt || true
+        # Create source file
+        echo "https://github.com/melosso/trignis" > Deployment/license/source.txt
+        # Generate and include third-party package licenses
+        echo "Collecting package licenses..."
+        mkdir -p Deployment/license/packages
+        dotnet-project-licenses --input Source/Trignis.csproj --export-license-texts --output-directory Deployment/license/packages || echo "Warning: Failed to collect package licenses"
         # Create service management batch file
         cat > Deployment/TrignisBackgroundService.bat << 'EOF'
         @echo off

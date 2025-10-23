@@ -71,7 +71,8 @@ public class ConnectionHealthCheckService : BackgroundService
     {
         _logger.LogDebug("Starting connection health checks...");
 
-        var apiEndpoints = _config.GetSection("ChangeTracking:ApiEndpoints").Get<ApiEndpoint[]>() ?? Array.Empty<ApiEndpoint>();
+        var environments = _config.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
+        var apiEndpoints = environments.SelectMany(e => e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()).ToArray();
         
         foreach (var endpoint in apiEndpoints)
         {
@@ -186,29 +187,35 @@ public class ConnectionHealthCheckService : BackgroundService
         ServiceBusClient? client = null;
         try
         {
-            var clientOptions = new ServiceBusClientOptions
-            {
-                RetryOptions = new ServiceBusRetryOptions
-                {
-                    MaxRetries = 1,
-                    Delay = TimeSpan.FromSeconds(1),
-                    MaxDelay = TimeSpan.FromSeconds(5)
-                }
-            };
-
-            client = new ServiceBusClient(config.ConnectionString, clientOptions);
+            client = new ServiceBusClient(config.ConnectionString);
             
             // Try to create a sender to verify connection
-            var queueOrTopic = config.QueueName ?? config.TopicName;
-            if (string.IsNullOrEmpty(queueOrTopic))
+            ServiceBusSender? sender = null;
+            try
             {
-                return false;
-            }
+                if (!string.IsNullOrEmpty(config.QueueName))
+                {
+                    sender = client.CreateSender(config.QueueName);
+                }
+                else if (!string.IsNullOrEmpty(config.TopicName))
+                {
+                    sender = client.CreateSender(config.TopicName);
+                }
+                else
+                {
+                    return false;
+                }
 
-            var sender = client.CreateSender(queueOrTopic);
-            await sender.DisposeAsync();
-            
-            return true;
+                // Just creating the sender verifies the connection is valid
+                return true;
+            }
+            finally
+            {
+                if (sender != null)
+                {
+                    await sender.DisposeAsync();
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -226,7 +233,7 @@ public class ConnectionHealthCheckService : BackgroundService
 
     private async Task<bool> CheckAwsSqsHealthAsync(MessageQueueConfig config)
     {
-        IAmazonSQS? client = null;
+        AmazonSQSClient? client = null;
         try
         {
             var sqsConfig = new AmazonSQSConfig

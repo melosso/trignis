@@ -17,7 +17,9 @@ using System.Text.Json;
 using System.Text;
 using Microsoft.AspNetCore.Http;
 
-// Load .env file if it exists (for Docker and local development)
+Environment.CurrentDirectory = AppContext.BaseDirectory;
+
+// Load .env file if it exists
 var envPath = Path.Combine(AppContext.BaseDirectory, ".env");
 if (File.Exists(envPath))
 {
@@ -38,15 +40,22 @@ if (File.Exists(envPath))
 }
 
 var tempConfig = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: true)
     .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production"}.json", optional: true)
     .Build();
 
 bool useEventLog = tempConfig.GetValue<bool>("Windows:UseEventLog", false);
 
+var logDirectory = Path.Combine(AppContext.BaseDirectory, "log");
+if (!Directory.Exists(logDirectory))
+{
+    Directory.CreateDirectory(logDirectory);
+}
+
+// Configure initial logger (for `appsettings.json`)
 var loggerConfig = new LoggerConfiguration()
-    .WriteTo.Console()
-    .WriteTo.File("log/trignis-.log", rollingInterval: RollingInterval.Day);
+    .ReadFrom.Configuration(tempConfig);
 
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && useEventLog)
 {
@@ -64,7 +73,7 @@ Log.Information("   ██║   ██║  ██║██║╚█████�
 Log.Information("   ╚═╝   ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚══════╝");
 Log.Information("");
 
-// Initialize encryption service with environment-based key
+// Initialize encryption service
 var encryptionService = new EncryptionService(AppContext.BaseDirectory);
 
 // Encrypt config files if plain
@@ -72,10 +81,10 @@ encryptionService.EncryptConfigFiles();
 
 try
 {
-    // Set the working directory to the executable's directory
-    Environment.CurrentDirectory = AppContext.BaseDirectory;
-
     var builder = WebApplication.CreateBuilder(args);
+
+    // Initialize Serilog globally 
+    builder.Host.UseSerilog();
 
     // Load global settings from appsettings.json first
     var globalSettings = builder.Configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
@@ -118,7 +127,7 @@ try
             var relativePath = Path.GetRelativePath(".", file);
             var environmentName = Path.GetFileNameWithoutExtension(file);
             
-            // Load configuration WITH encrypted JSON support
+            // Load configuration
             var tempBuilder = new ConfigurationBuilder();
             tempBuilder.AddEncryptedJsonFile(relativePath, encryptionService, optional: true);
             var tempCfg = tempBuilder.Build();
@@ -208,13 +217,11 @@ try
         Log.Warning("No environments were loaded from the environments folder");
     }
 
-    // Validate configuration early
+    // Validate configuration
     ConfigurationValidator.ValidateConfiguration(builder.Configuration);
 
-    // Configure Serilog
-    builder.Services.AddSerilog((services, configuration) => configuration
-        .ReadFrom.Configuration(builder.Configuration)
-        .ReadFrom.Services(services));
+    // Log configuration status
+    ConfigurationLogger.LogConfigurationStatus(builder.Configuration);
 
     // Use Windows Service hosting
     builder.Services.AddWindowsService(options =>
@@ -240,7 +247,7 @@ try
     builder.Services.AddSingleton<OAuth2TokenService>();
     builder.Services.AddSingleton(encryptionService);
     builder.Services.AddHttpClient();
-        
+
     var app = builder.Build();
 
     // Configure health endpoint with enhanced details
@@ -251,7 +258,27 @@ try
     if (healthEnabled)
     {
         app.Urls.Add($"http://{healthHost}:{healthPort}");
-        
+
+        // API Discovery endpoint - lists all available endpoints
+        app.MapGet("/", (HttpContext context) =>
+        {
+            var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+            var response = new
+            {
+                service = "trignis-service",
+                version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+                endpoints = new
+                {
+                    health_url = $"{baseUrl}/health",
+                    deadletters_url = $"{baseUrl}/health/deadletters",
+                    connections_url = $"{baseUrl}/health/connections",
+                    state_url = $"{baseUrl}/health/state",
+                    state_environment_url = $"{baseUrl}/health/state/{{environmentName}}"
+                }
+            };
+            return Results.Json(response);
+        });
+
         app.MapGet("/health", async (HealthCheckService healthService) =>
         {
             var health = await healthService.GetHealthStatusAsync();
@@ -277,58 +304,69 @@ try
             {
                 var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
                 var connectionString = $"Data Source={stateDbPath}";
-                
+
                 using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
                 await conn.OpenAsync();
-                
+
                 // Get all state grouped by environment
                 var command = conn.CreateCommand();
                 command.CommandText = @"
                     SELECT 
                         EnvironmentName,
-                        ObjectName,
-                        LastVersion,
-                        LastUpdated
+                        COUNT(*) as ObjectCount
                     FROM LastVersions
-                    ORDER BY EnvironmentName, ObjectName
+                    GROUP BY EnvironmentName
+                    ORDER BY EnvironmentName
                 ";
-                
-                var environmentsState = new Dictionary<string, List<object>>();
-                
+
+                var environments = new List<object>();
+
                 using var reader = await command.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
                     var envName = reader.GetString(0);
-                    var objectName = reader.GetString(1);
-                    var lastVersion = reader.GetInt32(2);
-                    var lastUpdated = reader.GetDateTime(3);
-                    
-                    if (!environmentsState.ContainsKey(envName))
+                    var objectCount = reader.GetInt32(1);
+
+                    // Get objects for this environment
+                    var objectCommand = conn.CreateCommand();
+                    objectCommand.CommandText = @"
+                        SELECT 
+                            ObjectName,
+                            LastVersion,
+                            LastUpdated
+                        FROM LastVersions
+                        WHERE EnvironmentName = @environmentName
+                        ORDER BY ObjectName
+                    ";
+                    objectCommand.Parameters.AddWithValue("@environmentName", envName);
+
+                    var objects = new List<object>();
+                    using var objectReader = await objectCommand.ExecuteReaderAsync();
+                    while (await objectReader.ReadAsync())
                     {
-                        environmentsState[envName] = new List<object>();
+                        objects.Add(new
+                        {
+                            object_name = objectReader.GetString(0),
+                            last_version = objectReader.GetInt32(1),
+                            last_updated = objectReader.GetDateTime(2).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                        });
                     }
-                    
-                    environmentsState[envName].Add(new
+
+                    environments.Add(new
                     {
-                        object_name = objectName,
-                        last_version = lastVersion,
-                        last_updated = lastUpdated.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                        name = envName,
+                        object_count = objectCount,
+                        objects = objects
                     });
                 }
-                
+
                 var response = new
                 {
                     timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-                    total_environments = environmentsState.Count,
-                    total_objects = environmentsState.Values.Sum(v => v.Count),
-                    environments = environmentsState.Select(kvp => new
-                    {
-                        name = kvp.Key,
-                        object_count = kvp.Value.Count,
-                        objects = kvp.Value
-                    })
+                    total_environments = environments.Count,
+                    environments = environments
                 };
-                
+
                 return Results.Json(response);
             }
             catch (Exception ex)
@@ -348,10 +386,10 @@ try
             {
                 var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
                 var connectionString = $"Data Source={stateDbPath}";
-                
+
                 using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
                 await conn.OpenAsync();
-                
+
                 var command = conn.CreateCommand();
                 command.CommandText = @"
                     SELECT 
@@ -363,9 +401,9 @@ try
                     ORDER BY ObjectName
                 ";
                 command.Parameters.AddWithValue("@environmentName", environmentName);
-                
+
                 var objects = new List<object>();
-                
+
                 using var reader = await command.ExecuteReaderAsync();
                 while (await reader.ReadAsync())
                 {
@@ -376,7 +414,7 @@ try
                         last_updated = reader.GetDateTime(2).ToString("yyyy-MM-ddTHH:mm:ssZ")
                     });
                 }
-                
+
                 if (objects.Count == 0)
                 {
                     return Results.NotFound(new
@@ -385,7 +423,7 @@ try
                         environment = environmentName
                     });
                 }
-                
+
                 var response = new
                 {
                     environment = environmentName,
@@ -393,7 +431,7 @@ try
                     object_count = objects.Count,
                     objects = objects
                 };
-                
+
                 return Results.Json(response);
             }
             catch (Exception ex)
@@ -405,11 +443,19 @@ try
                 });
             }
         });
+
+        // 404 handler for all other routes
+        app.MapFallback((HttpContext context) =>
+        {
+            var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
+            return Results.NotFound(new
+            {
+                error = "Not Found",
+                message = $"The requested endpoint '{context.Request.Path}' does not exist"
+            });
+        });
     }
-
-    // Log configuration status
-    ConfigurationLogger.LogConfigurationStatus(builder.Configuration);
-
+    
     // Register shutdown handlers
     var lifetime = app.Lifetime;
     

@@ -91,7 +91,9 @@ public class HealthCheckService
     private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync()
     {
         var sw = Stopwatch.StartNew();
-        var trackingObjects = _config.GetSection("ChangeTracking:TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
+        
+        var environments = _config.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
+        var trackingObjects = environments.SelectMany(e => e.ChangeTracking.TrackingObjects ?? Array.Empty<TrackingObject>()).ToArray();
         
         if (trackingObjects.Length == 0)
         {
@@ -105,7 +107,11 @@ public class HealthCheckService
 
         foreach (var dbName in uniqueDatabases)
         {
-            var connString = _config.GetConnectionString(dbName);
+            var connString = environments
+                .SelectMany(e => e.ConnectionStrings)
+                .FirstOrDefault(cs => cs.Key == dbName)
+                .Value;
+                
             if (string.IsNullOrEmpty(connString))
             {
                 failCount++;
