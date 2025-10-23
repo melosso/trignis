@@ -1,4 +1,4 @@
-# <img src="https://github.com/melosso/trignis/blob/main/Source/logo.webp?raw=true" alt="" width="36" style="vertical-align: middle;">  Trignis
+# <img src="https://github.com/melosso/trignis/blob/main/Source/logo.webp?raw=true" alt="" width="32" style="vertical-align: middle;">  Trignis
 
 [![License](https://img.shields.io/badge/license-AGPL%203.0-blue)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
