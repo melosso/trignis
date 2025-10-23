@@ -26,7 +26,7 @@ public static class ConfigurationLogger
         Log.Information($"│  ├─ Default Polling Interval: {globalSettings.PollingIntervalSeconds}s");
         Log.Information($"│  ├─ Max Payload Size: {globalSettings.MaxPayloadSizeBytes / 1024 / 1024}MB");
         Log.Information($"│  ├─ Max Records Per Batch: {globalSettings.MaxRecordsPerBatch}");
-        Log.Information($"│  ├─ Payload Batching: {(globalSettings.EnablePayloadBatching ? "ENABLED" : "DISABLED")}");
+        Log.Information($"│  ├─ Payload Batching: {(globalSettings.EnablePayloadBatching ? "Enabled" : "DISABLED")}");
         Log.Information($"│  ├─ Retry Count: {globalSettings.RetryCount}");
         Log.Information($"│  ├─ Retry Delay: {globalSettings.RetryDelaySeconds}s");
         Log.Information($"│  ├─ Dead Letter Retention: {globalSettings.DeadletterRetentionDays} days");
@@ -57,8 +57,8 @@ public static class ConfigurationLogger
             
             Log.Information($"│  {envVertical}  ├─ Settings:");
             Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "*" : "")}");
-            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
-            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "ENABLED" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "Enabled" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "Enabled" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
             
             // Connection Strings
             Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
@@ -162,8 +162,8 @@ public static class ConfigurationLogger
         if (healthEnabled)
         {
             Log.Information($"└─ Health Endpoint:");
-            Log.Information($"   ├─ Status: ENABLED");
-            Log.Information($"   ├─ URL: http://{healthHost}:{healthPort}");
+            Log.Information($"   ├─ Status: Enabled");
+            Log.Information($"   └─ URL: http://{healthHost}:{healthPort}");
         }
         else
         {
