@@ -1,0 +1,12 @@
+name: trignis-page
+services:
+  trignis-website:
+    container_name: trignis-website
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8180:80"
+    environment:
+      - REPO_URL=https://github.com/melosso/trignis.git
+      - REPO_BRANCH=main
