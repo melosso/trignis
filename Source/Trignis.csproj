@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>Trignis.MicrosoftSQL</RootNamespace>
+    <SatelliteResourceLanguages>en-US;en</SatelliteResourceLanguages>
+    <Version>2025.11.0</Version>
+    <Nullable>enable</Nullable>
+    
+    <!-- Assembly Information -->
+    <AssemblyTitle>Trignis</AssemblyTitle>
+    <AssemblyDescription>A lightweight change tracking application, built for events in SQL Server.</AssemblyDescription>
+    <AssemblyProduct>Trignis</AssemblyProduct>
+    <AssemblyCompany>Melosso</AssemblyCompany>
+    <AssemblyCopyright>Copyright © Melosso 2025</AssemblyCopyright>
+
+    <!-- Additional Metadata -->
+    <Authors>Melosso</Authors>
+    <ApplicationIcon>logo.ico</ApplicationIcon>
+    <RepositoryUrl>https://github.com/melosso/trignis</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageProjectUrl>https://trignis.melosso.com/</PackageProjectUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="3.7.301" />
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.1.11" />
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.20.1" />
+    <PackageReference Include="Dapper" Version="2.1.66" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.0.9" />
+    <PackageReference Include="RabbitMQ.Client" Version="7.1.2" />
+    <PackageReference Include="Serilog.Sinks.EventLog" Version="4.0.0" />
+    <PackageReference Include="System.Text.Json" Version="9.0.9" />
+    <PackageReference Include="Polly" Version="8.6.4" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.9" />
+    <PackageReference Include="Serilog" Version="4.3.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="exports\**" />
+    <Content Remove="log\**" />
+  </ItemGroup>
+
+</Project>

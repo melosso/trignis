@@ -1,0 +1,14 @@
+services:
+  trignis:
+    image: ghcr.io/melosso/trignis:latest
+    container_name: trignis
+    ports:
+      - "2455:2455"
+    environment:
+      - TRIGNIS_ENCRYPTION_KEY=YourEncryptionKeyHere
+    volumes:
+      - ./environments:/app/environments
+      - ./log:/app/log
+      - ./exports:/app/exports
+      - ./appsettings.json:/app/appsettings.json:ro
+    restart: unless-stopped

@@ -1,0 +1,248 @@
+name: Build And Push As Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. 2025.1.0)'
+        required: true
+        type: string
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    - name: Set up .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: |
+          7.0.x
+          9.0.x
+    - name: Install dotnet-project-licenses tool
+      run: dotnet tool install -g dotnet-project-licenses
+    - name: Install semver
+      run: pip install semver
+    - name: Calculate new version
+      id: versioning
+      run: |
+        # Get the latest tag or default
+        LATEST_TAG=$(git tag --sort=-v:refname | head -n 1 || echo "$(date +%Y).0.0")
+        # Extract input
+        RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+        # Calculate new version
+        VERSION=$(python -c "
+        import semver
+        import datetime
+        input_type = '${{ github.event.inputs.release_type }}'
+        latest = '${LATEST_TAG}'
+        # handle first time
+        try:
+            v = semver.VersionInfo.parse(latest)
+        except:
+            v = semver.VersionInfo( datetime.datetime.now().year, 0, 0 )
+        current_year = datetime.datetime.now().year
+        if input_type == 'major':
+            # ensure year is at least current_year
+            new_major = max(current_year, v.major + 1)
+            new_version = semver.VersionInfo(new_major, 0, 0)
+        elif input_type == 'minor':
+            new_version = semver.VersionInfo(v.major, v.minor + 1, 0)
+        else:  # patch
+            new_version = semver.VersionInfo(v.major, v.minor, v.patch + 1)
+        print(new_version)
+        ")
+        echo "new_version=$VERSION" >> $GITHUB_OUTPUT
+    - name: Create and push new tag
+      run: |
+        NEW_TAG=${{ steps.versioning.outputs.new_version }}
+        
+        git config user.name github-actions
+        git config user.email github-actions@github.com
+        git tag -f "$NEW_TAG"
+        git push origin --force "refs/tags/$NEW_TAG"
+    - name: Publish application
+      run: |
+        # Clear deployment directory
+        rm -rf Deployment/*
+        # Clean the project
+        dotnet clean Source -c Release
+        # Publish self-contained version
+        dotnet publish Source -c Release -r win-x64 -p:PublishSingleFile=true -o Deployment
+        # Create exports folder structure
+        mkdir -p Deployment/exports
+        # Remove unnecessary files
+        rm -f Deployment/*.pdb Deployment/*.xml Deployment/*.deps.json Deployment/*.dev.json Deployment/*.example Deployment/Trignis.staticwebassets.endpoints.json Deployment/web.config
+        # Create Environments folder structure
+        mkdir -p Deployment/Environments
+        # Copy environment config files
+        cp -r Source/Environments/* Deployment/Environments/ || true
+        # Copy SQL folder
+        cp -r Source/SQL Deployment/sql || true
+        # Create logs folder
+        mkdir -p Deployment/log
+        # Copy LICENSE and create license directory structure
+        mkdir -p Deployment/license
+        cp LICENSE Deployment/license/license.txt || true
+        # Create source file
+        echo "https://github.com/melosso/trignis" > Deployment/license/source.txt
+        # Generate and include third-party package licenses
+        echo "Collecting package licenses..."
+        mkdir -p Deployment/license/packages
+        dotnet-project-licenses --input Source/Trignis.csproj --export-license-texts --output-directory Deployment/license/packages || echo "Warning: Failed to collect package licenses"
+        # Create service management batch file
+        cat > Deployment/TrignisBackgroundService.bat << 'EOF'
+        @echo off
+        setlocal enabledelayedexpansion
+        
+        set SERVICE_NAME=TrignisAgent
+        set DISPLAY_NAME=Trignis Agent - SQL Change Monitor
+        set EXE_PATH=%~dp0Trignis.exe
+        
+        if "%1"=="" (
+            echo Usage: %0 {install^|start^|stop^|status^|uninstall^|test}
+            echo.
+            echo Commands:
+            echo   install   - Install the service
+            echo   start     - Start the service
+            echo   stop      - Stop the service
+            echo   status    - Check service status and recent logs
+            echo   uninstall - Stop and uninstall the service
+            echo   test      - Run in console mode for testing
+            goto :eof
+        )
+        
+        if /i "%1"=="install" (
+            echo Installing "%SERVICE_NAME%"...
+            sc create "%SERVICE_NAME%" binPath= "\"%~dp0Trignis.exe\"" start= auto displayname= "%DISPLAY_NAME%"
+            if !ERRORLEVEL! EQU 0 (
+                echo Service installed successfully.
+                echo Use '%0 start' to start it.
+            ) else (
+                echo Failed to install service. Make sure you're running as Administrator.
+            )
+            goto :eof
+        )
+        
+        if /i "%1"=="start" (
+            echo Starting "%SERVICE_NAME%"...
+            sc start "%SERVICE_NAME%"
+            if !ERRORLEVEL! EQU 0 (
+                echo Service started successfully.
+            ) else (
+                echo Failed to start service. Check Event Viewer for errors.
+            )
+            goto :eof
+        )
+        
+        if /i "%1"=="stop" (
+            echo Stopping "%SERVICE_NAME%"...
+            sc stop "%SERVICE_NAME%"
+            if !ERRORLEVEL! EQU 0 (
+                echo Service stopped successfully.
+            ) else (
+                echo Failed to stop service or service was not running.
+            )
+            goto :eof
+        )
+        
+        if /i "%1"=="status" (
+            echo Querying "%SERVICE_NAME%" status...
+            sc query "%SERVICE_NAME%"
+            echo.
+            echo Recent Application Event Log entries:
+            powershell -Command "Get-EventLog -LogName Application -Source '.NET Runtime' -Newest 5 | Format-Table -AutoSize" 2>nul
+            if !ERRORLEVEL! NEQ 0 (
+                echo No recent .NET Runtime events found.
+            )
+            goto :eof
+        )
+        
+        if /i "%1"=="uninstall" (
+            echo Stopping and uninstalling "%SERVICE_NAME%"...
+            sc stop "%SERVICE_NAME%" >nul 2>&1
+            timeout /t 2 /nobreak > nul
+            sc delete "%SERVICE_NAME%"
+            if !ERRORLEVEL! EQU 0 (
+                echo Service uninstalled successfully.
+            ) else (
+                echo Failed to uninstall service. Make sure you're running as Administrator.
+            )
+            goto :eof
+        )
+        
+        if /i "%1"=="test" (
+            echo Testing Trignis in console mode...
+            echo Press Ctrl+C to stop
+            echo.
+            "%~dp0Trignis.exe"
+            goto :eof
+        )
+        
+        echo Invalid command: %1
+        echo Use '%0' without arguments for help.
+        goto :eof
+        EOF
+        # Create README
+        cat > Deployment/README.txt << 'EOF'
+        TRIGNIS SERVICE DEPLOYMENT
+        ==========================
+        
+        TESTING
+        -------
+        1. Run 'TrignisBackgroundService.bat test' to test the application in console mode
+        2. Check logs in the 'log' folder
+        3. Press Ctrl+C to stop the console test
+        
+        SERVICE INSTALLATION
+        --------------------
+        1. Run 'TrignisBackgroundService.bat install' as Administrator
+        2. Run 'TrignisBackgroundService.bat start' to start the service
+        3. Run 'TrignisBackgroundService.bat status' to check if it's running
+        
+        SERVICE MANAGEMENT
+        ------------------
+        - Start: TrignisBackgroundService.bat start
+        - Stop: TrignisBackgroundService.bat stop
+        - Status: TrignisBackgroundService.bat status
+        - Uninstall: TrignisBackgroundService.bat uninstall
+        
+        TROUBLESHOOTING
+        ---------------
+        If the service fails to start:
+        1. Check logs in the 'log' folder
+        2. Run 'TrignisBackgroundService.bat status' to see service status
+        3. Check Windows Event Viewer > Application logs (if enabled)
+        4. Test in console mode first using 'TrignisBackgroundService.bat test'
+        
+        CONFIGURATION
+        -------------
+        Edit configuration files in the 'Environments' folder
+        Default environment: Production
+        EOF
+    - name: Create version file and zip Deployment folder
+      run: |
+        NEW_TAG=${{ steps.versioning.outputs.new_version }}
+        # Create version file inside the Deployment folder
+        echo "$NEW_TAG" > Deployment/.version.txt
+        # Zip the Deployment folder
+        zip -r "${NEW_TAG}-Deployment.zip" Deployment
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.versioning.outputs.new_version }}
+        files: |
+          ${{ steps.versioning.outputs.new_version }}-Deployment.zip
+        generate_release_notes: true
+    - name: Deploy to target environment
+      run: |
+        NEW_TAG=${{ steps.versioning.outputs.new_version }}
+        echo "Deploying version $NEW_TAG"
+        unzip -o "${NEW_TAG}-Deployment.zip"
