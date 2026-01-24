@@ -4,7 +4,7 @@
     <TargetFramework>net9.0</TargetFramework>
     <RootNamespace>Trignis.MicrosoftSQL</RootNamespace>
     <SatelliteResourceLanguages>en-US;en</SatelliteResourceLanguages>
-    <Version>2025.11.0</Version>
+    <Version>1.2.0</Version>
     <Nullable>enable</Nullable>
     
     <!-- Assembly Information -->
@@ -12,7 +12,7 @@
     <AssemblyDescription>A lightweight change tracking application, built for events in SQL Server.</AssemblyDescription>
     <AssemblyProduct>Trignis</AssemblyProduct>
     <AssemblyCompany>Melosso</AssemblyCompany>
-    <AssemblyCopyright>Copyright © Melosso 2025</AssemblyCopyright>
+    <AssemblyCopyright>Copyright © Melosso 2026</AssemblyCopyright>
 
     <!-- Additional Metadata -->
     <Authors>Melosso</Authors>
