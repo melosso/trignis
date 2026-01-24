@@ -16,10 +16,6 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
     - name: Set up .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -28,46 +24,12 @@ jobs:
           9.0.x
     - name: Install dotnet-project-licenses tool
       run: dotnet tool install -g dotnet-project-licenses
-    - name: Install semver
-      run: pip install semver
-    - name: Calculate new version
-      id: versioning
+    - name: Create and push tag
       run: |
-        # Get the latest tag or default
-        LATEST_TAG=$(git tag --sort=-v:refname | head -n 1 || echo "$(date +%Y).0.0")
-        # Extract input
-        RELEASE_TYPE="${{ github.event.inputs.release_type }}"
-        # Calculate new version
-        VERSION=$(python -c "
-        import semver
-        import datetime
-        input_type = '${{ github.event.inputs.release_type }}'
-        latest = '${LATEST_TAG}'
-        # handle first time
-        try:
-            v = semver.VersionInfo.parse(latest)
-        except:
-            v = semver.VersionInfo( datetime.datetime.now().year, 0, 0 )
-        current_year = datetime.datetime.now().year
-        if input_type == 'major':
-            # ensure year is at least current_year
-            new_major = max(current_year, v.major + 1)
-            new_version = semver.VersionInfo(new_major, 0, 0)
-        elif input_type == 'minor':
-            new_version = semver.VersionInfo(v.major, v.minor + 1, 0)
-        else:  # patch
-            new_version = semver.VersionInfo(v.major, v.minor, v.patch + 1)
-        print(new_version)
-        ")
-        echo "new_version=$VERSION" >> $GITHUB_OUTPUT
-    - name: Create and push new tag
-      run: |
-        NEW_TAG=${{ steps.versioning.outputs.new_version }}
-        
-        git config user.name github-actions
-        git config user.email github-actions@github.com
-        git tag -f "$NEW_TAG"
-        git push origin --force "refs/tags/$NEW_TAG"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a "${{ github.event.inputs.tag_name }}" -m "Release ${{ github.event.inputs.tag_name }}"
+        git push origin "${{ github.event.inputs.tag_name }}"
     - name: Publish application
       run: |
         # Clear deployment directory
@@ -229,20 +191,25 @@ jobs:
         EOF
     - name: Create version file and zip Deployment folder
       run: |
-        NEW_TAG=${{ steps.versioning.outputs.new_version }}
         # Create version file inside the Deployment folder
-        echo "$NEW_TAG" > Deployment/.version.txt
+        echo "${{ github.event.inputs.tag_name }}" > Deployment/.version.txt
+        echo "Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> Deployment/.version.txt
+        echo "Commit: ${{ github.sha }}" >> Deployment/.version.txt
         # Zip the Deployment folder
-        zip -r "${NEW_TAG}-Deployment.zip" Deployment
+        zip -r "${{ github.event.inputs.tag_name }}-Deployment.zip" Deployment
     - name: Create GitHub Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{ steps.versioning.outputs.new_version }}
-        files: |
-          ${{ steps.versioning.outputs.new_version }}-Deployment.zip
+        tag_name: ${{ github.event.inputs.tag_name }}
+        name: ${{ github.event.inputs.tag_name }}
+        draft: false
+        prerelease: false
         generate_release_notes: true
+        files: |
+          ${{ github.event.inputs.tag_name }}-Deployment.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Deploy to target environment
       run: |
-        NEW_TAG=${{ steps.versioning.outputs.new_version }}
-        echo "Deploying version $NEW_TAG"
-        unzip -o "${NEW_TAG}-Deployment.zip"
+        echo "Deploying version ${{ github.event.inputs.tag_name }}"
+        unzip -o "${{ github.event.inputs.tag_name }}-Deployment.zip"
