@@ -14,7 +14,7 @@ A quick example of Trignis in action:
 
 We've chosen to use a timed propagation mechanism due to various legacy applications that may handle database updates independently. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or using alternative extension methods.
 
-## 🧩 Key Features
+## Key Features
 
 Designed for reliability and performance in Windows Server environments, with flexible change tracking, versatile exports, and robust security.
 
@@ -26,7 +26,7 @@ Designed for reliability and performance in Windows Server environments, with fl
 * **Service-ready** – Runs as a Windows service with configurable polling, retries, and file cleanup.
 * **Health monitoring** – Built-in endpoints for service status, state, and dead-letter tracking.
 
-## ⚙️ Requirements
+## Requirements
 
 Before deploying **Trignis**, ensure your environment meets the following requirements:
 
@@ -35,7 +35,7 @@ Before deploying **Trignis**, ensure your environment meets the following requir
 - **Windows Server** (for hosting the background service)
 - **Database and filesystem access** for configuration and logging
 
-## 🚀 Getting Started
+## Getting Started
 
 Follow these steps to get Trignis running in your environment.
 
@@ -335,7 +335,7 @@ Before continuing, make sure you've set-up everything. On initial run, all secre
 > [!TIP]
 > If you'd like to verify if you have succesfully configured Trignis, you can run `TrignisBackgroundService.bat test` to run the application in the console instead. 
 
-## 📑 Output Structure
+## Output Structure
 
 The change tracking mechanism (in the database) relies on a **consistent** JSON output structure from the configured stored procedures. Each procedure must return a JSON object with the following format:
 
@@ -372,7 +372,7 @@ The change tracking mechanism (in the database) relies on a **consistent** JSON 
 
 Inconsistent or malformed JSON will cause processing failures. Ensure stored procedures adhere to this structure for reliable change detection and export. For column-level tracking, unchanged fields may be `null` in updates. In other words, prevent using the `INCLUDE_NULL_VALUES` when using column tracking.
 
-## 🔐 Security & Encryption
+## Security & Encryption
 
 ### Configuration Encryption
 
@@ -604,7 +604,7 @@ The dead letter mechanism does not automatically resync or retry failed messages
 > [!TIP]
 > You can read more information about the performance risks (and relevant query's) of change tracking at this Brent Ozar article: [Performance Tuning SQL Server Change Tracking](https://www.brentozar.com/archive/2014/06/performance-tuning-sql-server-change-tracking/).
 
-## 🔄 Compatibility
+## Compatibility
 
 Compatibility with all SQL Server versions is **not** guaranteed. This application may not work at all on deprecated versions of Microsoft SQL Server.
 
@@ -617,7 +617,7 @@ For more details, refer to [About Change Tracking (SQL Server)](https://learn.mi
 > [!CAUTION]
 > Before installing Trignis (or any change tracking application that leverages the same mechanism), make sure that you've read and understood these **cleanup** procedures. Failing to do so may result in data loss, degraded performance or incorrect change tracking behavior.
 
-## 📊 Logging & Monitoring
+## Logging & Monitoring
 
 We've implemented both logging and a separate health mechanism.
 
@@ -705,20 +705,7 @@ The state endpoint shows tracking versions per environment:
 }
 ```
 
-## 🤝 Credits
-
-Built with:
-
-* [ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/)
-* [Dapper](https://github.com/DapperLib/Dapper)
-* [Serilog](https://serilog.net/)
-* [SQLite](https://www.sqlite.org/)
-* [Polly](https://github.com/App-vNext/Polly)
-* [RabbitMQ.Client](https://github.com/rabbitmq/rabbitmq-dotnet-client)
-* [Azure.Messaging.ServiceBus](https://github.com/Azure/azure-sdk-for-net)
-* [AWSSDK.SQS](https://github.com/aws/aws-sdk-net)
-
-## 🔮 Lore
+## Lore
 
 For those curious:
 
