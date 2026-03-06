@@ -15,6 +15,7 @@ public class HealthCheckService
 {
     private readonly ILogger<HealthCheckService> _logger;
     private readonly IConfiguration _config;
+    private readonly EnvironmentConfigService _envConfigService;
     private readonly DateTime _startTime;
     private readonly string _version;
     private readonly int _cacheDurationSeconds;
@@ -24,10 +25,12 @@ public class HealthCheckService
 
     public HealthCheckService(
         ILogger<HealthCheckService> logger,
-        IConfiguration config)
+        IConfiguration config,
+        EnvironmentConfigService envConfigService)
     {
         _logger = logger;
         _config = config;
+        _envConfigService = envConfigService;
         _startTime = DateTime.UtcNow;
         _version = typeof(HealthCheckService).Assembly.GetName().Version?.ToString() ?? "0.0.0";
         _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
@@ -92,7 +95,7 @@ public class HealthCheckService
     {
         var sw = Stopwatch.StartNew();
         
-        var environments = _config.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
+        var environments = _envConfigService.Environments;
         var trackingObjects = environments.SelectMany(e => e.ChangeTracking.TrackingObjects ?? Array.Empty<TrackingObject>()).ToArray();
         
         if (trackingObjects.Length == 0)
@@ -109,8 +112,7 @@ public class HealthCheckService
         {
             var connString = environments
                 .SelectMany(e => e.ConnectionStrings)
-                .FirstOrDefault(cs => cs.Key == dbName)
-                .Value;
+                .FirstOrDefault(cs => cs.Key == dbName).Value;
                 
             if (string.IsNullOrEmpty(connString))
             {

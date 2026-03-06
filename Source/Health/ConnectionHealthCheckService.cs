@@ -25,12 +25,16 @@ public class ConnectionHealthCheckService : BackgroundService
     private readonly bool _enabled;
     private readonly ConcurrentDictionary<string, ConnectionHealth> _healthStatus = new();
 
+    private readonly EnvironmentConfigService _envConfigService;
+
     public ConnectionHealthCheckService(
         ILogger<ConnectionHealthCheckService> logger,
-        IConfiguration config)
+        IConfiguration config,
+        EnvironmentConfigService envConfigService)
     {
         _logger = logger;
         _config = config;
+        _envConfigService = envConfigService;
         _checkIntervalMinutes = _config.GetValue<int>("ChangeTracking:HealthCheckIntervalMinutes", 15);
         _enabled = _config.GetValue<bool>("ChangeTracking:HealthCheckEnabled", true);
     }
@@ -71,7 +75,7 @@ public class ConnectionHealthCheckService : BackgroundService
     {
         _logger.LogDebug("Starting connection health checks...");
 
-        var environments = _config.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
+        var environments = _envConfigService.Environments;
         var apiEndpoints = environments.SelectMany(e => e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()).ToArray();
         
         foreach (var endpoint in apiEndpoints)

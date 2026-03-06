@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Environments · Trignis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="/css/site.css" rel="stylesheet" />
+</head>
+<body>
+
+<aside>
+  <div class="brand select-none">
+    <div class="brand-avatar">
+      <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" class="brand-avatar-bg" aria-hidden="true">
+        <g clip-path="url(#trig-clip)">
+          <rect width="20" height="20" fill="#000" rx="5.5"/>
+          <rect width="20" height="20" fill="url(#trig-grad)" fill-opacity="0.2" rx="5.5"/>
+          <g filter="url(#trig-blur-1)" opacity="0.3"><circle cx="16" cy="17" r="6" fill="#FF64B4" fill-opacity="0.671"/></g>
+          <g filter="url(#trig-blur-2)" opacity="0.1"><circle cx="16" cy="16" r="6" fill="#FF64B4" fill-opacity="0.671"/></g>
+          <g filter="url(#trig-blur-3)" opacity="0.4"><circle cx="17" cy="19" r="6" fill="#FF64B4" fill-opacity="0.671"/></g>
+          <rect width="20" height="20" fill="#FF64B4" fill-opacity="0.15" rx="5.5"/>
+          <g style="mix-blend-mode:hard-light"><rect width="20" height="20" fill="#6A62FF" fill-opacity="0.1" rx="5.5"/></g>
+        </g>
+        <rect width="19" height="19" x="0.5" y="0.5" stroke="#FDFDFD" stroke-opacity="0.1" rx="5"/>
+        <defs>
+          <filter id="trig-blur-1" width="32" height="32" x="0" y="1" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur" stdDeviation="5"/></filter>
+          <filter id="trig-blur-2" width="22" height="22" x="5" y="5" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur" stdDeviation="2.5"/></filter>
+          <filter id="trig-blur-3" width="22" height="22" x="6" y="8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur" stdDeviation="2.5"/></filter>
+          <linearGradient id="trig-grad" x1="10" x2="10" y1="0" y2="20" gradientUnits="userSpaceOnUse"><stop stop-color="#FDFDFD"/><stop offset="1" stop-color="#FDFDFD" stop-opacity="0"/></linearGradient>
+          <clipPath id="trig-clip"><rect width="20" height="20" fill="#FDFDFD" rx="5.5"/></clipPath>
+        </defs>
+      </svg>
+      <svg class="brand-avatar-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FDFDFD" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 6c.6.5 1.2 1 2.5 1C7 7 7 5 9.5 5c2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 12c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+        <path d="M2 18c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 2.6 0 2.4 2 5 2 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
+      </svg>
+    </div>
+    <span class="brand-name">Trignis</span>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">Navigation</div>
+    <a href="/ui/dashboard" class="nav-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </a>
+    <a href="/ui/environments" class="nav-item active">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      Environments
+    </a>
+    <a href="/ui/settings" class="nav-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </a>
+    <a href="/ui/deadletters" class="nav-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/><line x1="2" y1="19" x2="9" y2="12"/><line x1="22" y1="19" x2="15" y2="12"/></svg>
+      Dead Letters
+    </a>
+    <a href="/ui/logs" class="nav-item">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      Logs
+    </a>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="sidebar-version" id="sidebarVersion"></div>
+    <button class="btn-logout" onclick="logout()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Sign Out
+    </button>
+  </div>
+</aside>
+
+<main>
+  <div class="page-header">
+    <div class="page-title">
+      <h1 class="select-none">Environments</h1>
+      <span class="badge badge-muted" id="envCount"></span>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-outline" onclick="load()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="page-body" id="envList">
+    <div class="muted" style="font-size:0.875rem">Loading…</div>
+  </div>
+</main>
+
+<script>
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmt(v, suffix = '') {
+  return v != null ? esc(String(v)) + suffix : '<span class="muted">—</span>';
+}
+
+function renderEnv(env, idx) {
+  const objects = env.tracking_objects ?? [];
+  const endpoints = env.api_endpoints ?? [];
+  const connKeys = env.connection_string_keys ?? [];
+  const s = env.settings ?? {};
+
+  const overrides = [
+    s.polling_interval_seconds != null ? `Polling: ${s.polling_interval_seconds}s` : null,
+    s.export_to_file != null ? `File export: ${s.export_to_file ? 'on' : 'off'}` : null,
+    s.export_to_api != null ? `API export: ${s.export_to_api ? 'on' : 'off'}` : null,
+    s.retry_count != null ? `Retry: ${s.retry_count}×` : null,
+  ].filter(Boolean);
+
+  const objectRows = objects.length
+    ? objects.map(o => `<tr>
+        <td>${esc(o.name)}</td>
+        <td class="col-mono">${esc(o.table_name)}</td>
+        <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">—</span>'}</td>
+        <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '—')}</td>
+        <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="empty-state">No tracking objects</td></tr>';
+
+  const endpointRows = endpoints.length
+    ? endpoints.map(e => {
+        const type = e.mq_type ? e.mq_type : 'HTTP';
+        const target = e.mq_type ? '' : esc(e.url ?? '');
+        const auth = e.auth_type ? `<span class="badge badge-muted">${esc(e.auth_type)}</span>` : '';
+        return `<tr>
+          <td>${e.key ? `<span class="badge badge-muted">${esc(e.key)}</span>` : '<span class="muted">—</span>'}</td>
+          <td><span class="badge badge-info">${esc(type)}</span></td>
+          <td class="col-mono truncate" style="max-width:200px" title="${esc(e.url ?? '')}">${target}</td>
+          <td>${auth}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="4" class="empty-state">No endpoints</td></tr>';
+
+  return `<div class="accordion" id="acc-${idx}">
+    <button class="accordion-trigger" onclick="toggleAccordion(${idx})">
+      <span class="accordion-trigger-left">
+        <span class="badge badge-muted">${esc(env.name)}</span>
+        <span style="font-size:0.8rem;font-weight:400;color:hsl(var(--muted-foreground))">${objects.length} objects · ${endpoints.length} endpoints</span>
+      </span>
+      <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <div class="accordion-body">
+
+      <div class="accordion-section">
+        <div class="accordion-section-title">Connection Strings</div>
+        <div class="pill-list">
+          ${connKeys.length ? connKeys.map(k => `<span class="pill">${esc(k)}</span>`).join('') : '<span class="muted" style="font-size:0.8rem">None</span>'}
+        </div>
+      </div>
+
+      ${overrides.length ? `<div class="accordion-section">
+        <div class="accordion-section-title">Overrides</div>
+        <div class="pill-list">${overrides.map(o => `<span class="pill">${esc(o)}</span>`).join('')}</div>
+      </div>` : ''}
+
+      <div class="accordion-section">
+        <div class="accordion-section-title">Tracking Objects (${objects.length})</div>
+        <div class="table-wrapper" style="border:none;border-radius:0">
+          <div class="scroll-area" style="max-height:260px">
+            <table>
+              <thead><tr><th>Name</th><th>Table</th><th>Database</th><th>Stored Procedure</th><th>Sync Mode</th></tr></thead>
+              <tbody>${objectRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="accordion-section">
+        <div class="accordion-section-title">API Endpoints (${endpoints.length})</div>
+        <div class="table-wrapper" style="border:none;border-radius:0">
+          <div class="scroll-area" style="max-height:220px">
+            <table>
+              <thead><tr><th>Key</th><th>Type</th><th>URL / Target</th><th>Auth</th></tr></thead>
+              <tbody>${endpointRows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>`;
+}
+
+function toggleAccordion(idx) {
+  const el = document.getElementById(`acc-${idx}`);
+  el.classList.toggle('open');
+}
+
+async function load() {
+  const list = document.getElementById('envList');
+  try {
+    const envs = await fetch('/ui/api/environments').then(r => r.json());
+    const arr = Array.isArray(envs) ? envs : [];
+    document.getElementById('envCount').textContent = `${arr.length} environment${arr.length !== 1 ? 's' : ''}`;
+    list.innerHTML = arr.length
+      ? arr.map((env, i) => renderEnv(env, i)).join('')
+      : '<div class="muted" style="font-size:0.875rem">No environments configured</div>';
+  } catch(e) {
+    list.innerHTML = `<div class="muted" style="font-size:0.875rem">Failed to load environments: ${esc(e.message)}</div>`;
+  }
+}
+
+load();
+
+function logout() {
+  fetch('/ui/api/auth/logout', { method: 'POST', credentials: 'include' })
+    .finally(() => { window.location.href = '/ui/login'; });
+}
+</script>
+</body>
+</html>

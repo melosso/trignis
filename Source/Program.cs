@@ -64,14 +64,14 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && useEventLog)
 
 Log.Logger = loggerConfig.CreateLogger();
 
-Log.Information("");
-Log.Information("████████╗██████╗ ██╗ ██████╗ ███╗   ██╗██╗███████╗");
-Log.Information("╚══██╔══╝██╔══██╗██║██╔════╝ ████╗  ██║██║██╔════╝");
-Log.Information("   ██║   ██████╔╝██║██║  ███╗██╔██╗ ██║██║███████╗");
-Log.Information("   ██║   ██╔══██╗██║██║   ██║██║╚██╗██║██║╚════██║");
-Log.Information("   ██║   ██║  ██║██║╚██████╔╝██║ ╚████║██║███████║");
-Log.Information("   ╚═╝   ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚══════╝");
-Log.Information("");
+Console.WriteLine("");
+Console.WriteLine("████████╗██████╗ ██╗ ██████╗ ███╗   ██╗██╗███████╗");
+Console.WriteLine("╚══██╔══╝██╔══██╗██║██╔════╝ ████╗  ██║██║██╔════╝");
+Console.WriteLine("   ██║   ██████╔╝██║██║  ███╗██╔██╗ ██║██║███████╗");
+Console.WriteLine("   ██║   ██╔══██╗██║██║   ██║██║╚██╗██║██║╚════██║");
+Console.WriteLine("   ██║   ██║  ██║██║╚██████╔╝██║ ╚████║██║███████║");
+Console.WriteLine("   ╚═╝   ╚═╝  ╚═╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝╚══════╝");
+Console.WriteLine("");
 
 // Initialize encryption service
 var encryptionService = new EncryptionService(AppContext.BaseDirectory);
@@ -246,22 +246,420 @@ try
     builder.Services.AddSingleton<MessageQueueService>();
     builder.Services.AddSingleton<OAuth2TokenService>();
     builder.Services.AddSingleton(encryptionService);
+    builder.Services.AddSingleton<EnvironmentConfigService>();
     builder.Services.AddHttpClient();
 
     var app = builder.Build();
 
-    // Configure health endpoint with enhanced details
+    // Initialize environment config service with the already-loaded environments and start file watcher
+    var envConfigService = app.Services.GetRequiredService<EnvironmentConfigService>();
+    envConfigService.Initialize(environments, envDir, selectedEnvironment);
+    envConfigService.StartWatching();
+
+    // Eagerly resolve HealthCheckService so its _startTime reflects actual application start
+    app.Services.GetRequiredService<HealthCheckService>();
+
+    // Read web config early so auth middleware can be registered before static files
     var healthEnabled = builder.Configuration.GetValue<bool>("Health:Enabled", false);
     var healthPort = builder.Configuration.GetValue<int>("Health:Port", 2455);
     var healthHost = builder.Configuration.GetValue<string>("Health:Host", "*");
+    var webHostEnabled = builder.Configuration.GetValue<bool>("WebHost:Enabled", false);
+    var webHostHost = builder.Configuration.GetValue<string>("WebHost:Host", "*");
+    var adminApiKey = builder.Configuration.GetValue<string>("Trignis:AdminApiKey", "");
+    var authEnabled = webHostEnabled && !string.IsNullOrEmpty(adminApiKey);
 
-    if (healthEnabled)
+    // Auth token helpers — stateless HMAC-SHA256 signed tokens
+    const string AuthCookieName = "trignis_auth";
+    const int AuthTokenExpiryHours = 24;
+
+    byte[] GetSigningKey() =>
+        System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
+
+    string GenerateAuthToken()
+    {
+        var expiry = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours).ToUnixTimeSeconds();
+        using var hmac = new System.Security.Cryptography.HMACSHA256(GetSigningKey());
+        return $"{expiry}.{Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(expiry.ToString())))}";
+    }
+
+    bool ValidateAuthToken(string token)
+    {
+        var dot = token.IndexOf('.');
+        if (dot < 0) return false;
+        var expiryStr = token[..dot];
+        if (!long.TryParse(expiryStr, out var expiry)) return false;
+        if (DateTimeOffset.FromUnixTimeSeconds(expiry) < DateTimeOffset.UtcNow) return false;
+        using var hmac = new System.Security.Cryptography.HMACSHA256(GetSigningKey());
+        var expected = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(expiryStr)));
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(expected),
+            Encoding.UTF8.GetBytes(token[(dot + 1)..]));
+    }
+
+    // Auth middleware — registered before static files so .html paths are also protected
+    if (authEnabled)
+    {
+        app.Use(async (context, next) =>
+        {
+            var path = context.Request.Path;
+            if (!path.StartsWithSegments("/ui") ||
+                path.StartsWithSegments("/ui/login") ||
+                path.StartsWithSegments("/ui/api/auth"))
+            {
+                await next(); return;
+            }
+            if (!context.Request.Cookies.TryGetValue(AuthCookieName, out var cookie) ||
+                !ValidateAuthToken(cookie))
+            {
+                context.Response.Redirect("/ui/login");
+                return;
+            }
+            await next();
+        });
+    }
+
+    var defaultFilesOptions = new DefaultFilesOptions { RequestPath = "/ui" };
+    defaultFilesOptions.DefaultFileNames.Clear();
+    defaultFilesOptions.DefaultFileNames.Add("dashboard.html");
+    app.UseDefaultFiles(defaultFilesOptions);
+    app.UseStaticFiles();
+
+    if (healthEnabled || webHostEnabled)
     {
         app.Urls.Add($"http://{healthHost}:{healthPort}");
 
-        // API Discovery endpoint - lists all available endpoints
+        // Restrict /ui paths to loopback connections when WebHost:Host is localhost
+        if (webHostEnabled && (webHostHost == "localhost" || webHostHost == "127.0.0.1"))
+        {
+            app.Use(async (context, next) =>
+            {
+                if (context.Request.Path.StartsWithSegments("/ui"))
+                {
+                    var remote = context.Connection.RemoteIpAddress;
+                    if (remote == null || !System.Net.IPAddress.IsLoopback(remote))
+                    {
+                        context.Response.StatusCode = 403;
+                        await context.Response.WriteAsync("Web UI is restricted to localhost.");
+                        return;
+                    }
+                }
+                await next();
+            });
+        }
+
+        // ── Trignis UI ───────────────────────────────────────────────────────────
+        if (webHostEnabled)
+        {
+        // Auth routes
+        var loginFilePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "ui", "login.html");
+        app.MapGet("/ui/login", () =>
+            authEnabled ? Results.File(loginFilePath, "text/html") : Results.Redirect("/ui/dashboard"));
+        app.MapGet("/ui/login.html", () => Results.Redirect("/ui/login"));
+
+        app.MapPost("/ui/api/auth", async (HttpContext context) =>
+        {
+            var body = await context.Request.ReadFromJsonAsync<JsonElement>();
+            var provided = body.TryGetProperty("apiKey", out var kp) ? kp.GetString() ?? "" : "";
+            var provHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(provided));
+            var expHash  = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
+            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(provHash, expHash))
+                return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
+            var token = GenerateAuthToken();
+            context.Response.Cookies.Append(AuthCookieName, token, new CookieOptions
+            {
+                HttpOnly = true,
+                SameSite = SameSiteMode.Lax,
+                Path = "/",
+                Expires = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours)
+            });
+            return Results.Ok(new { ok = true });
+        });
+
+        app.MapPost("/ui/api/auth/logout", (HttpContext context) =>
+        {
+            context.Response.Cookies.Append(AuthCookieName, "", new CookieOptions
+            {
+                HttpOnly = true,
+                SameSite = SameSiteMode.Lax,
+                Path = "/",
+                Expires = DateTimeOffset.UnixEpoch
+            });
+            return Results.Ok();
+        });
+
+        app.MapGet("/ui", () => Results.Redirect("/ui/dashboard"));
+
+        // Clean URLs: serve pages at /ui/{page} and redirect /ui/{page}.html → /ui/{page}
+        foreach (var page in new[] { "dashboard", "environments", "settings", "deadletters", "logs" })
+        {
+            var p = page;
+            var filePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "ui", $"{p}.html");
+            app.MapGet($"/ui/{p}", () => Results.File(filePath, "text/html"));
+            app.MapGet($"/ui/{p}.html", () => Results.Redirect($"/ui/{p}"));
+        }
+
+        app.MapGet("/ui/api/overview", async (DeadLetterQueueMonitor dlqMonitor) =>
+        {
+            long dlTotal = 0, dlLast24h = 0, dlLastHour = 0;
+            try
+            {
+                var stats = await dlqMonitor.GetStatsAsync();
+                dlTotal = stats.TotalCount;
+                dlLast24h = stats.Last24HoursCount;
+                dlLastHour = stats.LastHourCount;
+            }
+            catch { /* sinkhole.db may not exist yet */ }
+
+            return Results.Json(new
+            {
+                version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+                environment_count = envConfigService.Environments.Count,
+                tracking_object_count = envConfigService.Environments.Sum(e => e.ChangeTracking.TrackingObjects.Length),
+                endpoint_count = envConfigService.Environments.Sum(e => e.ChangeTracking.ApiEndpoints.Length),
+                dead_letters = new { total = dlTotal, last_24h = dlLast24h, last_hour = dlLastHour }
+            });
+        });
+
+        app.MapGet("/ui/api/environments", () =>
+        {
+            var result = envConfigService.Environments.Select(env => new
+            {
+                name = env.Name,
+                connection_string_keys = env.ConnectionStrings.Keys.ToArray(),
+                settings = new
+                {
+                    polling_interval_seconds = env.ChangeTracking.PollingIntervalSeconds,
+                    export_to_file = env.ChangeTracking.ExportToFile,
+                    file_path = env.ChangeTracking.FilePath,
+                    export_to_api = env.ChangeTracking.ExportToApi,
+                    retry_count = env.ChangeTracking.RetryCount,
+                    retry_delay_seconds = env.ChangeTracking.RetryDelaySeconds
+                },
+                tracking_objects = env.ChangeTracking.TrackingObjects.Select(t => new
+                {
+                    name = t.Name,
+                    database = t.Database,
+                    table_name = t.TableName,
+                    stored_procedure_name = t.StoredProcedureName,
+                    initial_sync_mode = t.InitialSyncMode
+                }),
+                api_endpoints = env.ChangeTracking.ApiEndpoints.Select(e => new
+                {
+                    key = e.Key,
+                    url = e.Url,
+                    auth_type = e.Auth?.Type,
+                    auth_username = e.Auth?.Username,
+                    auth_client_id = e.Auth?.ClientId,
+                    auth_token_endpoint = e.Auth?.TokenEndpoint,
+                    auth_scope = e.Auth?.Scope,
+                    auth_header_name = e.Auth?.HeaderName,
+                    // auth credentials (Token, Password, ApiKey, ClientSecret) are intentionally omitted
+                    mq_type = e.MessageQueueType,
+                    enable_compression = e.EnableCompression,
+                    mq = e.MessageQueue == null ? null : new
+                    {
+                        host_name = e.MessageQueue.HostName,
+                        port = e.MessageQueue.Port,
+                        virtual_host = e.MessageQueue.VirtualHost,
+                        username = e.MessageQueue.Username,
+                        queue_name = e.MessageQueue.QueueName,
+                        exchange = e.MessageQueue.Exchange,
+                        routing_key = e.MessageQueue.RoutingKey,
+                        topic_name = e.MessageQueue.TopicName,
+                        queue_url = e.MessageQueue.QueueUrl,
+                        region = e.MessageQueue.Region,
+                        event_hub_name = e.MessageQueue.EventHubName,
+                        bootstrap_servers = e.MessageQueue.BootstrapServers,
+                        topic = e.MessageQueue.Topic,
+                        security_protocol = e.MessageQueue.SecurityProtocol,
+                        sasl_mechanism = e.MessageQueue.SaslMechanism
+                        // Password, AccessKeyId, SecretAccessKey, ConnectionString intentionally omitted
+                    }
+                })
+            });
+            return Results.Json(result);
+        });
+
+        app.MapGet("/ui/api/settings", () =>
+        {
+            var logMinLevel = builder.Configuration.GetValue<string>("Serilog:MinimumLevel:Default", "Information");
+            var logSinks = builder.Configuration.GetSection("Serilog:WriteTo").GetChildren()
+                .Select(s => s.GetValue<string>("Name"))
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToArray();
+
+            return Results.Json(new
+            {
+                global = globalSettings,
+                server = new
+                {
+                    host = builder.Configuration.GetValue<string>("Health:Host", "*"),
+                    port = builder.Configuration.GetValue<int>("Health:Port", 2455),
+                    cache_duration_seconds = builder.Configuration.GetValue<int>("Health:CacheDurationSeconds", 120)
+                },
+                logging = new { min_level = logMinLevel, sinks = logSinks }
+            });
+        });
+
+        app.MapGet("/ui/api/deadletters", async (int page = 1, int pageSize = 50, string? search = null, string? objectFilter = null) =>
+        {
+            if (!File.Exists("sinkhole.db"))
+                return Results.Json(new { total = 0, page = 1, page_size = pageSize, total_pages = 0, data = Array.Empty<object>() });
+
+            try
+            {
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=sinkhole.db");
+                await conn.OpenAsync();
+
+                var conditions = new List<string>();
+                if (!string.IsNullOrEmpty(search))
+                    conditions.Add("(TrackingObjectName LIKE @search OR ErrorMessage LIKE @search OR DatabaseName LIKE @search)");
+                if (!string.IsNullOrEmpty(objectFilter))
+                    conditions.Add("TrackingObjectName = @objectFilter");
+                var where = conditions.Count > 0 ? "WHERE " + string.Join(" AND ", conditions) : "";
+
+                var countCmd = conn.CreateCommand();
+                countCmd.CommandText = $"SELECT COUNT(*) FROM DeadLetters {where}";
+                if (!string.IsNullOrEmpty(search)) countCmd.Parameters.AddWithValue("@search", $"%{search}%");
+                if (!string.IsNullOrEmpty(objectFilter)) countCmd.Parameters.AddWithValue("@objectFilter", objectFilter);
+                var totalResult = await countCmd.ExecuteScalarAsync();
+                var total = (totalResult != null && totalResult != DBNull.Value) ? Convert.ToInt64(totalResult) : 0;
+
+                var offset = (page - 1) * pageSize;
+                var dataCmd = conn.CreateCommand();
+                dataCmd.CommandText = $@"
+                    SELECT Id, SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage, Timestamp
+                    FROM DeadLetters {where}
+                    ORDER BY Timestamp DESC
+                    LIMIT @pageSize OFFSET @offset";
+                if (!string.IsNullOrEmpty(search)) dataCmd.Parameters.AddWithValue("@search", $"%{search}%");
+                if (!string.IsNullOrEmpty(objectFilter)) dataCmd.Parameters.AddWithValue("@objectFilter", objectFilter);
+                dataCmd.Parameters.AddWithValue("@pageSize", pageSize);
+                dataCmd.Parameters.AddWithValue("@offset", offset);
+
+                var items = new List<object>();
+                using var reader = await dataCmd.ExecuteReaderAsync();
+                while (await reader.ReadAsync())
+                {
+                    items.Add(new
+                    {
+                        id = reader.GetInt64(0),
+                        source_key = reader.GetString(1),
+                        tracking_object_name = reader.GetString(2),
+                        database_name = reader.GetString(3),
+                        data_hash = reader.GetString(4),
+                        data = reader.GetString(5),
+                        error_message = reader.GetString(6),
+                        timestamp = reader.IsDBNull(7) ? null : reader.GetString(7)
+                    });
+                }
+
+                return Results.Json(new
+                {
+                    total,
+                    page,
+                    page_size = pageSize,
+                    total_pages = (int)Math.Ceiling((double)total / pageSize),
+                    data = items
+                });
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new { error = ex.Message, total = 0, page = 1, page_size = pageSize, total_pages = 0, data = Array.Empty<object>() });
+            }
+        });
+
+        app.MapGet("/ui/api/logs", async (int limit = 200, string? level = null) =>
+        {
+            var logDir = Path.Combine(AppContext.BaseDirectory, "log");
+            if (!Directory.Exists(logDir))
+                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>() });
+
+            var files = Directory.GetFiles(logDir, "log-*.txt")
+                .OrderByDescending(f => f)
+                .Take(3)
+                .ToList();
+
+            if (!files.Any())
+                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>() });
+
+            var logPattern = new System.Text.RegularExpressions.Regex(
+                @"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}) \[(\w{3})\] (.*)$");
+
+            var allEntries = new List<(string Timestamp, string Level, string Message)>();
+            string? lastFile = null;
+
+            foreach (var file in files)
+            {
+                try
+                {
+                    string content;
+                    using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var sr = new StreamReader(stream))
+                    {
+                        content = await sr.ReadToEndAsync();
+                    }
+
+                    var rawLines = content.Split('\n');
+                    string? ts = null, lvl = null;
+                    var msgParts = new List<string>();
+
+                    foreach (var rawLine in rawLines)
+                    {
+                        var m = logPattern.Match(rawLine);
+                        if (m.Success)
+                        {
+                            if (ts != null)
+                                allEntries.Add((ts, lvl ?? "INF", string.Join("\n", msgParts).TrimEnd()));
+                            ts = m.Groups[1].Value;
+                            lvl = m.Groups[2].Value.ToUpper();
+                            msgParts = new List<string> { m.Groups[3].Value };
+                        }
+                        else if (ts != null && !string.IsNullOrWhiteSpace(rawLine))
+                        {
+                            msgParts.Add(rawLine.TrimEnd());
+                        }
+                    }
+                    if (ts != null)
+                        allEntries.Add((ts, lvl ?? "INF", string.Join("\n", msgParts).TrimEnd()));
+
+                    lastFile = file;
+                    if (allEntries.Count >= limit * 5) break;
+                }
+                catch { /* skip if file is inaccessible */ }
+            }
+
+            allEntries.Reverse();
+
+            var filtered = string.IsNullOrEmpty(level) || level.Equals("ALL", StringComparison.OrdinalIgnoreCase)
+                ? allEntries
+                : allEntries.Where(e => e.Level.Equals(level, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var returned = filtered.Take(limit)
+                .Select(e => new { timestamp = e.Timestamp, level = e.Level, message = e.Message });
+
+            return Results.Json(new
+            {
+                file = lastFile != null ? Path.GetFileName(lastFile) : null,
+                total = filtered.Count,
+                lines = returned
+            });
+        });
+
+        // ── End Trignis UI ───────────────────────────────────────────────────────
+        }
+        else
+        {
+            var webUiUnavailable = Results.Json(new { status = "unavailable", reason = "Web UI is disabled (WebHost:Enabled is false)" }, statusCode: 503);
+            app.MapGet("/ui", () => webUiUnavailable);
+        }
+
+        // Root redirect / discovery
         app.MapGet("/", (HttpContext context) =>
         {
+            if (webHostEnabled)
+                return Results.Redirect("/ui");
+
             var baseUrl = $"{context.Request.Scheme}://{context.Request.Host}";
             var response = new
             {
@@ -279,6 +677,9 @@ try
             return Results.Json(response);
         });
 
+        if (healthEnabled)
+        {
+
         app.MapGet("/health", async (HealthCheckService healthService) =>
         {
             var health = await healthService.GetHealthStatusAsync();
@@ -294,12 +695,32 @@ try
         app.MapGet("/health/connections", (ConnectionHealthCheckService connHealth) =>
         {
             var status = connHealth.GetHealthStatus();
-            return Results.Json(status);
+            var result = status.Details.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new
+                {
+                    is_healthy = kvp.Value.IsHealthy,
+                    last_error = kvp.Value.IsHealthy
+                        ? null
+                        : kvp.Value.ConsecutiveFailures > 0
+                            ? $"{kvp.Value.ConsecutiveFailures} consecutive failure(s)"
+                            : "Unhealthy"
+                });
+            return Results.Json(result);
         });
 
         // State database endpoint showing tracking versions per environment
         app.MapGet("/health/state", async () =>
         {
+            // Build a lookup: envName -> objectName -> stored procedure
+            var spLookup = envConfigService.Environments
+                .ToDictionary(
+                    e => e.Name,
+                    e => e.ChangeTracking.TrackingObjects
+                        .ToDictionary(t => t.Name, t => t.StoredProcedureName ?? string.Empty,
+                            StringComparer.OrdinalIgnoreCase),
+                    StringComparer.OrdinalIgnoreCase);
+
             try
             {
                 var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
@@ -340,13 +761,17 @@ try
                     ";
                     objectCommand.Parameters.AddWithValue("@environmentName", envName);
 
+                    var envSpLookup = spLookup.TryGetValue(envName, out var envSps) ? envSps : null;
                     var objects = new List<object>();
                     using var objectReader = await objectCommand.ExecuteReaderAsync();
                     while (await objectReader.ReadAsync())
                     {
+                        var objName = objectReader.GetString(0);
+                        var sp = envSpLookup != null && envSpLookup.TryGetValue(objName, out var spName) ? spName : null;
                         objects.Add(new
                         {
-                            object_name = objectReader.GetString(0),
+                            object_name = objName,
+                            stored_procedure_name = sp,
                             last_version = objectReader.GetInt32(1),
                             last_updated = objectReader.GetDateTime(2).ToString("yyyy-MM-ddTHH:mm:ssZ")
                         });
@@ -443,6 +868,8 @@ try
                 });
             }
         });
+
+        } // end if (healthEnabled)
 
         // 404 handler for all other routes
         app.MapFallback((HttpContext context) =>

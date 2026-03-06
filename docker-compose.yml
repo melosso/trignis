@@ -6,6 +6,8 @@ services:
       - "2455:2455"
     environment:
       - TRIGNIS_ENCRYPTION_KEY=YourEncryptionKeyHere
+      - Trignis__AdminApiKey=${TRIGNIS_ADMIN_API_KEY}
+
     volumes:
       - ./environments:/app/environments
       - ./log:/app/log

@@ -35,8 +35,11 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly MessageQueueService _messageQueueService;
     private readonly OAuth2TokenService _oauth2TokenService;
     private readonly GlobalSettings _globalSettings;
-    private readonly List<EnvironmentConfig> _environments;
+    private readonly EnvironmentConfigService _configService;
     private readonly Dictionary<string, bool> _isProcessing = new();
+    private CancellationToken _globalStoppingToken;
+    private readonly Dictionary<string, (CancellationTokenSource Cts, Task Task)> _envTasks = new();
+    private readonly object _envTasksLock = new();
     private DateTime _lastPurgeTime = DateTime.MinValue;
 
     public ChangeTrackingBackgroundService(
@@ -47,7 +50,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
         IHostApplicationLifetime lifetime,
         DeadLetterService deadLetterService,
         MessageQueueService messageQueueService,
-        OAuth2TokenService oauth2TokenService)
+        OAuth2TokenService oauth2TokenService,
+        EnvironmentConfigService configService)
     {
         _logger = logger;
         _logger.LogDebug("ChangeTrackingBackgroundService constructor called");
@@ -58,6 +62,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         _deadLetterService = deadLetterService;
         _messageQueueService = messageQueueService;
         _oauth2TokenService = oauth2TokenService;
+        _configService = configService;
 
         var stateDbPath = _config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
         _stateConnectionString = $"Data Source={stateDbPath}";
@@ -65,16 +70,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
         var maxSizeMB = _config.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
         _maxExportDirectorySizeBytes = maxSizeMB * 1024L * 1024L;
 
-        // Load global settings
+        // Load global settings (appsettings.json — not hot-reloaded)
         _globalSettings = _config.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
-
-        // Load environments
-        _environments = _config.GetSection("ChangeTracking:Environments").Get<List<EnvironmentConfig>>() ?? new();
-        
-        foreach (var env in _environments)
-        {
-            _isProcessing[env.Name] = false;
-        }
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -206,6 +203,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogDebug("Application is running in ExecuteAsync");
+        _globalStoppingToken = stoppingToken;
 
         try
         {
@@ -218,11 +216,14 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 _lastPurgeTime = DateTime.UtcNow;
             }
 
-            // Create separate tasks for each environment
-            var environmentTasks = _environments.Select(env => 
-                ProcessEnvironmentAsync(env, stoppingToken)).ToArray();
+            // Start a task per environment and subscribe to hot-reload changes
+            foreach (var env in _configService.Environments)
+                StartEnvironmentTask(env, stoppingToken);
 
-            await Task.WhenAll(environmentTasks);
+            _configService.ConfigurationChanged += OnConfigurationChanged;
+
+            // Wait until shutdown is requested
+            await Task.Delay(Timeout.Infinite, stoppingToken);
         }
         catch (OperationCanceledException)
         {
@@ -233,8 +234,73 @@ public class ChangeTrackingBackgroundService : BackgroundService
             _logger.LogCritical(ex, "Fatal error in background service");
             _lifetime.StopApplication();
         }
+        finally
+        {
+            _configService.ConfigurationChanged -= OnConfigurationChanged;
+
+            // Cancel and await all per-environment tasks
+            List<Task> runningTasks;
+            lock (_envTasksLock)
+            {
+                foreach (var (cts, _) in _envTasks.Values) cts.Cancel();
+                runningTasks = [.. _envTasks.Values.Select(x => x.Task)];
+            }
+            try { await Task.WhenAll(runningTasks); } catch { }
+        }
 
         _logger.LogDebug("Background service execution completed");
+    }
+
+    private void OnConfigurationChanged(EnvironmentChangeEvent e)
+    {
+        foreach (var env in e.Removed)
+            StopEnvironmentTask(env.Name);
+        foreach (var env in e.Updated)
+            _ = RestartEnvironmentTaskAsync(env);
+        foreach (var env in e.Added)
+            StartEnvironmentTask(env, _globalStoppingToken);
+    }
+
+    private void StartEnvironmentTask(EnvironmentConfig env, CancellationToken stoppingToken)
+    {
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        var task = ProcessEnvironmentAsync(env, cts.Token);
+        lock (_envTasksLock)
+        {
+            _isProcessing[env.Name] = false;
+            _envTasks[env.Name] = (cts, task);
+        }
+    }
+
+    private void StopEnvironmentTask(string envName)
+    {
+        lock (_envTasksLock)
+        {
+            if (_envTasks.TryGetValue(envName, out var entry))
+            {
+                entry.Cts.Cancel();
+                _envTasks.Remove(envName);
+            }
+        }
+    }
+
+    private async Task RestartEnvironmentTaskAsync(EnvironmentConfig env)
+    {
+        Task? oldTask = null;
+        lock (_envTasksLock)
+        {
+            if (_envTasks.TryGetValue(env.Name, out var entry))
+            {
+                entry.Cts.Cancel();
+                oldTask = entry.Task;
+                _envTasks.Remove(env.Name);
+            }
+        }
+        if (oldTask != null)
+            try { await oldTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+
+        if (!_globalStoppingToken.IsCancellationRequested)
+            StartEnvironmentTask(env, _globalStoppingToken);
     }
 
     private async Task ProcessEnvironmentAsync(EnvironmentConfig environment, CancellationToken stoppingToken)
@@ -272,7 +338,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, $"[{environment.Name}] Error processing changes for object {trackingObject.Name}");
+                        _logger.LogError($"[{environment.Name}] Error processing changes for object {trackingObject.Name}: {ex.Message}");
                     }
                 }
 
@@ -323,7 +389,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 {
                     throw new OperationCanceledException();
                 }
-                _logger.LogWarning($"[{environment.Name}] Retry {attempt} after {timeSpan.TotalSeconds}s due to {exception.Message}");
+                _logger.LogWarning($"[{environment.Name}] Retry {attempt} of {retryCount} after {timeSpan.TotalSeconds}s due to {exception.Message}");
             });
     }
 
@@ -472,7 +538,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
                         stoppingToken.ThrowIfCancellationRequested();
 
-                        var maxVersion = data.EnumerateArray().Max(e => e.GetProperty("$version").GetInt32());
+                        var maxVersion = data.EnumerateArray()
+                            .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt32() : (int?)null)
+                            .Where(v => v.HasValue).Select(v => v!.Value)
+                            .DefaultIfEmpty(version).Max();
                         await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, maxVersion);
 
                         await ExportChangesAsync(environment, trackingObject, data, stoppingToken);
@@ -552,6 +621,11 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 await retryPolicy.ExecuteAsync(async () => await ExportToFileAsync(environment, trackingObject, data));
                 _logger.LogInformation($"[{environment.Name}]  {prefix} [FILE] Exported to: {filePath}");
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogDebug($"[{environment.Name}]  {prefix} File export cancelled due to shutdown");
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [FILE] Export FAILED: {ex.Message}");
@@ -623,6 +697,11 @@ public class ChangeTrackingBackgroundService : BackgroundService
                         var endpointName = endpoint.Key ?? "unnamed";
                         _logger.LogInformation($"[{environment.Name}]  {prefix} [HTTP] Exported to endpoint '{endpointName}': {endpoint.Url}");
                     }
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    _logger.LogDebug($"[{environment.Name}]  {prefix} Export cancelled due to shutdown");
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -860,6 +939,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
             }
 
             _logger.LogDebug("Exit: Background service stopped");
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Shutdown cancelled or timed out");
         }
         catch (Exception ex)
         {

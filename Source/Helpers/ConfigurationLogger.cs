@@ -26,12 +26,12 @@ public static class ConfigurationLogger
         Log.Information($"│  ├─ Default Polling Interval: {globalSettings.PollingIntervalSeconds}s");
         Log.Information($"│  ├─ Max Payload Size: {globalSettings.MaxPayloadSizeBytes / 1024 / 1024}MB");
         Log.Information($"│  ├─ Max Records Per Batch: {globalSettings.MaxRecordsPerBatch}");
-        Log.Information($"│  ├─ Payload Batching: {(globalSettings.EnablePayloadBatching ? "Enabled" : "DISABLED")}");
+        Log.Information($"│  ├─ Payload Batching: {(globalSettings.EnablePayloadBatching ? "Enabled" : "Disabled")}");
         Log.Information($"│  ├─ Retry Count: {globalSettings.RetryCount}");
         Log.Information($"│  ├─ Retry Delay: {globalSettings.RetryDelaySeconds}s");
         Log.Information($"│  ├─ Dead Letter Retention: {globalSettings.DeadletterRetentionDays} days");
-        Log.Information($"│  ├─ Dead Letter Monitor: {(globalSettings.DeadLetterMonitorEnabled ? $"{globalSettings.DeadLetterThreshold} messages / Every {globalSettings.DeadLetterCheckIntervalMinutes}min" : "DISABLED")}");
-        Log.Information($"│  └─ Connection Health Check: {(globalSettings.HealthCheckEnabled ? $"Every {globalSettings.HealthCheckIntervalMinutes}min" : "DISABLED")}");
+        Log.Information($"│  ├─ Dead Letter Monitor: {(globalSettings.DeadLetterMonitorEnabled ? $"{globalSettings.DeadLetterThreshold} messages / Every {globalSettings.DeadLetterCheckIntervalMinutes}min" : "Disabled")}");
+        Log.Information($"│  └─ Connection Health Check: {(globalSettings.HealthCheckEnabled ? $"Every {globalSettings.HealthCheckIntervalMinutes}min" : "Disabled")}");
         Log.Information("│");
 
         // Environments
@@ -57,8 +57,8 @@ public static class ConfigurationLogger
             
             Log.Information($"│  {envVertical}  ├─ Settings:");
             Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "*" : "")}");
-            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "Enabled" : "DISABLED")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
-            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "Enabled" : "DISABLED")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "Enabled" : "Disabled")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
+            Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "Enabled" : "Disabled")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
             
             // Connection Strings
             Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
@@ -153,22 +153,16 @@ public static class ConfigurationLogger
             }
         }
 
-        // Health Endpoint
+        // Health Endpoint / Web UI
         var healthEnabled = configuration.GetValue<bool>("Health:Enabled", false);
+        var webHostEnabled = configuration.GetValue<bool>("WebHost:Enabled", false);
         var healthPort = configuration.GetValue<int>("Health:Port", 2455);
         var healthHost = configuration.GetValue<string>("Health:Host", "*");
-        
-        Log.Information("│");
-        if (healthEnabled)
-        {
-            Log.Information($"└─ Health Endpoint:");
-            Log.Information($"   ├─ Status: Enabled");
-            Log.Information($"   └─ URL: http://{healthHost}:{healthPort}");
-        }
-        else
-        {
-            Log.Information($"└─ Health Endpoint: DISABLED");
-        }
+
+        Log.Information($"│");
+        Log.Information($"├─ Health Endpoint: {(healthEnabled ? $"http://{healthHost}:{healthPort}" : "Disabled")}");
+        Log.Information($"└─ Web UI: {(webHostEnabled ? $"http://{healthHost}:{healthPort}/ui" : "Disabled")}");
+
         
         Log.Information("");
     }
