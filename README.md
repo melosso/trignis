@@ -19,7 +19,7 @@ We've chosen to use a timed propagation mechanism due to various legacy applicat
 Designed for reliability and performance in Windows Server environments, with flexible change tracking, versatile exports, and robust security.
 
 * **Real-time change tracking** – Monitors SQL Server changes automatically.
-* **Flexible exports** – JSON, REST APIs, or message queues (RabbitMQ, Azure Service Bus, AWS SQS).
+* **Flexible exports** – JSON, REST APIs, or message queues (RabbitMQ, Azure Service Bus, AWS SQS, Azure Event Hubs, Apache Kafka).
 * **Multi-environment support** – Separate dev/staging/prod configurations and processing threads.
 * **Large payload handling** – Automatic batching for thousands of records.
 * **Secure & auditable** – Encrypted configs, detailed logging, and state persistence via SQLite.
@@ -57,7 +57,16 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/melosso/trignis/refs/heads
 
 Prefer the manual method? Use the [docker-compose.yml](docker-compose.yml) example file we have prepared.
 
-### 2. Configure Environments
+### 2. Prepare your Deployment
+
+If you're choosing to deploy the services on Windows, please make sure to prepare your environment: you'll need to safely store the application encryption key. On containerized environments, this can be done with the identically named `TRIGNIS_ENCRYPTION_KEY` variable.
+
+```powershell
+# Immediately stores the encryption key to your System Environment Variables
+$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); [Environment]::SetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", [Convert]::ToBase64String($bytes), "Machine")
+```
+
+### 3. Configure Environments
 
 Set up environment-specific configurations in the `environments/` folder. Each environment file is completely self-contained with its own connection strings, tracking objects, and API endpoints.
 
@@ -129,7 +138,7 @@ Each environment runs independently in its own thread, allowing different pollin
 > [!TIP] 
 > You can determine if you'd like to send all data (e.g. for propagation) or only the changed data. Switch the property `InitialSyncMode` between `"Full"` to send all existing data on first run, or `"Incremental"` (default) to start from the current change tracking version without sending data.
 
-### 3. Configure Global Settings
+### 4. Configure Global Settings
 
 Set application-wide defaults in `appsettings.json`:
 
@@ -153,7 +162,7 @@ Set application-wide defaults in `appsettings.json`:
 
 Environments can override these global settings as needed.
 
-### 4. Enable Change Tracking
+### 5. Enable Change Tracking
 
 Ensure change tracking is enabled on your SQL Server databases:
 
@@ -165,7 +174,7 @@ ALTER DATABASE YourDatabase SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS,
 ALTER TABLE dbo.YourTable ENABLE CHANGE TRACKING;
 ```
 
-### 5. Configure Stored Procedures
+### 6. Configure Stored Procedures
 
 To configure Trignis for data retrieval, you need to create a stored procedure that leverages SQL Server change tracking to fetch changes from your tables. This procedure should handle both full synchronization (when `fromVersion` is 0) and incremental changes (diff sync).
 
@@ -315,15 +324,6 @@ END
 
 Then, reference this procedure in your environment configuration under `StoredProcedureName`.
 
-### 6. Prepare your Deployment
-
-If you're choosing to deploy the services on Windows, please make sure to prepare your environment: you'll need to safely store the application encryption key. On containerized environments, this can be done with the identically named `TRIGNIS_ENCRYPTION_KEY` variable.
-
-```powershell
-# Immediately stores the encryption key to your System Environment Variables
-$bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); [Environment]::SetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", [Convert]::ToBase64String($bytes), "Machine")
-```
-
 ### 7. Deploy as Windows Service
 
 Before continuing, make sure you've set-up everything. On initial run, all secrets will be stored safely (meaning: they'll be hashed). For production deployment:
@@ -372,9 +372,9 @@ The change tracking mechanism (in the database) relies on a **consistent** JSON 
 
 Inconsistent or malformed JSON will cause processing failures. Ensure stored procedures adhere to this structure for reliable change detection and export. For column-level tracking, unchanged fields may be `null` in updates. In other words, prevent using the `INCLUDE_NULL_VALUES` when using column tracking.
 
-## Security & Encryption
+## Security
 
-### Configuration Encryption
+### Configuration
 
 Trignis automatically encrypts sensitive configuration data using RSA+AES hybrid encryption. Both the database connection strings and any API-security information are stored safely.
 
@@ -401,14 +401,19 @@ When exporting to APIs, configure authentication in your environment files:
 
 Supported auth types: `Bearer`, `Basic`, `ApiKey`, `OAuth2ClientCredentials`.
 
-## 📡 Usage Examples
+## Usage Examples
+
+We've collected some examples, to get an idea of what to expect.
+
+<details>
+<summary>Monitoring Changes</summary>
 
 ### Monitoring Changes
 
 Trignis automatically monitors configured tables and exports changes:
 
 ```json
-// Example exported change file
+// Example pf the output
 {
   "Metadata": {
     "Sync": {
@@ -429,6 +434,11 @@ Trignis automatically monitors configured tables and exports changes:
   ]
 }
 ```
+
+</details>
+<br>
+<details>
+<summary>API Export</summary>
 
 ### API Export
 
@@ -451,6 +461,11 @@ Configure webhook-style exports:
   }
 }
 ```
+
+</details>
+<br>
+<details>
+<summary>OAuth 2.0 Client Credentials</summary>
 
 ### OAuth 2.0 Client Credentials
 
@@ -478,17 +493,22 @@ Automatically manage token acquisition and renewal for OAuth-protected APIs:
 
 Trignis handles token caching and automatic refresh, in either case no manual intervention is needed unless you've reached the token expiry time window.
 
+</details>
+<br>
+<details>
+<summary>Message Queues</summary>
+
 ### Message Queues
 
 Trignis supports exporting database changes to message queues for asynchronous processing, event-driven architectures, and decoupled microservices.
 
 **Supported Platforms:**
 
-As of right now, we support three major platforms:
-
 - **RabbitMQ** (`RabbitMQ`): Direct queues or exchange-based routing
-- **Azure Service Bus** (`AzureServiceBus`): Queues and topics  
+- **Azure Service Bus** (`AzureServiceBus`): Queues and topics
 - **AWS SQS** (`AWSSQS`): Standard queues with IAM or explicit credentials
+- **Azure Event Hubs** (`AzureEventHubs`): Event streaming with connection string auth
+- **Apache Kafka** (`Kafka`): Topics with SASL/SSL or plaintext; compatible with Confluent Cloud and self-hosted brokers
 
 #### Quick Example (RabbitMQ)
 
@@ -528,18 +548,75 @@ As of right now, we support three major platforms:
 }
 ```
 
+#### Quick Example (Azure Event Hubs)
+
+```json
+{
+  "ChangeTracking": {
+    "ApiEndpoints": [
+      {
+        "Key": "azure_eventhubs",
+        "MessageQueueType": "AzureEventHubs",
+        "MessageQueue": {
+          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...",
+          "EventHubName": "change-tracking"
+        }
+      }
+    ]
+  }
+}
+```
+
+#### Quick Example (Kafka)
+
+```json
+{
+  "ChangeTracking": {
+    "ApiEndpoints": [
+      // SASL/SSL (Confluent Cloud, MSK, etc.)
+      {
+        "Key": "kafka_cloud",
+        "MessageQueueType": "Kafka",
+        "MessageQueue": {
+          "BootstrapServers": "kafka.example.com:9092",
+          "Topic": "db-change-tracking",
+          "Username": "api-key",
+          "Password": "api-secret",
+          "SecurityProtocol": "SASL_SSL",
+          "SaslMechanism": "PLAIN"
+        }
+      },
+      // No auth (local/dev)
+      {
+        "Key": "kafka_local",
+        "MessageQueueType": "Kafka",
+        "MessageQueue": {
+          "BootstrapServers": "localhost:9092",
+          "Topic": "trignis-changes"
+        }
+      }
+    ]
+  }
+}
+```
+
 **Key Features:**
 
 We've baked in a variety of features:
 
 - Automatic message compression for payloads > 1KB
 - Circuit breaker protection (opens after 3 failures, 1-minute recovery)
-- Connection pooling and automatic reconnection (RabbitMQ)
+- Connection pooling and automatic reconnection (RabbitMQ, Kafka)
 - Dead letter queue for failed messages
 - Health check endpoints for monitoring
 
 > [!TIP]
 > For complete documentation, configuration examples, and troubleshooting guides, see our [Wiki: About Message Queues](https://github.com/melosso/trignis/wiki/Guide:-Message-Queues).
+
+</details>
+<br>
+<details>
+<summary>Custom Headers & Compression</summary>
 
 ### Custom Headers & Compression
 
@@ -574,6 +651,11 @@ The configuration allows usage of variable substitution in headers:
 
 Compression uses gzip encoding and can significantly reduce payload sizes for large change sets, though the recipient must support gzip decompression (which most modern servers do, but is not guaranteed).
 
+</details>
+<br>
+<details>
+<summary>Large Payload Batching</summary>
+
 ### Large Payload Batching
 
 When `InitialSyncMode: "Full"` returns thousands of records, Trignis automatically splits them into batches:
@@ -595,7 +677,11 @@ Each batch includes headers for tracking:
 
 Your API should buffer batches and process the complete dataset when all batches are received.
 
-## ⚡ Risks
+</details>
+
+<br>
+
+## Risks
 
 Using change tracking may slow database writes (for the tables that have this feature enabled) by approximately 5-10% because it tracks every single change. The tracking tables keep growing and need regular cleanup (see: [Compatibility](#-compatibility)) 
 
@@ -621,6 +707,9 @@ For more details, refer to [About Change Tracking (SQL Server)](https://learn.mi
 
 We've implemented both logging and a separate health mechanism.
 
+<details>
+<summary>Logging</summary>
+
 #### Logging
 
 Trignis provides comprehensive logging with environment prefixes:
@@ -633,6 +722,11 @@ Trignis provides comprehensive logging with environment prefixes:
 
 > [!TIP]
 > If the application isn't starting, consider changing value `UseEventLog` in the `appsettings.json` configuration file to true. To prevent your Windows Event Viewer from bloating, make sure to disable when you're done troubleshooting.
+
+</details>
+<br>
+<details>
+<summary>Monitoring</summary>
 
 #### Monitoring
 
@@ -704,6 +798,9 @@ The state endpoint shows tracking versions per environment:
   ]
 }
 ```
+</details>
+
+<br>
 
 ## Lore
 

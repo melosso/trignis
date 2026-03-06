@@ -47,12 +47,12 @@ foreach ($pattern in $filesToRemove) {
 }
 
 # Create Environments folder structure in deployment
-$envDir = "$deploymentDir\Environments"
+$envDir = "$deploymentDir\environments"
 New-Item -Path $envDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
 
 # Copy environment config files if they exist
-if (Test-Path "$sourceDir\Environments") {
-    Copy-Item -Path "$sourceDir\Environments\*" -Destination $envDir -Recurse -Force
+if (Test-Path "$sourceDir\environments") {
+    Copy-Item -Path "$sourceDir\environments\*" -Destination $envDir -Recurse -Force
     Write-Host "Environment configuration files copied." -ForegroundColor Green
 }
 
@@ -82,26 +82,6 @@ if (Test-Path $licensePath) {
 $sourceFilePath = Join-Path $licenseDir "source.txt"
 "https://github.com/melosso/trignis" | Set-Content -Path $sourceFilePath -Encoding UTF8
 Write-Host "Created source file at $sourceFilePath" -ForegroundColor Green
-
-# Generate and include third-party package licenses
-Write-Host "Collecting package licenses..." -ForegroundColor Cyan
-$packageLicenseDir = Join-Path $licenseDir "packages"
-$projectPath = Join-Path $sourceDir "Trignis.csproj"
-New-Item -Path $packageLicenseDir -ItemType Directory -Force | Out-Null
-
-try {
-    dotnet tool run dotnet-project-licenses --input $projectPath --export-license-texts --output-directory $packageLicenseDir
-
-    $licenseCount = (Get-ChildItem $packageLicenseDir -File).Count
-    if ($licenseCount -gt 0) {
-        Write-Host "Collected $licenseCount package licenses into $packageLicenseDir" -ForegroundColor Green
-    } else {
-        Write-Host "No package licenses were generated." -ForegroundColor Yellow
-    }
-}
-catch {
-    Write-Host "Failed to collect package licenses: $($_.Exception.Message)" -ForegroundColor Red
-}
 
 # Create service management batch file
 Write-Host "Creating service management batch file..." -ForegroundColor Cyan

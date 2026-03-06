@@ -250,8 +250,14 @@ public static class ConfigurationValidator
                 case "awssqs":
                     ValidateAwsSqsConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
                     break;
+                case "azureeventhubs":
+                    ValidateAzureEventHubsConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
+                    break;
+                case "kafka":
+                    ValidateKafkaConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
+                    break;
                 default:
-                    errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported MessageQueueType '{endpoint.MessageQueueType}'. Valid types: RabbitMQ, AzureServiceBus, AWSSQS");
+                    errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported MessageQueueType '{endpoint.MessageQueueType}'. Valid types: RabbitMQ, AzureServiceBus, AWSSQS, AzureEventHubs, Kafka");
                     break;
             }
         }
@@ -344,6 +350,45 @@ public static class ConfigurationValidator
         if (!hasAccessKey && !hasSecretKey)
         {
             warnings.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no explicit credentials. Will use default AWS credential chain");
+        }
+    }
+
+    private static void ValidateAzureEventHubsConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(config.ConnectionString))
+        {
+            errors.Add($"Environment '{envName}': Azure Event Hubs endpoint '{endpointName}' has no ConnectionString specified");
+        }
+
+        if (string.IsNullOrWhiteSpace(config.EventHubName))
+        {
+            errors.Add($"Environment '{envName}': Azure Event Hubs endpoint '{endpointName}' has no EventHubName specified");
+        }
+    }
+
+    private static void ValidateKafkaConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(config.BootstrapServers))
+        {
+            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no BootstrapServers specified");
+        }
+
+        if (string.IsNullOrWhiteSpace(config.Topic))
+        {
+            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no Topic specified");
+        }
+
+        var hasUsername = !string.IsNullOrWhiteSpace(config.Username);
+        var hasPassword = !string.IsNullOrWhiteSpace(config.Password);
+
+        if (hasUsername != hasPassword)
+        {
+            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has incomplete credentials. Both Username and Password must be provided, or neither");
+        }
+
+        if (!hasUsername && !hasPassword)
+        {
+            warnings.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no credentials. Connecting without authentication (PLAINTEXT)");
         }
     }
 
