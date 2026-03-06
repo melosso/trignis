@@ -52,4 +52,13 @@ public class MessageQueueConfig
     public string? Region { get; set; }
     public string? AccessKeyId { get; set; }
     public string? SecretAccessKey { get; set; }
+
+    // Azure Event Hubs (reuses ConnectionString)
+    public string? EventHubName { get; set; }
+
+    // Kafka
+    public string? BootstrapServers { get; set; }
+    public string? Topic { get; set; }
+    public string? SecurityProtocol { get; set; }  // PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
+    public string? SaslMechanism { get; set; }      // PLAIN, SCRAM-SHA-256, SCRAM-SHA-512
 }

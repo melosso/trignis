@@ -6,8 +6,11 @@ using Microsoft.Extensions.Logging;
 using Trignis.MicrosoftSQL.Models;
 using RabbitMQ.Client;
 using Azure.Messaging.ServiceBus;
+using Azure.Messaging.EventHubs;
+using Azure.Messaging.EventHubs.Producer;
 using Amazon.SQS;
 using Amazon.SQS.Model;
+using Confluent.Kafka;
 using Polly;
 using Polly.CircuitBreaker;
 using System.Collections.Concurrent;
@@ -23,13 +26,16 @@ public class MessageQueueService : IDisposable
 {
     private readonly ILogger<MessageQueueService> _logger;
     private readonly ConcurrentDictionary<string, IConnection> _rabbitConnections = new();
+    private readonly ConcurrentDictionary<string, IProducer<Null, string>> _kafkaProducers = new();
     private readonly ConcurrentDictionary<string, AsyncCircuitBreakerPolicy> _circuitBreakers = new();
     private readonly DeadLetterQueueMonitor _dlqMonitor;
-    
+
     // Message size limits
     private const int RABBITMQ_MAX_SIZE = 128 * 1024 * 1024; // 128MB
     private const int AZURE_SB_STANDARD_MAX = 256 * 1024; // 256KB
     private const int AWS_SQS_MAX_SIZE = 256 * 1024; // 256KB
+    private const int AZURE_EH_MAX_SIZE = 1 * 1024 * 1024; // 1MB
+    private const int KAFKA_DEFAULT_MAX_SIZE = 1 * 1024 * 1024; // 1MB (Kafka server default)
     private const int BATCH_SIZE = 10; // For SQS batching
     private const int COMPRESSION_THRESHOLD = 1024; // Compress messages > 1KB
 
@@ -87,6 +93,14 @@ public class MessageQueueService : IDisposable
                             ValidateMessageSize(messageSizeBytes, AWS_SQS_MAX_SIZE, "AWS SQS");
                         }
                         await SendToAwsSqsAsync(endpoint.MessageQueue, messageBody, correlationId, messageSizeBytes > COMPRESSION_THRESHOLD, ct);
+                        break;
+                    case "azureeventhubs":
+                        ValidateMessageSize(messageSizeBytes, AZURE_EH_MAX_SIZE, "Azure Event Hubs");
+                        await SendToAzureEventHubsAsync(endpoint.MessageQueue, messageBody, correlationId, ct);
+                        break;
+                    case "kafka":
+                        ValidateMessageSize(messageSizeBytes, KAFKA_DEFAULT_MAX_SIZE, "Kafka");
+                        await SendToKafkaAsync(endpoint.MessageQueue, messageBody, correlationId, ct);
                         break;
                     default:
                         throw new InvalidOperationException($"Unsupported message queue type: {endpoint.MessageQueueType}");
@@ -481,6 +495,141 @@ public class MessageQueueService : IDisposable
         }
     }
 
+    private async Task SendToAzureEventHubsAsync(MessageQueueConfig config, string message, string correlationId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(config.ConnectionString))
+        {
+            throw new InvalidOperationException("Azure Event Hubs ConnectionString is required");
+        }
+        if (string.IsNullOrEmpty(config.EventHubName))
+        {
+            throw new InvalidOperationException("Azure Event Hubs EventHubName is required");
+        }
+
+        await using var producer = new EventHubProducerClient(config.ConnectionString, config.EventHubName);
+
+        try
+        {
+            using var batch = await producer.CreateBatchAsync(cancellationToken);
+
+            var eventData = new EventData(Encoding.UTF8.GetBytes(message));
+            eventData.Properties["CorrelationId"] = correlationId;
+            eventData.Properties["Source"] = "trignis-change-tracking";
+            eventData.ContentType = "application/json";
+
+            if (!batch.TryAdd(eventData))
+            {
+                throw new InvalidOperationException(
+                    "Message too large for Azure Event Hubs batch. Consider splitting the payload.");
+            }
+
+            await producer.SendAsync(batch, cancellationToken);
+
+            _logger.LogDebug("Sent to Azure Event Hubs '{EventHub}' (CorrelationId: {CorrelationId})",
+                config.EventHubName, correlationId);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Azure Event Hubs send cancelled (CorrelationId: {CorrelationId})", correlationId);
+            throw;
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException)
+        {
+            _logger.LogError(ex, "Failed to send to Azure Event Hubs '{EventHub}' (CorrelationId: {CorrelationId})",
+                config.EventHubName, correlationId);
+            throw new InvalidOperationException($"Azure Event Hubs publish failed: {ex.Message}", ex);
+        }
+    }
+
+    private async Task SendToKafkaAsync(MessageQueueConfig config, string message, string correlationId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(config.BootstrapServers))
+        {
+            throw new InvalidOperationException("Kafka BootstrapServers is required");
+        }
+        if (string.IsNullOrEmpty(config.Topic))
+        {
+            throw new InvalidOperationException("Kafka Topic is required");
+        }
+
+        var producerKey = $"{config.BootstrapServers}:{config.Topic}:{config.Username}";
+
+        var producer = _kafkaProducers.GetOrAdd(producerKey, _ =>
+        {
+            var producerConfig = new ProducerConfig
+            {
+                BootstrapServers = config.BootstrapServers,
+                MessageTimeoutMs = 30000,
+                Acks = Acks.All
+            };
+
+            if (!string.IsNullOrEmpty(config.Username) && !string.IsNullOrEmpty(config.Password))
+            {
+                producerConfig.SaslMechanism = config.SaslMechanism?.ToUpper() switch
+                {
+                    "SCRAM-SHA-256" => SaslMechanism.ScramSha256,
+                    "SCRAM-SHA-512" => SaslMechanism.ScramSha512,
+                    _ => SaslMechanism.Plain
+                };
+                producerConfig.SecurityProtocol = config.SecurityProtocol?.ToUpper() switch
+                {
+                    "SSL" => Confluent.Kafka.SecurityProtocol.Ssl,
+                    "SASL_PLAINTEXT" => Confluent.Kafka.SecurityProtocol.SaslPlaintext,
+                    _ => Confluent.Kafka.SecurityProtocol.SaslSsl
+                };
+                producerConfig.SaslUsername = config.Username;
+                producerConfig.SaslPassword = config.Password;
+            }
+            else if (config.SecurityProtocol?.Equals("SSL", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                producerConfig.SecurityProtocol = Confluent.Kafka.SecurityProtocol.Ssl;
+            }
+
+            _logger.LogDebug("Created Kafka producer for '{BootstrapServers}'", config.BootstrapServers);
+            return new ProducerBuilder<Null, string>(producerConfig).Build();
+        });
+
+        try
+        {
+            var kafkaMessage = new Message<Null, string>
+            {
+                Value = message,
+                Headers = new Confluent.Kafka.Headers
+                {
+                    { "content-type", Encoding.UTF8.GetBytes("application/json") },
+                    { "correlation-id", Encoding.UTF8.GetBytes(correlationId) },
+                    { "source", Encoding.UTF8.GetBytes("trignis-change-tracking") }
+                }
+            };
+
+            var result = await producer.ProduceAsync(config.Topic, kafkaMessage, cancellationToken);
+
+            _logger.LogDebug("Sent to Kafka topic '{Topic}' partition {Partition} offset {Offset} (CorrelationId: {CorrelationId})",
+                config.Topic, result.Partition.Value, result.Offset.Value, correlationId);
+        }
+        catch (ProduceException<Null, string> ex)
+        {
+            _logger.LogError(ex, "Failed to send to Kafka topic '{Topic}' (CorrelationId: {CorrelationId})",
+                config.Topic, correlationId);
+            _kafkaProducers.TryRemove(producerKey, out _);
+            producer.Dispose();
+            throw new InvalidOperationException($"Kafka publish failed: {ex.Error.Reason}", ex);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Kafka send cancelled (CorrelationId: {CorrelationId})", correlationId);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send to Kafka topic '{Topic}' (CorrelationId: {CorrelationId})",
+                config.Topic, correlationId);
+            _kafkaProducers.TryRemove(producerKey, out _);
+            producer.Dispose();
+            throw new InvalidOperationException($"Kafka publish failed: {ex.Message}", ex);
+        }
+    }
+
     public void Dispose()
     {
         foreach (var kvp in _rabbitConnections)
@@ -499,5 +648,19 @@ public class MessageQueueService : IDisposable
             }
         }
         _rabbitConnections.Clear();
+
+        foreach (var kvp in _kafkaProducers)
+        {
+            try
+            {
+                kvp.Value.Flush(TimeSpan.FromSeconds(5));
+                kvp.Value.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error disposing Kafka producer");
+            }
+        }
+        _kafkaProducers.Clear();
     }
 }

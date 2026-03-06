@@ -121,6 +121,34 @@
         }
       },
       {
+        "Key": "azure_eventhubs",
+        "MessageQueueType": "AzureEventHubs",
+        "MessageQueue": {
+          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...",
+          "EventHubName": "change-tracking"
+        }
+      },
+      {
+        "Key": "kafka_sasl",
+        "MessageQueueType": "Kafka",
+        "MessageQueue": {
+          "BootstrapServers": "kafka.example.com:9092",
+          "Topic": "db-change-tracking",
+          "Username": "trignis",
+          "Password": "PWENC:...",
+          "SecurityProtocol": "SASL_SSL",
+          "SaslMechanism": "PLAIN"
+        }
+      },
+      {
+        "Key": "kafka_plaintext",
+        "MessageQueueType": "Kafka",
+        "MessageQueue": {
+          "BootstrapServers": "localhost:9092",
+          "Topic": "trignis-changes"
+        }
+      },
+      {
         "Key": "compressed_webhook",
         "Url": "https://api.example.com/data/changes",
         "Auth": {

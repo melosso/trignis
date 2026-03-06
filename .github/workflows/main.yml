@@ -11,6 +11,10 @@ on:
 jobs:
   create-release:
     runs-on: ubuntu-latest
+    env:
+      PROJECT_PATH: Source
+      PUBLISH_WIN: Deployment-Windows
+      PUBLISH_LIN: Deployment-Linux
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -30,44 +34,56 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -a "${{ github.event.inputs.tag_name }}" -m "Release ${{ github.event.inputs.tag_name }}"
         git push origin "${{ github.event.inputs.tag_name }}"
-    - name: Publish application
+    - name: Publish Windows (win-x64)
       run: |
-        # Clear deployment directory
-        rm -rf Deployment/*
-        # Clean the project
-        dotnet clean Source -c Release
-        # Publish self-contained version
-        dotnet publish Source -c Release -r win-x64 -p:PublishSingleFile=true -o Deployment
-        # Create exports folder structure
-        mkdir -p Deployment/exports
-        # Remove unnecessary files
-        rm -f Deployment/*.pdb Deployment/*.xml Deployment/*.deps.json Deployment/*.dev.json Deployment/*.example Deployment/Trignis.staticwebassets.endpoints.json Deployment/web.config
-        # Create Environments folder structure
-        mkdir -p Deployment/Environments
-        # Copy environment config files
-        cp -r Source/Environments/* Deployment/Environments/ || true
-        # Copy SQL folder
-        cp -r Source/SQL Deployment/sql || true
-        # Create logs folder
-        mkdir -p Deployment/log
-        # Copy LICENSE and create license directory structure
-        mkdir -p Deployment/license
-        cp LICENSE Deployment/license/license.txt || true
-        # Create source file
-        echo "https://github.com/melosso/trignis" > Deployment/license/source.txt
-        # Generate and include third-party package licenses
-        echo "Collecting package licenses..."
-        mkdir -p Deployment/license/packages
-        dotnet-project-licenses --input Source/Trignis.csproj --export-license-texts --output-directory Deployment/license/packages || echo "Warning: Failed to collect package licenses"
-        # Create service management batch file
-        cat > Deployment/TrignisBackgroundService.bat << 'EOF'
+        dotnet publish ${{ env.PROJECT_PATH }} \
+          -c Release \
+          -r win-x64 \
+          --self-contained false \
+          -p:PublishSingleFile=true \
+          -p:DebugType=None \
+          -p:DebugSymbols=false \
+          --framework net9.0 \
+          -o ${{ env.PUBLISH_WIN }}
+    - name: Publish Linux (linux-x64)
+      run: |
+        dotnet publish ${{ env.PROJECT_PATH }} \
+          -c Release \
+          -r linux-x64 \
+          --self-contained false \
+          -p:PublishSingleFile=true \
+          -p:DebugType=None \
+          -p:DebugSymbols=false \
+          --framework net9.0 \
+          -o ${{ env.PUBLISH_LIN }}
+    - name: Prepare deployment structure
+      run: |
+        for DIR in "${{ env.PUBLISH_WIN }}" "${{ env.PUBLISH_LIN }}"; do
+          # Remove unnecessary files
+          rm -f "$DIR"/*.pdb "$DIR"/*.xml "$DIR"/*.deps.json "$DIR"/*.dev.json "$DIR"/*.example \
+                "$DIR/Trignis.staticwebassets.endpoints.json" "$DIR/web.config"
+          # Create folder structure
+          mkdir -p "$DIR/exports" "$DIR/Environments" "$DIR/log" "$DIR/license/packages"
+          # Copy files
+          cp -r Source/Environments/* "$DIR/Environments/" || true
+          cp -r Source/SQL "$DIR/sql" || true
+          cp LICENSE "$DIR/license/license.txt" || true
+          echo "https://github.com/melosso/trignis" > "$DIR/license/source.txt"
+          # Generate package licenses
+          dotnet-project-licenses --input Source/Trignis.csproj --export-license-texts \
+            --output-directory "$DIR/license/packages" \
+            || echo "Warning: Failed to collect package licenses"
+        done
+    - name: Create Windows service batch file
+      run: |
+        cat > ${{ env.PUBLISH_WIN }}/TrignisBackgroundService.bat << 'EOF'
         @echo off
         setlocal enabledelayedexpansion
-        
+
         set SERVICE_NAME=TrignisAgent
         set DISPLAY_NAME=Trignis Agent - SQL Change Monitor
         set EXE_PATH=%~dp0Trignis.exe
-        
+
         if "%1"=="" (
             echo Usage: %0 {install^|start^|stop^|status^|uninstall^|test}
             echo.
@@ -80,7 +96,7 @@ jobs:
             echo   test      - Run in console mode for testing
             goto :eof
         )
-        
+
         if /i "%1"=="install" (
             echo Installing "%SERVICE_NAME%"...
             sc create "%SERVICE_NAME%" binPath= "\"%~dp0Trignis.exe\"" start= auto displayname= "%DISPLAY_NAME%"
@@ -92,7 +108,7 @@ jobs:
             )
             goto :eof
         )
-        
+
         if /i "%1"=="start" (
             echo Starting "%SERVICE_NAME%"...
             sc start "%SERVICE_NAME%"
@@ -103,7 +119,7 @@ jobs:
             )
             goto :eof
         )
-        
+
         if /i "%1"=="stop" (
             echo Stopping "%SERVICE_NAME%"...
             sc stop "%SERVICE_NAME%"
@@ -114,7 +130,7 @@ jobs:
             )
             goto :eof
         )
-        
+
         if /i "%1"=="status" (
             echo Querying "%SERVICE_NAME%" status...
             sc query "%SERVICE_NAME%"
@@ -126,7 +142,7 @@ jobs:
             )
             goto :eof
         )
-        
+
         if /i "%1"=="uninstall" (
             echo Stopping and uninstalling "%SERVICE_NAME%"...
             sc stop "%SERVICE_NAME%" >nul 2>&1
@@ -139,7 +155,7 @@ jobs:
             )
             goto :eof
         )
-        
+
         if /i "%1"=="test" (
             echo Testing Trignis in console mode...
             echo Press Ctrl+C to stop
@@ -147,35 +163,42 @@ jobs:
             "%~dp0Trignis.exe"
             goto :eof
         )
-        
+
         echo Invalid command: %1
         echo Use '%0' without arguments for help.
         goto :eof
         EOF
-        # Create README
-        cat > Deployment/README.txt << 'EOF'
+    - name: Create README files
+      run: |
+        for DIR in "${{ env.PUBLISH_WIN }}" "${{ env.PUBLISH_LIN }}"; do
+          cat > "$DIR/README.txt" << 'EOF'
         TRIGNIS SERVICE DEPLOYMENT
         ==========================
-        
+
         TESTING
         -------
-        1. Run 'TrignisBackgroundService.bat test' to test the application in console mode
+        1. Run 'TrignisBackgroundService.bat test' (Windows) or './Trignis' (Linux) to test in console mode
         2. Check logs in the 'log' folder
         3. Press Ctrl+C to stop the console test
-        
+
         SERVICE INSTALLATION
         --------------------
+        Windows:
         1. Run 'TrignisBackgroundService.bat install' as Administrator
         2. Run 'TrignisBackgroundService.bat start' to start the service
         3. Run 'TrignisBackgroundService.bat status' to check if it's running
-        
-        SERVICE MANAGEMENT
+
+        Linux (systemd):
+        1. Copy Trignis to /usr/local/bin/trignis
+        2. Create a systemd unit file and enable it
+
+        SERVICE MANAGEMENT (Windows)
         ------------------
         - Start: TrignisBackgroundService.bat start
         - Stop: TrignisBackgroundService.bat stop
         - Status: TrignisBackgroundService.bat status
         - Uninstall: TrignisBackgroundService.bat uninstall
-        
+
         TROUBLESHOOTING
         ---------------
         If the service fails to start:
@@ -183,20 +206,22 @@ jobs:
         2. Run 'TrignisBackgroundService.bat status' to see service status
         3. Check Windows Event Viewer > Application logs (if enabled)
         4. Test in console mode first using 'TrignisBackgroundService.bat test'
-        
+
         CONFIGURATION
         -------------
         Edit configuration files in the 'Environments' folder
         Default environment: Production
         EOF
-    - name: Create version file and zip Deployment folder
+        done
+    - name: Create version files and zip
       run: |
-        # Create version file inside the Deployment folder
-        echo "${{ github.event.inputs.tag_name }}" > Deployment/.version.txt
-        echo "Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> Deployment/.version.txt
-        echo "Commit: ${{ github.sha }}" >> Deployment/.version.txt
-        # Zip the Deployment folder
-        zip -r "${{ github.event.inputs.tag_name }}-Deployment.zip" Deployment
+        for PLATFORM in Windows Linux; do
+          DIR="Deployment-$PLATFORM"
+          echo "${{ github.event.inputs.tag_name }}" > "$DIR/.version.txt"
+          echo "Built: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$DIR/.version.txt"
+          echo "Commit: ${{ github.sha }}" >> "$DIR/.version.txt"
+          zip -r "${{ github.event.inputs.tag_name }}-Deployment-$PLATFORM.zip" "$DIR"
+        done
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
@@ -206,10 +231,11 @@ jobs:
         prerelease: false
         generate_release_notes: true
         files: |
-          ${{ github.event.inputs.tag_name }}-Deployment.zip
+          ${{ github.event.inputs.tag_name }}-Deployment-Windows.zip
+          ${{ github.event.inputs.tag_name }}-Deployment-Linux.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     - name: Deploy to target environment
       run: |
         echo "Deploying version ${{ github.event.inputs.tag_name }}"
-        unzip -o "${{ github.event.inputs.tag_name }}-Deployment.zip"
+        unzip -o "${{ github.event.inputs.tag_name }}-Deployment-Windows.zip"
