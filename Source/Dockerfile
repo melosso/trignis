@@ -4,13 +4,12 @@
 FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
-# Copy solution and project files first to leverage layer caching
-COPY trignis.sln ./
+# Copy project file first to leverage layer caching
 COPY Source/*.csproj ./Source/
 
 # Restore dependencies (use BuildKit cache for NuGet packages)
 RUN --mount=type=cache,id=nuget,target=/root/.nuget/packages \
-	dotnet restore ./trignis.sln
+	dotnet restore ./Source/Trignis.csproj
 
 # Copy the remaining source files
 COPY . .
