@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="/css/site.css" rel="stylesheet" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body>
 
@@ -150,15 +151,13 @@
           <table>
             <thead>
               <tr>
-                <th>Environment</th>
                 <th>Object</th>
-                <th>Stored Procedure</th>
-                <th>Last Version</th>
-                <th>Last Updated</th>
+                <th>Version</th>
+                <th>Last Sync</th>
               </tr>
             </thead>
             <tbody id="syncBody">
-              <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+              <tr><td colspan="3" class="empty-state">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -233,26 +232,44 @@ async function loadConnections() {
   }
 }
 
+function reltime(iso) {
+  if (!iso) return '—';
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60)    return 'just now';
+  if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 async function loadSyncState() {
   const body = document.getElementById('syncBody');
   try {
     const d = await fetch('/health/state').then(r => r.json());
     const envs = d.environments ?? [];
-    document.getElementById('syncCount').textContent = `${envs.length} environment${envs.length !== 1 ? 's' : ''}`;
-    const rows = envs.flatMap(env =>
-      (env.objects ?? []).map(obj => `<tr>
-        <td><span class="badge badge-muted">${esc(env.name)}</span></td>
+    const totalObjs = envs.reduce((n, e) => n + (e.objects?.length ?? 0), 0);
+    document.getElementById('syncCount').textContent =
+      `${envs.length} environment${envs.length !== 1 ? 's' : ''} · ${totalObjs} object${totalObjs !== 1 ? 's' : ''}`;
+
+    const rows = envs.flatMap(env => {
+      const objs = env.objects ?? [];
+      const header = `<tr class="sync-env-row">
+        <td colspan="3"><span class="badge badge-muted">${esc(env.name)}</span>
+          <span class="muted" style="font-size:0.75rem;margin-left:0.5rem">${objs.length} object${objs.length !== 1 ? 's' : ''}</span>
+        </td>
+      </tr>`;
+      const objRows = objs.map(obj => `<tr>
         <td>${esc(obj.object_name)}</td>
-        <td class="col-mono" style="font-size:0.75rem">${esc(obj.stored_procedure_name ?? '—')}</td>
-        <td class="col-mono">${obj.last_version}</td>
-        <td class="col-mono">${esc(obj.last_updated ?? '—')}</td>
-      </tr>`)
-    );
+        <td class="col-mono">${obj.last_version ?? '—'}</td>
+        <td class="col-mono" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
+      </tr>`);
+      return [header, ...objRows];
+    });
+
     body.innerHTML = rows.length
       ? rows.join('')
-      : '<tr><td colspan="5" class="empty-state">No objects tracked yet</td></tr>';
+      : '<tr><td colspan="3" class="empty-state">No objects tracked yet</td></tr>';
   } catch(e) {
-    body.innerHTML = '<tr><td colspan="5" class="empty-state muted">Sync state unavailable</td></tr>';
+    body.innerHTML = '<tr><td colspan="3" class="empty-state muted">Sync state unavailable</td></tr>';
   }
 }
 

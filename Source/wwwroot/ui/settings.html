@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="/css/site.css" rel="stylesheet" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body>
 
@@ -161,14 +162,14 @@ async function load() {
     const log = d.logging ?? {};
 
     document.getElementById('globalSettingsBody').innerHTML = [
-      settingItem('Polling Interval', g.pollingIntervalSeconds != null ? `${g.pollingIntervalSeconds}s` : '—'),
-      boolItem('Export to File', g.exportToFile),
-      boolItem('Export to API', g.exportToApi),
-      settingItem('Retry Count', g.retryCount ?? '—'),
-      settingItem('Retry Delay', g.retryDelaySeconds != null ? `${g.retryDelaySeconds}s` : '—'),
-      boolItem('Payload Batching', g.enablePayloadBatching),
-      settingItem('Max Records / Batch', g.maxRecordsPerBatch ?? '—'),
-      settingItem('Max Payload Size', g.maxPayloadSizeBytes != null ? `${Math.round(g.maxPayloadSizeBytes / 1024 / 1024)}MB` : '—'),
+      settingItem('Polling Interval', g.PollingIntervalSeconds != null ? `${g.PollingIntervalSeconds}s` : '—'),
+      boolItem('Export to File', g.ExportToFile),
+      boolItem('Export to API', g.ExportToApi),
+      settingItem('Retry Count', g.RetryCount ?? '—'),
+      settingItem('Retry Delay', g.RetryDelaySeconds != null ? `${g.RetryDelaySeconds}s` : '—'),
+      boolItem('Payload Batching', g.EnablePayloadBatching),
+      settingItem('Max Records / Batch', g.MaxRecordsPerBatch ?? '—'),
+      settingItem('Max Payload Size', g.MaxPayloadSizeBytes != null ? `${Math.round(g.MaxPayloadSizeBytes / 1024 / 1024)}MB` : '—'),
     ].join('');
 
     document.getElementById('serverBody').innerHTML = [
@@ -178,10 +179,10 @@ async function load() {
     ].join('');
 
     document.getElementById('dlqBody').innerHTML = [
-      settingItem('Retention', g.deadletterRetentionDays != null ? `${g.deadletterRetentionDays} days` : '—'),
-      boolItem('Monitor', g.deadLetterMonitorEnabled),
-      settingItem('Threshold', g.deadLetterThreshold ?? '—'),
-      settingItem('Check Interval', g.deadLetterCheckIntervalMinutes != null ? `${g.deadLetterCheckIntervalMinutes}min` : '—'),
+      settingItem('Retention', g.DeadletterRetentionDays != null ? `${g.DeadletterRetentionDays} days` : '—'),
+      boolItem('Monitor', g.DeadLetterMonitorEnabled),
+      settingItem('Threshold', g.DeadLetterThreshold ?? '—'),
+      settingItem('Check Interval', g.DeadLetterCheckIntervalMinutes != null ? `${g.DeadLetterCheckIntervalMinutes}min` : '—'),
     ].join('');
 
     document.getElementById('loggingBody').innerHTML = [
@@ -198,6 +199,10 @@ async function load() {
 }
 
 load();
+fetch('/ui/api/overview').then(r => r.json()).then(d => {
+  const v = (d.version ?? '').split('+')[0];
+  document.getElementById('sidebarVersion').textContent = v ? `v${v}` : '';
+}).catch(() => {});
 
 function logout() {
   fetch('/ui/api/auth/logout', { method: 'POST', credentials: 'include' })
