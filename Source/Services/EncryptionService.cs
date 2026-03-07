@@ -374,7 +374,7 @@ namespace Trignis.MicrosoftSQL.Services
                             // Encrypt ConnectionStrings
                             if (jsonObject.TryGetPropertyValue("ConnectionStrings", out csNode) && csNode is JsonObject csObj)
                             {
-                                foreach (var prop in csObj)
+                                foreach (var prop in csObj.ToList())
                                 {
                                     if (prop.Value is JsonValue jv && jv.TryGetValue(out string? val) && val != null && !IsEncrypted(val))
                                     {

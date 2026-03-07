@@ -570,19 +570,19 @@ try
             }
         });
 
-        app.MapGet("/ui/api/logs", async (int limit = 200, string? level = null) =>
+        app.MapGet("/ui/api/logs", async (int limit = 200, int offset = 0, string? level = null) =>
         {
             var logDir = Path.Combine(AppContext.BaseDirectory, "log");
             if (!Directory.Exists(logDir))
-                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>() });
+                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>(), has_more = false });
 
             var files = Directory.GetFiles(logDir, "log-*.txt")
-                .OrderByDescending(f => f)
+                .OrderByDescending(f => new FileInfo(f).LastWriteTime)
                 .Take(3)
                 .ToList();
 
             if (!files.Any())
-                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>() });
+                return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>(), has_more = false });
 
             var logPattern = new System.Text.RegularExpressions.Regex(
                 @"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} [+-]\d{2}:\d{2}) \[(\w{3})\] (.*)$");
@@ -624,25 +624,30 @@ try
                     if (ts != null)
                         allEntries.Add((ts, lvl ?? "INF", string.Join("\n", msgParts).TrimEnd()));
 
-                    lastFile = file;
+                    lastFile ??= file;
                     if (allEntries.Count >= limit * 5) break;
                 }
                 catch { /* skip if file is inaccessible */ }
             }
 
-            allEntries.Reverse();
+            // Newest first — sort by timestamp string (ISO-like format is lexicographically comparable)
+            allEntries.Sort((a, b) => string.CompareOrdinal(b.Timestamp, a.Timestamp));
 
             var filtered = string.IsNullOrEmpty(level) || level.Equals("ALL", StringComparison.OrdinalIgnoreCase)
                 ? allEntries
                 : allEntries.Where(e => e.Level.Equals(level, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            var returned = filtered.Take(limit)
+            var hasMore = offset + limit < filtered.Count;
+            var paged = filtered.Skip(offset).Take(limit).ToList();
+
+            var returned = paged
                 .Select(e => new { timestamp = e.Timestamp, level = e.Level, message = e.Message });
 
             return Results.Json(new
             {
                 file = lastFile != null ? Path.GetFileName(lastFile) : null,
                 total = filtered.Count,
+                has_more = hasMore,
                 lines = returned
             });
         });

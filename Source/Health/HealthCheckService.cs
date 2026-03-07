@@ -123,12 +123,13 @@ public class HealthCheckService
 
             try
             {
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
                 using var conn = new SqlConnection(connString);
-                await conn.OpenAsync();
+                await conn.OpenAsync(cts.Token);
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 cmd.CommandTimeout = 5;
-                await cmd.ExecuteScalarAsync();
+                await cmd.ExecuteScalarAsync(cts.Token);
                 successCount++;
             }
             catch (Exception ex)

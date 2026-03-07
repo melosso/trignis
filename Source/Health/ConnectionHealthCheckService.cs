@@ -49,8 +49,8 @@ public class ConnectionHealthCheckService : BackgroundService
 
         _logger.LogDebug("Connection health check service started (Interval: {Interval}min)", _checkIntervalMinutes);
 
-        // Initial check after 30 seconds
-        await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+        // Initial check after 10 seconds (short enough to populate the dashboard on first load)
+        await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -76,58 +76,86 @@ public class ConnectionHealthCheckService : BackgroundService
         _logger.LogDebug("Starting connection health checks...");
 
         var environments = _envConfigService.Environments;
-        var apiEndpoints = environments.SelectMany(e => e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()).ToArray();
-        
-        foreach (var endpoint in apiEndpoints)
+
+        // Check SQL Server connections (one per unique connection string key per environment)
+        var sqlChecks = environments
+            .SelectMany(e => e.ConnectionStrings.Select(cs => (
+                Key: $"sql:{e.Name}/{cs.Key}",
+                ConnectionString: cs.Value)))
+            .ToArray();
+
+        foreach (var (key, connStr) in sqlChecks)
         {
-            if (string.IsNullOrEmpty(endpoint.MessageQueueType))
-            {
-                continue; // Skip HTTP endpoints
-            }
-
-            var key = $"{endpoint.MessageQueueType}:{endpoint.Key ?? "unnamed"}";
-
             try
             {
-                var isHealthy = await CheckMessageQueueHealthAsync(endpoint);
-                var previousHealth = _healthStatus.GetOrAdd(key, new ConnectionHealth { IsHealthy = true });
-
-                if (isHealthy && !previousHealth.IsHealthy)
-                {
-                    // Recovered
-                    _logger.LogInformation("Connection recovered: {Key} (was down for {Duration})", 
-                        key, DateTime.UtcNow - previousHealth.LastFailureTime);
-                    previousHealth.IsHealthy = true;
-                    previousHealth.ConsecutiveFailures = 0;
-                }
-                else if (!isHealthy && previousHealth.IsHealthy)
-                {
-                    // First failure
-                    _logger.LogWarning("Connection failed: {Key}", key);
-                    previousHealth.IsHealthy = false;
-                    previousHealth.LastFailureTime = DateTime.UtcNow;
-                    previousHealth.ConsecutiveFailures = 1;
-                }
-                else if (!isHealthy)
-                {
-                    // Continued failure
-                    previousHealth.ConsecutiveFailures++;
-                    var duration = DateTime.UtcNow - previousHealth.LastFailureTime;
-                    
-                    if (previousHealth.ConsecutiveFailures % 4 == 0) // Alert every hour (15min * 4)
-                    {
-                        _logger.LogError("Connection still down: {Key} ({Failures} consecutive failures, down for {Duration})", 
-                            key, previousHealth.ConsecutiveFailures, duration);
-                    }
-                }
+                var isHealthy = await CheckSqlHealthAsync(connStr);
+                UpdateHealth(key, isHealthy);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error checking health for {Key}", key);
+                _logger.LogWarning("SQL connection check failed for {Key}: {Message}", key, ex.GetBaseException().Message);
+                UpdateHealth(key, false); // register as unhealthy so it appears in the dashboard
             }
         }
 
-        _logger.LogDebug("Connection health checks completed");
+        // Check message queue endpoints
+        var mqEndpoints = environments
+            .SelectMany(e => e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>())
+            .Where(e => !string.IsNullOrEmpty(e.MessageQueueType))
+            .ToArray();
+
+        foreach (var endpoint in mqEndpoints)
+        {
+            var key = $"{endpoint.MessageQueueType}:{endpoint.Key ?? "unnamed"}";
+            try
+            {
+                var isHealthy = await CheckMessageQueueHealthAsync(endpoint);
+                UpdateHealth(key, isHealthy);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "MQ connection check failed for {Key}", key);
+                UpdateHealth(key, false);
+            }
+        }
+
+        _logger.LogDebug("Connection health checks completed ({Sql} SQL, {Mq} MQ)",
+            sqlChecks.Length, mqEndpoints.Length);
+    }
+
+    private void UpdateHealth(string key, bool isHealthy)
+    {
+        var previous = _healthStatus.GetOrAdd(key, new ConnectionHealth { IsHealthy = true });
+
+        if (isHealthy && !previous.IsHealthy)
+        {
+            _logger.LogInformation("Connection recovered: {Key} (was down for {Duration})",
+                key, DateTime.UtcNow - previous.LastFailureTime);
+            previous.IsHealthy = true;
+            previous.ConsecutiveFailures = 0;
+        }
+        else if (!isHealthy && previous.IsHealthy)
+        {
+            _logger.LogWarning("Connection failed: {Key}", key);
+            previous.IsHealthy = false;
+            previous.LastFailureTime = DateTime.UtcNow;
+            previous.ConsecutiveFailures = 1;
+        }
+        else if (!isHealthy)
+        {
+            previous.ConsecutiveFailures++;
+            if (previous.ConsecutiveFailures % 4 == 0)
+                _logger.LogError("Connection still down: {Key} ({Failures} consecutive failures, down for {Duration})",
+                    key, previous.ConsecutiveFailures, DateTime.UtcNow - previous.LastFailureTime);
+        }
+    }
+
+    private static async Task<bool> CheckSqlHealthAsync(string connectionString)
+    {
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
+        await conn.OpenAsync(cts.Token);
+        return conn.State == System.Data.ConnectionState.Open;
     }
 
     private async Task<bool> CheckMessageQueueHealthAsync(ApiEndpoint endpoint)
