@@ -24,8 +24,7 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: |
-          7.0.x
-          9.0.x
+          10.0.x
     - name: Install dotnet-project-licenses tool
       run: dotnet tool install -g dotnet-project-licenses
     - name: Create and push tag
@@ -43,7 +42,7 @@ jobs:
           -p:PublishSingleFile=true \
           -p:DebugType=None \
           -p:DebugSymbols=false \
-          --framework net9.0 \
+          --framework net10.0 \
           -o ${{ env.PUBLISH_WIN }}
     - name: Publish Linux (linux-x64)
       run: |
@@ -54,7 +53,7 @@ jobs:
           -p:PublishSingleFile=true \
           -p:DebugType=None \
           -p:DebugSymbols=false \
-          --framework net9.0 \
+          --framework net10.0 \
           -o ${{ env.PUBLISH_LIN }}
     - name: Prepare deployment structure
       run: |
