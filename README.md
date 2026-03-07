@@ -4,9 +4,9 @@
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
 [![Latest Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
 
-**Trignis** is a high-performance change tracking service for SQL Server databases. It monitors database changes in real-time, processes them efficiently, and exports data to either files - or external API's.
+**Trignis** is a high-performance change tracking service for SQL Server databases. It monitors database changes in real-time, processes them efficiently, and exports data to either files or external web API's.
 
-Useful for data synchronization, audit trails, ETL processes, and integration scenarios where you need to track and propagate database changes reliably.
+Useful for data synchronization, audit trails, ETL processes, and application integration scenarios where you need to track and propagate database changes reliably.
 
 A quick example of Trignis in action:
 
@@ -26,14 +26,16 @@ Designed for reliability and performance in Windows Server environments, with fl
 * **Service-ready** – Runs as a Windows service with configurable polling, retries, and file cleanup.
 * **Health monitoring** – Built-in endpoints for service status, state, and dead-letter tracking.
 
+After installation, you can access the web interface at **[http://localhost:2455](http://localhost:2455)**.
+
 ## Requirements
 
 Before deploying **Trignis**, ensure your environment meets the following requirements:
 
-- [.NET 9+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
-- **SQL Server** with *Change Tracking* enabled (we'll walk you through this later)
-- **Windows Server** (for hosting the background service)
-- **Database and filesystem access** for configuration and logging
+- [.NET 10+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
+- **Microsoft SQL Server** with *Change Tracking* enabled (we'll walk you through this later)
+
+The required database and filesystem access is essentiial for this ofcourse.
 
 ## Getting Started
 
