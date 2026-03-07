@@ -15,6 +15,7 @@ using Trignis.MicrosoftSQL.Models;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text;
+using System.Reflection;
 using Microsoft.AspNetCore.Http;
 
 Environment.CurrentDirectory = AppContext.BaseDirectory;
@@ -412,7 +413,7 @@ try
 
             return Results.Json(new
             {
-                version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+                version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0",
                 environment_count = envConfigService.Environments.Count,
                 tracking_object_count = envConfigService.Environments.Sum(e => e.ChangeTracking.TrackingObjects.Length),
                 endpoint_count = envConfigService.Environments.Sum(e => e.ChangeTracking.ApiEndpoints.Length),
@@ -664,7 +665,7 @@ try
             var response = new
             {
                 service = "trignis-service",
-                version = typeof(Program).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+                version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0",
                 endpoints = new
                 {
                     health_url = $"{baseUrl}/health",

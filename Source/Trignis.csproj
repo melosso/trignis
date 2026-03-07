@@ -4,8 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Trignis.MicrosoftSQL</RootNamespace>
     <SatelliteResourceLanguages>en-US;en</SatelliteResourceLanguages>
-    <Version>1.3.0</Version>
     <Nullable>enable</Nullable>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
 
     <!-- Assembly Information -->
     <AssemblyTitle>Trignis</AssemblyTitle>
@@ -24,6 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.0.0" PrivateAssets="All" IncludeAssets="runtime;build;native;contentfiles;analyzers" />
     <PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="4.0.3.23" />
     <PackageReference Include="AWSSDK.SQS" Version="4.0.2.15" />
     <PackageReference Include="Azure.Messaging.EventHubs" Version="5.12.2" />

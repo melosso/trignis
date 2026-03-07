@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,7 +33,7 @@ public class HealthCheckService
         _config = config;
         _envConfigService = envConfigService;
         _startTime = DateTime.UtcNow;
-        _version = typeof(HealthCheckService).Assembly.GetName().Version?.ToString() ?? "0.0.0";
+        _version = (typeof(HealthCheckService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0").Split('+')[0];
         _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
     }
 
@@ -132,7 +133,7 @@ public class HealthCheckService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, $"Health check failed for database '{dbName}'");
+                _logger.LogWarning("Health check failed for database '{Database}': {Message}", dbName, ex.GetBaseException().Message);
                 failCount++;
             }
         }

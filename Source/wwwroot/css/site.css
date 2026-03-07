@@ -825,6 +825,13 @@ select:focus { border-color: hsl(var(--primary)); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.sidebar-footer-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0.25rem 0 0;
+}
+
 .btn-logout {
     border: 1px solid hsl(var(--border));
     background: transparent;
@@ -835,15 +842,51 @@ select:focus { border-color: hsl(var(--primary)); }
     cursor: pointer;
     font-size: 0.8rem;
     font-family: inherit;
-    text-align: left;
+    text-align: center;
     width: 100%;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 0.5rem;
     transition: background 0.15s, color 0.15s;
 }
 
 .btn-logout:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+
+.github-link {
+    display: flex;
+    padding: 0.45rem;
+    border-radius: var(--radius);
+    color: hsl(var(--muted-foreground));
+    border: 1px solid transparent;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.github-link:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); border-color: hsl(var(--border)); }
+
+/* ── Tooltips ────────────────────────────────────────────── */
+
+.tooltip-wrapper { position: relative; display: inline-flex; }
+
+.tooltip {
+    position: absolute;
+    background: hsl(var(--foreground));
+    color: hsl(var(--background));
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.3rem 0.6rem;
+    border-radius: var(--radius);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 100;
+}
+
+.tooltip-wrapper:hover .tooltip { opacity: 1; }
+
+.tooltip-above { bottom: calc(100% + 6px); }
+.tooltip-right { right: 0; }
 
 /* ── Misc ────────────────────────────────────────────────── */
 
