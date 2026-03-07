@@ -27,7 +27,7 @@ Describe the expected behavior
 - [ ] Windows Server
 - [ ] Docker
 
-**Portway version:** X.X.X
+**Application version:** X.X.X
 
 **Operating system:** ...
 
