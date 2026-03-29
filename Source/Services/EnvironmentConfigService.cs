@@ -155,33 +155,37 @@ public class EnvironmentConfigService : IDisposable
                 .AddEncryptedJsonFile(relativePath, _encryptionService, optional: true)
                 .Build();
 
-            var envConfig = new EnvironmentConfig
-            {
-                Name = name,
-                ConnectionStrings = [],
-                ChangeTracking = new EnvironmentChangeTracking()
-            };
-
+            var connectionStrings = new Dictionary<string, string>();
             foreach (var cs in cfg.GetSection("ConnectionStrings").GetChildren())
                 if (!string.IsNullOrEmpty(cs.Value))
-                    envConfig.ConnectionStrings[cs.Key] = cs.Value;
+                    connectionStrings[cs.Key] = cs.Value;
 
             var ct = cfg.GetSection("ChangeTracking");
 
-            var trackingObjects = ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? [];
-            foreach (var obj in trackingObjects) obj.EnvironmentFile = name;
-            envConfig.ChangeTracking.TrackingObjects = trackingObjects;
+            var trackingObjects = (ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? [])
+                .Select(obj => obj with { EnvironmentFile = name })
+                .ToArray();
 
-            var apiEndpoints = ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? [];
-            foreach (var ep in apiEndpoints) ep.EnvironmentFile = name;
-            envConfig.ChangeTracking.ApiEndpoints = apiEndpoints;
+            var apiEndpoints = (ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? [])
+                .Select(ep => ep with { EnvironmentFile = name })
+                .ToArray();
 
-            envConfig.ChangeTracking.PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds");
-            envConfig.ChangeTracking.ExportToFile = ct.GetValue<bool?>("ExportToFile");
-            envConfig.ChangeTracking.FilePath = ct.GetValue<string?>("FilePath");
-            envConfig.ChangeTracking.ExportToApi = ct.GetValue<bool?>("ExportToApi");
-            envConfig.ChangeTracking.RetryCount = ct.GetValue<int?>("RetryCount");
-            envConfig.ChangeTracking.RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds");
+            var envConfig = new EnvironmentConfig
+            {
+                Name = name,
+                ConnectionStrings = connectionStrings,
+                ChangeTracking = new EnvironmentChangeTracking
+                {
+                    TrackingObjects = trackingObjects,
+                    ApiEndpoints = apiEndpoints,
+                    PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds"),
+                    ExportToFile = ct.GetValue<bool?>("ExportToFile"),
+                    FilePath = ct.GetValue<string?>("FilePath"),
+                    ExportToApi = ct.GetValue<bool?>("ExportToApi"),
+                    RetryCount = ct.GetValue<int?>("RetryCount"),
+                    RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds")
+                }
+            };
 
             return envConfig;
         }

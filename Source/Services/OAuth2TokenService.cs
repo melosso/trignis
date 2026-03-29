@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Trignis.MicrosoftSQL.Models;
@@ -22,7 +23,7 @@ public class OAuth2TokenService
         _httpClientFactory = httpClientFactory;
     }
 
-    public async Task<string> GetAccessTokenAsync(ApiAuth auth, string cacheKey)
+    public async Task<string> GetAccessTokenAsync(ApiAuth auth, string cacheKey, CancellationToken cancellationToken = default)
     {
         if (auth == null)
         {
@@ -37,7 +38,7 @@ public class OAuth2TokenService
         }
 
         // Get new token
-        var token = await RequestAccessTokenAsync(auth);
+        var token = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
         var expiresIn = auth.TokenExpirationSeconds ?? 3600; // Default 1 hour
         var expiration = DateTime.UtcNow.AddSeconds(expiresIn - 60); // Refresh 1 minute early
 
@@ -47,7 +48,7 @@ public class OAuth2TokenService
         return token;
     }
 
-    private async Task<string> RequestAccessTokenAsync(ApiAuth auth)
+    private async Task<string> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(auth.TokenEndpoint))
         {
@@ -71,10 +72,10 @@ public class OAuth2TokenService
             })
         };
 
-        var response = await client.SendAsync(request);
+        var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>();
+        var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken: cancellationToken).ConfigureAwait(false);
         if (tokenResponse == null || string.IsNullOrEmpty(tokenResponse.AccessToken))
         {
             throw new InvalidOperationException("Failed to obtain access token from OAuth2 endpoint");

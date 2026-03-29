@@ -1,11 +1,11 @@
 namespace Trignis.MicrosoftSQL.Models;
 
-public class TrackingObject
+public record class TrackingObject
 {
-    public required string Name { get; set; }
-    public required string Database { get; set; }
-    public required string TableName { get; set; }
-    public required string StoredProcedureName { get; set; }
-    public string? EnvironmentFile { get; set; }
-    public string InitialSyncMode { get; set; } = "Incremental";
+    public required string Name { get; init; }
+    public required string Database { get; init; }
+    public required string TableName { get; init; }
+    public required string StoredProcedureName { get; init; }
+    public string? EnvironmentFile { get; init; }
+    public string InitialSyncMode { get; init; } = "Incremental";
 }

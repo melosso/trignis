@@ -37,10 +37,10 @@ public class HealthCheckService
         _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
     }
 
-    public async Task<string> GetHealthStatusAsync()
+    public async Task<string> GetHealthStatusAsync(CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow;
-        
+
         // Check if we have a valid cached response
         if (_cachedResponse != null && (now - _lastCheckTime).TotalSeconds < _cacheDurationSeconds)
         {
@@ -48,7 +48,7 @@ public class HealthCheckService
         }
 
         // Use semaphore to prevent multiple simultaneous health checks
-        await _semaphore.WaitAsync();
+        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             // Double-check after acquiring lock
@@ -62,7 +62,7 @@ public class HealthCheckService
             var timestamp = now.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
             // Check database connectivity
-            var (dbStatus, dbResponseTime) = await CheckDatabaseHealthAsync();
+            var (dbStatus, dbResponseTime) = await CheckDatabaseHealthAsync(cancellationToken).ConfigureAwait(false);
 
             var healthResponse = new
             {
@@ -92,13 +92,13 @@ public class HealthCheckService
         }
     }
 
-    private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync()
+    private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync(CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
-        
+
         var environments = _envConfigService.Environments;
         var trackingObjects = environments.SelectMany(e => e.ChangeTracking.TrackingObjects ?? Array.Empty<TrackingObject>()).ToArray();
-        
+
         if (trackingObjects.Length == 0)
         {
             sw.Stop();
@@ -114,7 +114,7 @@ public class HealthCheckService
             var connString = environments
                 .SelectMany(e => e.ConnectionStrings)
                 .FirstOrDefault(cs => cs.Key == dbName).Value;
-                
+
             if (string.IsNullOrEmpty(connString))
             {
                 failCount++;
@@ -123,13 +123,14 @@ public class HealthCheckService
 
             try
             {
-                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(5));
                 using var conn = new SqlConnection(connString);
-                await conn.OpenAsync(cts.Token);
+                await conn.OpenAsync(cts.Token).ConfigureAwait(false);
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 cmd.CommandTimeout = 5;
-                await cmd.ExecuteScalarAsync(cts.Token);
+                await cmd.ExecuteScalarAsync(cts.Token).ConfigureAwait(false);
                 successCount++;
             }
             catch (Exception ex)
