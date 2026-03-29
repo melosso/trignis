@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -22,7 +23,7 @@ public class EnvironmentConfigService : IDisposable
     private readonly ILogger<EnvironmentConfigService> _logger;
     private readonly EncryptionService _encryptionService;
 
-    private volatile List<EnvironmentConfig> _environments = [];
+    private ImmutableList<EnvironmentConfig> _environments = ImmutableList<EnvironmentConfig>.Empty;
     private readonly object _lock = new();
 
     private string _envDir = "environments";
@@ -46,7 +47,7 @@ public class EnvironmentConfigService : IDisposable
     {
         _envDir = envDir;
         _selectedEnvironment = selectedEnvironment;
-        lock (_lock) { _environments = environments; }
+        lock (_lock) { _environments = ImmutableList.CreateRange(environments); }
     }
 
     public void StartWatching()
@@ -86,7 +87,7 @@ public class EnvironmentConfigService : IDisposable
         {
             removed = _environments.Where(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
             if (removed.Count == 0) return;
-            _environments = [.. _environments.Where(x => !x.Name.Equals(name, StringComparison.OrdinalIgnoreCase))];
+            _environments = _environments.RemoveAll(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         }
 
         _logger.LogInformation("Environment '{Name}' removed (file deleted)", name);
@@ -120,12 +121,12 @@ public class EnvironmentConfigService : IDisposable
             var existing = _environments.FirstOrDefault(x => x.Name.Equals(newEnv.Name, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
-                _environments = [.. _environments.Select(x => x.Name.Equals(newEnv.Name, StringComparison.OrdinalIgnoreCase) ? newEnv : x)];
+                _environments = _environments.SetItem(_environments.IndexOf(existing), newEnv);
                 updated.Add(newEnv);
             }
             else
             {
-                _environments = [.. _environments, newEnv];
+                _environments = _environments.Add(newEnv);
                 added.Add(newEnv);
             }
         }

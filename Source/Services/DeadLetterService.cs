@@ -60,35 +60,47 @@ public class DeadLetterService
         using var conn = new SqliteConnection(_sinkholeConnectionString);
         await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-        // Check if this exact message was already saved
-        var checkCommand = conn.CreateCommand();
-        checkCommand.CommandText = "SELECT COUNT(*) FROM DeadLetters WHERE SourceKey = @sourceKey AND DataHash = @dataHash";
-        checkCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
-        checkCommand.Parameters.AddWithValue("@dataHash", dataHash);
-        var result = await checkCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        var count = (result != null && result != DBNull.Value) ? Convert.ToInt64(result) : 0;
-
-        if (count > 0)
+        using var tx = conn.BeginTransaction();
+        try
         {
-            _logger.LogDebug($"Dead letter already exists for {sourceKey} with hash {dataHash}, skipping duplicate");
-            return;
+            // Check if this exact message was already saved
+            var checkCommand = conn.CreateCommand();
+            checkCommand.Transaction = tx;
+            checkCommand.CommandText = "SELECT COUNT(*) FROM DeadLetters WHERE SourceKey = @sourceKey AND DataHash = @dataHash";
+            checkCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
+            checkCommand.Parameters.AddWithValue("@dataHash", dataHash);
+            var result = await checkCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            var count = (result != null && result != DBNull.Value) ? Convert.ToInt64(result) : 0;
+
+            if (count > 0)
+            {
+                _logger.LogDebug($"Dead letter already exists for {sourceKey} with hash {dataHash}, skipping duplicate");
+                return;
+            }
+
+            // Insert new dead letter
+            var insertCommand = conn.CreateCommand();
+            insertCommand.Transaction = tx;
+            insertCommand.CommandText = @"
+                INSERT INTO DeadLetters (SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage)
+                VALUES (@sourceKey, @trackingObjectName, @databaseName, @dataHash, @data, @errorMessage)
+            ";
+            insertCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
+            insertCommand.Parameters.AddWithValue("@trackingObjectName", trackingObjectName);
+            insertCommand.Parameters.AddWithValue("@databaseName", databaseName);
+            insertCommand.Parameters.AddWithValue("@dataHash", dataHash);
+            insertCommand.Parameters.AddWithValue("@data", dataJson);
+            insertCommand.Parameters.AddWithValue("@errorMessage", exception.Message);
+
+            await insertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogWarning($"Saved dead letter for {trackingObjectName} ({databaseName}): {exception.Message}");
         }
-
-        // Insert new dead letter
-        var insertCommand = conn.CreateCommand();
-        insertCommand.CommandText = @"
-            INSERT INTO DeadLetters (SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage)
-            VALUES (@sourceKey, @trackingObjectName, @databaseName, @dataHash, @data, @errorMessage)
-        ";
-        insertCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
-        insertCommand.Parameters.AddWithValue("@trackingObjectName", trackingObjectName);
-        insertCommand.Parameters.AddWithValue("@databaseName", databaseName);
-        insertCommand.Parameters.AddWithValue("@dataHash", dataHash);
-        insertCommand.Parameters.AddWithValue("@data", dataJson);
-        insertCommand.Parameters.AddWithValue("@errorMessage", exception.Message);
-
-        await insertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        _logger.LogWarning($"Saved dead letter for {trackingObjectName} ({databaseName}): {exception.Message}");
+        catch
+        {
+            await tx.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task PurgeOldDeadLettersAsync(CancellationToken cancellationToken = default)

@@ -509,6 +509,9 @@ try
             {
                 using var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=sinkhole.db");
                 await conn.OpenAsync();
+                var pragmaCmd = conn.CreateCommand();
+                pragmaCmd.CommandText = "PRAGMA busy_timeout = 3000;";
+                await pragmaCmd.ExecuteNonQueryAsync();
 
                 var conditions = new List<string>();
                 if (!string.IsNullOrEmpty(search))

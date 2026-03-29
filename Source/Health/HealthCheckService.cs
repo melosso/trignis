@@ -20,8 +20,8 @@ public class HealthCheckService
     private readonly DateTime _startTime;
     private readonly string _version;
     private readonly int _cacheDurationSeconds;
-    private string? _cachedResponse;
-    private DateTime _lastCheckTime = DateTime.MinValue;
+    private volatile string? _cachedResponse;
+    private long _lastCheckTimeTicks = DateTime.MinValue.Ticks;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     public HealthCheckService(
@@ -41,8 +41,8 @@ public class HealthCheckService
     {
         var now = DateTime.UtcNow;
 
-        // Check if we have a valid cached response
-        if (_cachedResponse != null && (now - _lastCheckTime).TotalSeconds < _cacheDurationSeconds)
+        // Check if we have a valid cached response (outer fast path — no lock)
+        if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
         {
             return _cachedResponse;
         }
@@ -51,8 +51,9 @@ public class HealthCheckService
         await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Double-check after acquiring lock
-            if (_cachedResponse != null && (now - _lastCheckTime).TotalSeconds < _cacheDurationSeconds)
+            // Double-check after acquiring lock; re-read now so the staleness check is accurate
+            now = DateTime.UtcNow;
+            if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
             {
                 return _cachedResponse;
             }
@@ -82,7 +83,7 @@ public class HealthCheckService
             };
 
             _cachedResponse = JsonSerializer.Serialize(healthResponse, new JsonSerializerOptions { WriteIndented = true });
-            _lastCheckTime = now;
+            Interlocked.Exchange(ref _lastCheckTimeTicks, now.Ticks);
 
             return _cachedResponse;
         }

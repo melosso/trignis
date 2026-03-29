@@ -16,6 +16,7 @@ public class OAuth2TokenService
     private readonly ILogger<OAuth2TokenService> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ConcurrentDictionary<string, TokenCacheEntry> _tokenCache = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _refreshLocks = new();
 
     public OAuth2TokenService(ILogger<OAuth2TokenService> logger, IHttpClientFactory httpClientFactory)
     {
@@ -30,25 +31,32 @@ public class OAuth2TokenService
             throw new ArgumentNullException(nameof(auth));
         }
 
-        // Check cache first
+        // Fast path: check cache before acquiring semaphore
         if (_tokenCache.TryGetValue(cacheKey, out var cachedToken) && !cachedToken.IsExpired)
         {
             _logger.LogDebug($"Using cached OAuth2 token for {cacheKey}");
             return cachedToken.AccessToken;
         }
 
-        // Get new token
-        var token = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
-        var expiresIn = auth.TokenExpirationSeconds ?? 3600; // Default 1 hour
-        var expiration = DateTime.UtcNow.AddSeconds(expiresIn - 60); // Refresh 1 minute early
+        // Per-key semaphore prevents thundering-herd on token expiry
+        var sem = _refreshLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Re-check inside the lock (double-checked locking)
+            if (_tokenCache.TryGetValue(cacheKey, out var fresh) && !fresh.IsExpired)
+                return fresh.AccessToken;
 
-        _tokenCache[cacheKey] = new TokenCacheEntry(token, expiration);
-        _logger.LogInformation($"Obtained new OAuth2 token for {cacheKey}, expires at {expiration}");
-
-        return token;
+            var token = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
+            var expiration = DateTime.UtcNow.AddSeconds(auth.TokenExpirationSeconds ?? 3600).AddMinutes(-1);
+            _tokenCache[cacheKey] = new TokenCacheEntry(token, expiration);
+            _logger.LogInformation($"Obtained new OAuth2 token for {cacheKey}, expires at {expiration}");
+            return token;
+        }
+        finally { sem.Release(); }
     }
 
-    private async Task<string> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken = default)
+    private async Task<string> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(auth.TokenEndpoint))
         {

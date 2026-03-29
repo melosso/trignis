@@ -57,7 +57,7 @@ public class ConnectionHealthCheckService : BackgroundService
         {
             try
             {
-                await PerformHealthChecksAsync();
+                await PerformHealthChecksAsync(stoppingToken);
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
             }
             catch (OperationCanceledException)
@@ -72,7 +72,7 @@ public class ConnectionHealthCheckService : BackgroundService
         }
     }
 
-    private async Task PerformHealthChecksAsync()
+    private async Task PerformHealthChecksAsync(CancellationToken ct)
     {
         _logger.LogDebug("Starting connection health checks...");
 
@@ -89,13 +89,18 @@ public class ConnectionHealthCheckService : BackgroundService
         {
             try
             {
-                var isHealthy = await CheckSqlHealthAsync(connStr);
+                var isHealthy = await CheckSqlHealthAsync(connStr, ct);
                 UpdateHealth(key, isHealthy);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("SQL connection check failed for {Key}: timed out after 5s", key);
+                UpdateHealth(key, false);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning("SQL connection check failed for {Key}: {Message}", key, ex.GetBaseException().Message);
-                UpdateHealth(key, false); // register as unhealthy so it appears in the dashboard
+                UpdateHealth(key, false);
             }
         }
 
@@ -154,9 +159,10 @@ public class ConnectionHealthCheckService : BackgroundService
             });
     }
 
-    private static async Task<bool> CheckSqlHealthAsync(string connectionString)
+    private static async Task<bool> CheckSqlHealthAsync(string connectionString, CancellationToken ct)
     {
-        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         using var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
         await conn.OpenAsync(cts.Token);
         return conn.State == System.Data.ConnectionState.Open;

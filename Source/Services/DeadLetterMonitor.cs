@@ -19,7 +19,7 @@ public class DeadLetterQueueMonitor : BackgroundService
     private readonly int _thresholdCount;
     private readonly int _checkIntervalMinutes;
     private readonly bool _enabled;
-    private DateTime _lastAlertTime = DateTime.MinValue;
+    private long _lastAlertTimeTicks = DateTime.MinValue.Ticks;
     private readonly TimeSpan _alertCooldown = TimeSpan.FromHours(1);
 
     public DeadLetterQueueMonitor(
@@ -50,7 +50,7 @@ public class DeadLetterQueueMonitor : BackgroundService
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
-                await CheckDeadLetterQueueAsync();
+                await CheckDeadLetterQueueAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -64,12 +64,12 @@ public class DeadLetterQueueMonitor : BackgroundService
         }
     }
 
-    private async Task CheckDeadLetterQueueAsync()
+    private async Task CheckDeadLetterQueueAsync(CancellationToken cancellationToken)
     {
         try
         {
             using var conn = new SqliteConnection(_sinkholeConnectionString);
-            await conn.OpenAsync();
+            await conn.OpenAsync(cancellationToken);
 
             // Get total count
             var totalCommand = conn.CreateCommand();
@@ -105,15 +105,16 @@ public class DeadLetterQueueMonitor : BackgroundService
             _logger.LogDebug("Dead letter queue status - Total: {Total}, Recent (24h): {Recent}", totalCount, recentCount);
 
             // Alert if threshold exceeded and cooldown period has passed
-            if (totalCount >= _thresholdCount && (DateTime.UtcNow - _lastAlertTime) > _alertCooldown)
+            var lastAlertTime = new DateTime(Interlocked.Read(ref _lastAlertTimeTicks), DateTimeKind.Utc);
+            if (totalCount >= _thresholdCount && (DateTime.UtcNow - lastAlertTime) > _alertCooldown)
             {
-                _logger.LogWarning("⚠️ Dead letter queue threshold exceeded! Total: {Total} (Threshold: {Threshold})", 
+                _logger.LogWarning("⚠️ Dead letter queue threshold exceeded! Total: {Total} (Threshold: {Threshold})",
                     totalCount, _thresholdCount);
-                
+
                 if (recentCount > 0)
                 {
                     _logger.LogWarning("Recent failures (24h): {Recent}", recentCount);
-                    
+
                     if (breakdown.Count > 0)
                     {
                         _logger.LogWarning("Top failing objects:");
@@ -125,7 +126,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 }
 
                 _logger.LogWarning("Action required: Review dead letters in sinkhole.db and address recurring failures");
-                _lastAlertTime = DateTime.UtcNow;
+                Interlocked.Exchange(ref _lastAlertTimeTicks, DateTime.UtcNow.Ticks);
             }
             else if (totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
             {
