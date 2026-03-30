@@ -22,10 +22,11 @@ using System.Linq;
 
 namespace Trignis.MicrosoftSQL.Services;
 
-public class MessageQueueService : IDisposable
+public class MessageQueueService : IDisposable, IAsyncDisposable
 {
     private readonly ILogger<MessageQueueService> _logger;
     private readonly ConcurrentDictionary<string, IConnection> _rabbitConnections = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _rabbitLocks = new();
     private readonly ConcurrentDictionary<string, IProducer<Null, string>> _kafkaProducers = new();
     private readonly ConcurrentDictionary<string, AsyncCircuitBreakerPolicy> _circuitBreakers = new();
     private readonly DeadLetterQueueMonitor _dlqMonitor;
@@ -175,26 +176,33 @@ public class MessageQueueService : IDisposable
         var connectionKey = $"{config.HostName}:{config.Port}:{config.VirtualHost}";
         IConnection connection;
 
-        // Reuse connection (connection pooling)
-        if (!_rabbitConnections.TryGetValue(connectionKey, out connection!) || !connection.IsOpen)
+        // Reuse connection (connection pooling) — per-key semaphore prevents TOCTOU race
+        var sem = _rabbitLocks.GetOrAdd(connectionKey, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var factory = new ConnectionFactory
+            if (!_rabbitConnections.TryGetValue(connectionKey, out connection!) || !connection.IsOpen)
             {
-                HostName = config.HostName,
-                Port = config.Port,
-                VirtualHost = config.VirtualHost ?? "/",
-                UserName = config.Username ?? "guest",
-                Password = config.Password ?? "guest",
-                AutomaticRecoveryEnabled = true,
-                NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
-                RequestedConnectionTimeout = TimeSpan.FromSeconds(30),
-                RequestedHeartbeat = TimeSpan.FromSeconds(60)
-            };
+                var factory = new ConnectionFactory
+                {
+                    HostName = config.HostName,
+                    Port = config.Port,
+                    VirtualHost = config.VirtualHost ?? "/",
+                    UserName = config.Username ?? "guest",
+                    Password = config.Password ?? "guest",
+                    AutomaticRecoveryEnabled = true,
+                    NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
+                    RequestedConnectionTimeout = TimeSpan.FromSeconds(30),
+                    RequestedHeartbeat = TimeSpan.FromSeconds(60)
+                };
 
-            connection = await factory.CreateConnectionAsync(cancellationToken);
-            _rabbitConnections[connectionKey] = connection;
-            _logger.LogDebug("Created RabbitMQ connection to {Host}:{Port}{VHost}", 
-                            config.HostName, config.Port, config.VirtualHost ?? "/");        }
+                connection = await factory.CreateConnectionAsync(cancellationToken);
+                _rabbitConnections[connectionKey] = connection;
+                _logger.LogDebug("Created RabbitMQ connection to {Host}:{Port}{VHost}",
+                    config.HostName, config.Port, config.VirtualHost ?? "/");
+            }
+        }
+        finally { sem.Release(); }
 
         IChannel? channel = null;
         try
@@ -630,24 +638,25 @@ public class MessageQueueService : IDisposable
         }
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         foreach (var kvp in _rabbitConnections)
         {
             try
             {
                 if (kvp.Value.IsOpen)
-                {
-                    kvp.Value.CloseAsync().GetAwaiter().GetResult();
-                }
+                    await kvp.Value.CloseAsync().ConfigureAwait(false);
                 kvp.Value.Dispose();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error disposing RabbitMQ connection");
+                _logger.LogWarning(ex, "Error closing RabbitMQ connection");
             }
         }
         _rabbitConnections.Clear();
+
+        foreach (var kvp in _rabbitLocks)
+            kvp.Value.Dispose();
 
         foreach (var kvp in _kafkaProducers)
         {
@@ -663,4 +672,9 @@ public class MessageQueueService : IDisposable
         }
         _kafkaProducers.Clear();
     }
+
+    /// <summary>
+    /// Synchronous dispose shim for non-async DI teardown paths. Prefer DisposeAsync where possible.
+    /// </summary>
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 }

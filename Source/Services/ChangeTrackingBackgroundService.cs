@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
@@ -36,8 +37,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly OAuth2TokenService _oauth2TokenService;
     private readonly GlobalSettings _globalSettings;
     private readonly EnvironmentConfigService _configService;
-    private readonly Dictionary<string, bool> _isProcessing = new();
-    private CancellationToken _globalStoppingToken;
+    private readonly ConcurrentDictionary<string, bool> _isProcessing = new();
+    private volatile CancellationTokenSource? _globalStoppingSource;
     private readonly Dictionary<string, (CancellationTokenSource Cts, Task Task)> _envTasks = new();
     private readonly object _envTasksLock = new();
     private DateTime _lastPurgeTime = DateTime.MinValue;
@@ -203,7 +204,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogDebug("Application is running in ExecuteAsync");
-        _globalStoppingToken = stoppingToken;
+        _globalStoppingSource = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
 
         try
         {
@@ -256,9 +257,17 @@ public class ChangeTrackingBackgroundService : BackgroundService
         foreach (var env in e.Removed)
             StopEnvironmentTask(env.Name);
         foreach (var env in e.Updated)
-            _ = RestartEnvironmentTaskAsync(env);
+            _ = SafeRestartAsync(env);
         foreach (var env in e.Added)
-            StartEnvironmentTask(env, _globalStoppingToken);
+            StartEnvironmentTask(env, _globalStoppingSource?.Token ?? CancellationToken.None);
+
+        async Task SafeRestartAsync(EnvironmentConfig env)
+        {
+            try { await RestartEnvironmentTaskAsync(env).ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* shutdown */ }
+            catch (Exception ex)
+            { _logger.LogError(ex, "Failed to restart environment task for {Env}", env.Name); }
+        }
     }
 
     private void StartEnvironmentTask(EnvironmentConfig env, CancellationToken stoppingToken)
@@ -299,8 +308,9 @@ public class ChangeTrackingBackgroundService : BackgroundService
         if (oldTask != null)
             try { await oldTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
 
-        if (!_globalStoppingToken.IsCancellationRequested)
-            StartEnvironmentTask(env, _globalStoppingToken);
+        var stoppingToken = _globalStoppingSource?.Token ?? CancellationToken.None;
+        if (!stoppingToken.IsCancellationRequested)
+            StartEnvironmentTask(env, stoppingToken);
     }
 
     private async Task ProcessEnvironmentAsync(EnvironmentConfig environment, CancellationToken stoppingToken)
@@ -530,6 +540,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 var sync = metadata.GetProperty("Sync");
                 var version = sync.GetProperty("Version").GetInt32();
 
+                var maxVersion = version;
+
                 if (doc.RootElement.TryGetProperty("Data", out var data))
                 {
                     if (data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
@@ -538,17 +550,16 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
                         stoppingToken.ThrowIfCancellationRequested();
 
-                        var maxVersion = data.EnumerateArray()
+                        maxVersion = data.EnumerateArray()
                             .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt32() : (int?)null)
                             .Where(v => v.HasValue).Select(v => v!.Value)
                             .DefaultIfEmpty(version).Max();
-                        await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, maxVersion);
 
                         await ExportChangesAsync(environment, trackingObject, data, stoppingToken);
                     }
                 }
 
-                await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, version);
+                await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, maxVersion);
             }
         });
     }
@@ -955,6 +966,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     public override void Dispose()
     {
         _logger.LogDebug("Disposing Background service resources");
+        _globalStoppingSource?.Dispose();
         base.Dispose();
     }
 }

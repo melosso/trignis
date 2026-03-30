@@ -133,53 +133,51 @@ try
             tempBuilder.AddEncryptedJsonFile(relativePath, encryptionService, optional: true);
             var tempCfg = tempBuilder.Build();
             
-            // Build environment config
-            var envConfig = new EnvironmentConfig
-            {
-                Name = environmentName,
-                ConnectionStrings = new Dictionary<string, string>(),
-                ChangeTracking = new EnvironmentChangeTracking()
-            };
-            
             // Collect connection strings
             var connStrings = tempCfg.GetSection("ConnectionStrings").GetChildren();
+            var connectionStrings = new Dictionary<string, string>();
             foreach (var connString in connStrings)
             {
                 var key = connString.Key;
                 var value = connString.Value;
                 if (!string.IsNullOrEmpty(value))
                 {
-                    envConfig.ConnectionStrings[key] = value;
+                    connectionStrings[key] = value;
                 }
             }
-            
+
             // Collect ChangeTracking settings
             var ct = tempCfg.GetSection("ChangeTracking");
-            
-            // Load tracking objects
-            var trackingObjects = ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>();
-            foreach (var obj in trackingObjects)
+
+            // Load tracking objects (stamp EnvironmentFile at construction via `with`)
+            var trackingObjects = (ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>())
+                .Select(obj => obj with { EnvironmentFile = environmentName })
+                .ToArray();
+
+            // Load API endpoints (stamp EnvironmentFile at construction via `with`)
+            var apiEndpoints = (ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? Array.Empty<ApiEndpoint>())
+                .Select(endpoint => endpoint with { EnvironmentFile = environmentName })
+                .ToArray();
+
+            // Build environment config
+            var envConfig = new EnvironmentConfig
             {
-                obj.EnvironmentFile = environmentName;
-            }
-            envConfig.ChangeTracking.TrackingObjects = trackingObjects;
-            
-            // Load API endpoints
-            var apiEndpoints = ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? Array.Empty<ApiEndpoint>();
-            foreach (var endpoint in apiEndpoints)
-            {
-                endpoint.EnvironmentFile = environmentName;
-            }
-            envConfig.ChangeTracking.ApiEndpoints = apiEndpoints;
-            
-            // Load environment-specific overrides (if present)
-            envConfig.ChangeTracking.PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds");
-            envConfig.ChangeTracking.ExportToFile = ct.GetValue<bool?>("ExportToFile");
-            envConfig.ChangeTracking.FilePath = ct.GetValue<string?>("FilePath");
-            envConfig.ChangeTracking.ExportToApi = ct.GetValue<bool?>("ExportToApi");
-            envConfig.ChangeTracking.RetryCount = ct.GetValue<int?>("RetryCount");
-            envConfig.ChangeTracking.RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds");
-            
+                Name = environmentName,
+                ConnectionStrings = connectionStrings,
+                ChangeTracking = new EnvironmentChangeTracking
+                {
+                    TrackingObjects = trackingObjects,
+                    ApiEndpoints = apiEndpoints,
+                    // Load environment-specific overrides (if present)
+                    PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds"),
+                    ExportToFile = ct.GetValue<bool?>("ExportToFile"),
+                    FilePath = ct.GetValue<string?>("FilePath"),
+                    ExportToApi = ct.GetValue<bool?>("ExportToApi"),
+                    RetryCount = ct.GetValue<int?>("RetryCount"),
+                    RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds")
+                }
+            };
+
             environments.Add(envConfig);
             
             Log.Debug($"Loaded environment: {environmentName} ({trackingObjects.Length} objects, {apiEndpoints.Length} endpoints)");
@@ -511,6 +509,9 @@ try
             {
                 using var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=sinkhole.db");
                 await conn.OpenAsync();
+                var pragmaCmd = conn.CreateCommand();
+                pragmaCmd.CommandText = "PRAGMA busy_timeout = 3000;";
+                await pragmaCmd.ExecuteNonQueryAsync();
 
                 var conditions = new List<string>();
                 if (!string.IsNullOrEmpty(search))

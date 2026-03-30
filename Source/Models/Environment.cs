@@ -4,103 +4,103 @@ using System.Text.Json.Serialization;
 
 namespace Trignis.MicrosoftSQL.Models;
 
-public class EnvironmentConfig
+public record class EnvironmentConfig
 {
     [JsonPropertyName("Name")]
-    public string Name { get; set; } = string.Empty;
-    
+    public string Name { get; init; } = string.Empty;
+
     [JsonPropertyName("ConnectionStrings")]
-    public Dictionary<string, string> ConnectionStrings { get; set; } = new();
-    
+    public IReadOnlyDictionary<string, string> ConnectionStrings { get; init; } = new Dictionary<string, string>();
+
     [JsonPropertyName("ChangeTracking")]
-    public EnvironmentChangeTracking ChangeTracking { get; set; } = new();
+    public EnvironmentChangeTracking ChangeTracking { get; init; } = new();
 }
 
 /// <summary>
 /// Environment-specific change tracking settings
 /// </summary>
-public class EnvironmentChangeTracking
+public record class EnvironmentChangeTracking
 {
     [JsonPropertyName("TrackingObjects")]
-    public TrackingObject[] TrackingObjects { get; set; } = Array.Empty<TrackingObject>();
-    
+    public TrackingObject[] TrackingObjects { get; init; } = Array.Empty<TrackingObject>();
+
     [JsonPropertyName("ApiEndpoints")]
-    public ApiEndpoint[] ApiEndpoints { get; set; } = Array.Empty<ApiEndpoint>();
-    
+    public ApiEndpoint[] ApiEndpoints { get; init; } = Array.Empty<ApiEndpoint>();
+
     // Environment-specific settings (can override global)
     [JsonPropertyName("PollingIntervalSeconds")]
-    public int? PollingIntervalSeconds { get; set; }
-    
+    public int? PollingIntervalSeconds { get; init; }
+
     [JsonPropertyName("ExportToFile")]
-    public bool? ExportToFile { get; set; }
-    
+    public bool? ExportToFile { get; init; }
+
     [JsonPropertyName("FilePath")]
-    public string? FilePath { get; set; }
-    
+    public string? FilePath { get; init; }
+
     [JsonPropertyName("ExportToApi")]
-    public bool? ExportToApi { get; set; }
-    
+    public bool? ExportToApi { get; init; }
+
     [JsonPropertyName("RetryCount")]
-    public int? RetryCount { get; set; }
-    
+    public int? RetryCount { get; init; }
+
     [JsonPropertyName("RetryDelaySeconds")]
-    public int? RetryDelaySeconds { get; set; }
+    public int? RetryDelaySeconds { get; init; }
 }
 
 /// <summary>
 /// Global application settings (applies to all environments)
 /// </summary>
-public class GlobalSettings
+public record class GlobalSettings
 {
     // Default values that environments can override
     [JsonPropertyName("PollingIntervalSeconds")]
-    public int PollingIntervalSeconds { get; set; } = 30;
-    
+    public int PollingIntervalSeconds { get; init; } = 30;
+
     [JsonPropertyName("ExportToFile")]
-    public bool ExportToFile { get; set; } = false;
-    
+    public bool ExportToFile { get; init; } = false;
+
     [JsonPropertyName("FilePath")]
-    public string FilePath { get; set; } = "exports/{object}/{database}/changes-{timestamp}.json";
-    
+    public string FilePath { get; init; } = "exports/{object}/{database}/changes-{timestamp}.json";
+
     [JsonPropertyName("FilePathSizeLimit")]
-    public int FilePathSizeLimit { get; set; } = 500;
-    
+    public int FilePathSizeLimit { get; init; } = 500;
+
     [JsonPropertyName("ExportToApi")]
-    public bool ExportToApi { get; set; } = false;
-    
+    public bool ExportToApi { get; init; } = false;
+
     [JsonPropertyName("RetryCount")]
-    public int RetryCount { get; set; } = 3;
-    
+    public int RetryCount { get; init; } = 3;
+
     [JsonPropertyName("RetryDelaySeconds")]
-    public int RetryDelaySeconds { get; set; } = 5;
-    
+    public int RetryDelaySeconds { get; init; } = 5;
+
     // Dead letter settings (global)
     [JsonPropertyName("DeadletterRetentionDays")]
-    public int DeadletterRetentionDays { get; set; } = 60;
-    
+    public int DeadletterRetentionDays { get; init; } = 60;
+
     [JsonPropertyName("DeadLetterThreshold")]
-    public int DeadLetterThreshold { get; set; } = 100;
-    
+    public int DeadLetterThreshold { get; init; } = 100;
+
     [JsonPropertyName("DeadLetterCheckIntervalMinutes")]
-    public int DeadLetterCheckIntervalMinutes { get; set; } = 30;
-    
+    public int DeadLetterCheckIntervalMinutes { get; init; } = 30;
+
     [JsonPropertyName("DeadLetterMonitorEnabled")]
-    public bool DeadLetterMonitorEnabled { get; set; } = true;
-    
+    public bool DeadLetterMonitorEnabled { get; init; } = true;
+
     // Health check settings (global)
     [JsonPropertyName("HealthCheckEnabled")]
-    public bool HealthCheckEnabled { get; set; } = true;
-    
+    public bool HealthCheckEnabled { get; init; } = true;
+
     [JsonPropertyName("HealthCheckIntervalMinutes")]
-    public int HealthCheckIntervalMinutes { get; set; } = 15;
-    
+    public int HealthCheckIntervalMinutes { get; init; } = 15;
+
     // API payload settings (global)
     [JsonPropertyName("MaxPayloadSizeBytes")]
-    public int MaxPayloadSizeBytes { get; set; } = 5 * 1024 * 1024; // 5MB default
-    
+    public int MaxPayloadSizeBytes { get; init; } = 5 * 1024 * 1024; // 5MB default
+
     [JsonPropertyName("MaxRecordsPerBatch")]
-    public int MaxRecordsPerBatch { get; set; } = 1000; // Max records per API call
-    
+    public int MaxRecordsPerBatch { get; init; } = 1000; // Max records per API call
+
     [JsonPropertyName("EnablePayloadBatching")]
-    public bool EnablePayloadBatching { get; set; } = true; // Auto-batch large payloads
+    public bool EnablePayloadBatching { get; init; } = true; // Auto-batch large payloads
 }

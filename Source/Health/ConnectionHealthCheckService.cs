@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -56,7 +57,7 @@ public class ConnectionHealthCheckService : BackgroundService
         {
             try
             {
-                await PerformHealthChecksAsync();
+                await PerformHealthChecksAsync(stoppingToken);
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
             }
             catch (OperationCanceledException)
@@ -71,7 +72,7 @@ public class ConnectionHealthCheckService : BackgroundService
         }
     }
 
-    private async Task PerformHealthChecksAsync()
+    private async Task PerformHealthChecksAsync(CancellationToken ct)
     {
         _logger.LogDebug("Starting connection health checks...");
 
@@ -88,13 +89,18 @@ public class ConnectionHealthCheckService : BackgroundService
         {
             try
             {
-                var isHealthy = await CheckSqlHealthAsync(connStr);
+                var isHealthy = await CheckSqlHealthAsync(connStr, ct);
                 UpdateHealth(key, isHealthy);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("SQL connection check failed for {Key}: timed out after 5s", key);
+                UpdateHealth(key, false);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning("SQL connection check failed for {Key}: {Message}", key, ex.GetBaseException().Message);
-                UpdateHealth(key, false); // register as unhealthy so it appears in the dashboard
+                UpdateHealth(key, false);
             }
         }
 
@@ -125,34 +131,38 @@ public class ConnectionHealthCheckService : BackgroundService
 
     private void UpdateHealth(string key, bool isHealthy)
     {
-        var previous = _healthStatus.GetOrAdd(key, new ConnectionHealth { IsHealthy = true });
-
-        if (isHealthy && !previous.IsHealthy)
-        {
-            _logger.LogInformation("Connection recovered: {Key} (was down for {Duration})",
-                key, DateTime.UtcNow - previous.LastFailureTime);
-            previous.IsHealthy = true;
-            previous.ConsecutiveFailures = 0;
-        }
-        else if (!isHealthy && previous.IsHealthy)
-        {
-            _logger.LogWarning("Connection failed: {Key}", key);
-            previous.IsHealthy = false;
-            previous.LastFailureTime = DateTime.UtcNow;
-            previous.ConsecutiveFailures = 1;
-        }
-        else if (!isHealthy)
-        {
-            previous.ConsecutiveFailures++;
-            if (previous.ConsecutiveFailures % 4 == 0)
-                _logger.LogError("Connection still down: {Key} ({Failures} consecutive failures, down for {Duration})",
-                    key, previous.ConsecutiveFailures, DateTime.UtcNow - previous.LastFailureTime);
-        }
+        _healthStatus.AddOrUpdate(
+            key,
+            addValueFactory: _ => new ConnectionHealth { IsHealthy = isHealthy },
+            updateValueFactory: (_, previous) =>
+            {
+                if (isHealthy && !previous.IsHealthy)
+                {
+                    _logger.LogInformation("Connection recovered: {Key} (was down for {Duration})",
+                        key, DateTime.UtcNow - previous.LastFailureTime);
+                    return previous with { IsHealthy = true, ConsecutiveFailures = 0 };
+                }
+                else if (!isHealthy && previous.IsHealthy)
+                {
+                    _logger.LogWarning("Connection failed: {Key}", key);
+                    return previous with { IsHealthy = false, LastFailureTime = DateTime.UtcNow, ConsecutiveFailures = 1 };
+                }
+                else if (!isHealthy)
+                {
+                    var newFailures = previous.ConsecutiveFailures + 1;
+                    if (newFailures % 4 == 0)
+                        _logger.LogError("Connection still down: {Key} ({Failures} consecutive failures, down for {Duration})",
+                            key, newFailures, DateTime.UtcNow - previous.LastFailureTime);
+                    return previous with { ConsecutiveFailures = newFailures };
+                }
+                return previous;
+            });
     }
 
-    private static async Task<bool> CheckSqlHealthAsync(string connectionString)
+    private static async Task<bool> CheckSqlHealthAsync(string connectionString, CancellationToken ct)
     {
-        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
         using var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
         await conn.OpenAsync(cts.Token);
         return conn.State == System.Data.ConnectionState.Open;
@@ -311,17 +321,10 @@ public class ConnectionHealthCheckService : BackgroundService
 
     public ConnectionHealthStatus GetHealthStatus()
     {
-        var status = new ConnectionHealthStatus
-        {
-            CheckTime = DateTime.UtcNow,
-            TotalEndpoints = _healthStatus.Count,
-            HealthyEndpoints = _healthStatus.Values.Count(h => h.IsHealthy),
-            UnhealthyEndpoints = _healthStatus.Values.Count(h => !h.IsHealthy)
-        };
-
+        var details = new Dictionary<string, EndpointHealthDetail>();
         foreach (var kvp in _healthStatus)
         {
-            status.Details[kvp.Key] = new EndpointHealthDetail
+            details[kvp.Key] = new EndpointHealthDetail
             {
                 IsHealthy = kvp.Value.IsHealthy,
                 ConsecutiveFailures = kvp.Value.ConsecutiveFailures,
@@ -330,30 +333,37 @@ public class ConnectionHealthCheckService : BackgroundService
             };
         }
 
-        return status;
+        return new ConnectionHealthStatus
+        {
+            CheckTime = DateTime.UtcNow,
+            TotalEndpoints = _healthStatus.Count,
+            HealthyEndpoints = _healthStatus.Values.Count(h => h.IsHealthy),
+            UnhealthyEndpoints = _healthStatus.Values.Count(h => !h.IsHealthy),
+            Details = details
+        };
     }
 }
 
-public class ConnectionHealth
+public record class ConnectionHealth
 {
-    public bool IsHealthy { get; set; }
-    public int ConsecutiveFailures { get; set; }
-    public DateTime LastFailureTime { get; set; }
+    public bool IsHealthy { get; init; }
+    public int ConsecutiveFailures { get; init; }
+    public DateTime LastFailureTime { get; init; }
 }
 
-public class ConnectionHealthStatus
+public record class ConnectionHealthStatus
 {
-    public DateTime CheckTime { get; set; }
-    public int TotalEndpoints { get; set; }
-    public int HealthyEndpoints { get; set; }
-    public int UnhealthyEndpoints { get; set; }
-    public System.Collections.Generic.Dictionary<string, EndpointHealthDetail> Details { get; set; } = new();
+    public DateTime CheckTime { get; init; }
+    public int TotalEndpoints { get; init; }
+    public int HealthyEndpoints { get; init; }
+    public int UnhealthyEndpoints { get; init; }
+    public IReadOnlyDictionary<string, EndpointHealthDetail> Details { get; init; } = new Dictionary<string, EndpointHealthDetail>();
 }
 
-public class EndpointHealthDetail
+public record class EndpointHealthDetail
 {
-    public bool IsHealthy { get; set; }
-    public int ConsecutiveFailures { get; set; }
-    public DateTime? LastFailureTime { get; set; }
-    public TimeSpan DowntimeDuration { get; set; }
+    public bool IsHealthy { get; init; }
+    public int ConsecutiveFailures { get; init; }
+    public DateTime? LastFailureTime { get; init; }
+    public TimeSpan DowntimeDuration { get; init; }
 }

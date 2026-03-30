@@ -20,8 +20,8 @@ public class HealthCheckService
     private readonly DateTime _startTime;
     private readonly string _version;
     private readonly int _cacheDurationSeconds;
-    private string? _cachedResponse;
-    private DateTime _lastCheckTime = DateTime.MinValue;
+    private volatile string? _cachedResponse;
+    private long _lastCheckTimeTicks = DateTime.MinValue.Ticks;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
 
     public HealthCheckService(
@@ -37,22 +37,23 @@ public class HealthCheckService
         _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
     }
 
-    public async Task<string> GetHealthStatusAsync()
+    public async Task<string> GetHealthStatusAsync(CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow;
-        
-        // Check if we have a valid cached response
-        if (_cachedResponse != null && (now - _lastCheckTime).TotalSeconds < _cacheDurationSeconds)
+
+        // Check if we have a valid cached response (outer fast path — no lock)
+        if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
         {
             return _cachedResponse;
         }
 
         // Use semaphore to prevent multiple simultaneous health checks
-        await _semaphore.WaitAsync();
+        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // Double-check after acquiring lock
-            if (_cachedResponse != null && (now - _lastCheckTime).TotalSeconds < _cacheDurationSeconds)
+            // Double-check after acquiring lock; re-read now so the staleness check is accurate
+            now = DateTime.UtcNow;
+            if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
             {
                 return _cachedResponse;
             }
@@ -62,7 +63,7 @@ public class HealthCheckService
             var timestamp = now.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
             // Check database connectivity
-            var (dbStatus, dbResponseTime) = await CheckDatabaseHealthAsync();
+            var (dbStatus, dbResponseTime) = await CheckDatabaseHealthAsync(cancellationToken).ConfigureAwait(false);
 
             var healthResponse = new
             {
@@ -82,7 +83,7 @@ public class HealthCheckService
             };
 
             _cachedResponse = JsonSerializer.Serialize(healthResponse, new JsonSerializerOptions { WriteIndented = true });
-            _lastCheckTime = now;
+            Interlocked.Exchange(ref _lastCheckTimeTicks, now.Ticks);
 
             return _cachedResponse;
         }
@@ -92,13 +93,13 @@ public class HealthCheckService
         }
     }
 
-    private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync()
+    private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync(CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
-        
+
         var environments = _envConfigService.Environments;
         var trackingObjects = environments.SelectMany(e => e.ChangeTracking.TrackingObjects ?? Array.Empty<TrackingObject>()).ToArray();
-        
+
         if (trackingObjects.Length == 0)
         {
             sw.Stop();
@@ -114,7 +115,7 @@ public class HealthCheckService
             var connString = environments
                 .SelectMany(e => e.ConnectionStrings)
                 .FirstOrDefault(cs => cs.Key == dbName).Value;
-                
+
             if (string.IsNullOrEmpty(connString))
             {
                 failCount++;
@@ -123,13 +124,14 @@ public class HealthCheckService
 
             try
             {
-                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(TimeSpan.FromSeconds(5));
                 using var conn = new SqlConnection(connString);
-                await conn.OpenAsync(cts.Token);
+                await conn.OpenAsync(cts.Token).ConfigureAwait(false);
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 cmd.CommandTimeout = 5;
-                await cmd.ExecuteScalarAsync(cts.Token);
+                await cmd.ExecuteScalarAsync(cts.Token).ConfigureAwait(false);
                 successCount++;
             }
             catch (Exception ex)

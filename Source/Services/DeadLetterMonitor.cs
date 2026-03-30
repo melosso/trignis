@@ -19,7 +19,7 @@ public class DeadLetterQueueMonitor : BackgroundService
     private readonly int _thresholdCount;
     private readonly int _checkIntervalMinutes;
     private readonly bool _enabled;
-    private DateTime _lastAlertTime = DateTime.MinValue;
+    private long _lastAlertTimeTicks = DateTime.MinValue.Ticks;
     private readonly TimeSpan _alertCooldown = TimeSpan.FromHours(1);
 
     public DeadLetterQueueMonitor(
@@ -50,7 +50,7 @@ public class DeadLetterQueueMonitor : BackgroundService
             try
             {
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
-                await CheckDeadLetterQueueAsync();
+                await CheckDeadLetterQueueAsync(stoppingToken);
             }
             catch (OperationCanceledException)
             {
@@ -64,12 +64,12 @@ public class DeadLetterQueueMonitor : BackgroundService
         }
     }
 
-    private async Task CheckDeadLetterQueueAsync()
+    private async Task CheckDeadLetterQueueAsync(CancellationToken cancellationToken)
     {
         try
         {
             using var conn = new SqliteConnection(_sinkholeConnectionString);
-            await conn.OpenAsync();
+            await conn.OpenAsync(cancellationToken);
 
             // Get total count
             var totalCommand = conn.CreateCommand();
@@ -105,15 +105,16 @@ public class DeadLetterQueueMonitor : BackgroundService
             _logger.LogDebug("Dead letter queue status - Total: {Total}, Recent (24h): {Recent}", totalCount, recentCount);
 
             // Alert if threshold exceeded and cooldown period has passed
-            if (totalCount >= _thresholdCount && (DateTime.UtcNow - _lastAlertTime) > _alertCooldown)
+            var lastAlertTime = new DateTime(Interlocked.Read(ref _lastAlertTimeTicks), DateTimeKind.Utc);
+            if (totalCount >= _thresholdCount && (DateTime.UtcNow - lastAlertTime) > _alertCooldown)
             {
-                _logger.LogWarning("⚠️ Dead letter queue threshold exceeded! Total: {Total} (Threshold: {Threshold})", 
+                _logger.LogWarning("⚠️ Dead letter queue threshold exceeded! Total: {Total} (Threshold: {Threshold})",
                     totalCount, _thresholdCount);
-                
+
                 if (recentCount > 0)
                 {
                     _logger.LogWarning("Recent failures (24h): {Recent}", recentCount);
-                    
+
                     if (breakdown.Count > 0)
                     {
                         _logger.LogWarning("Top failing objects:");
@@ -125,7 +126,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 }
 
                 _logger.LogWarning("Action required: Review dead letters in sinkhole.db and address recurring failures");
-                _lastAlertTime = DateTime.UtcNow;
+                Interlocked.Exchange(ref _lastAlertTimeTicks, DateTime.UtcNow.Ticks);
             }
             else if (totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
             {
@@ -139,60 +140,69 @@ public class DeadLetterQueueMonitor : BackgroundService
         }
     }
 
-    public async Task<DeadLetterStats> GetStatsAsync()
+    public async Task<DeadLetterStats> GetStatsAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             using var conn = new SqliteConnection(_sinkholeConnectionString);
-            await conn.OpenAsync();
-
-            var stats = new DeadLetterStats();
+            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
             // Total count
             var totalCommand = conn.CreateCommand();
             totalCommand.CommandText = "SELECT COUNT(*) FROM DeadLetters";
-            var totalResult = await totalCommand.ExecuteScalarAsync();
-            stats.TotalCount = (totalResult != null && totalResult != DBNull.Value) ? Convert.ToInt64(totalResult) : 0;
+            var totalResult = await totalCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            var totalCount = (totalResult != null && totalResult != DBNull.Value) ? Convert.ToInt64(totalResult) : 0;
 
             // Recent counts
+            long lastHourCount = 0, last24HoursCount = 0, last7DaysCount = 0;
             var recentCommand = conn.CreateCommand();
             recentCommand.CommandText = @"
-                SELECT 
+                SELECT
                     COUNT(CASE WHEN Timestamp >= datetime('now', '-1 hour') THEN 1 END) as LastHour,
                     COUNT(CASE WHEN Timestamp >= datetime('now', '-24 hours') THEN 1 END) as Last24Hours,
                     COUNT(CASE WHEN Timestamp >= datetime('now', '-7 days') THEN 1 END) as Last7Days
                 FROM DeadLetters";
-            
-            using (var reader = await recentCommand.ExecuteReaderAsync())
+
+            using (var reader = await recentCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             {
-                if (await reader.ReadAsync())
+                if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    stats.LastHourCount = reader.GetInt64(0);
-                    stats.Last24HoursCount = reader.GetInt64(1);
-                    stats.Last7DaysCount = reader.GetInt64(2);
+                    lastHourCount = reader.GetInt64(0);
+                    last24HoursCount = reader.GetInt64(1);
+                    last7DaysCount = reader.GetInt64(2);
                 }
             }
 
             // Get most common error
+            string? mostCommonError = null;
+            long mostCommonErrorCount = 0;
             var errorCommand = conn.CreateCommand();
             errorCommand.CommandText = @"
-                SELECT ErrorMessage, COUNT(*) as Count 
-                FROM DeadLetters 
+                SELECT ErrorMessage, COUNT(*) as Count
+                FROM DeadLetters
                 WHERE Timestamp >= datetime('now', '-24 hours')
-                GROUP BY ErrorMessage 
-                ORDER BY Count DESC 
+                GROUP BY ErrorMessage
+                ORDER BY Count DESC
                 LIMIT 1";
-            
-            using (var reader = await errorCommand.ExecuteReaderAsync())
+
+            using (var reader = await errorCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             {
-                if (await reader.ReadAsync())
+                if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {
-                    stats.MostCommonError = reader.GetString(0);
-                    stats.MostCommonErrorCount = reader.GetInt64(1);
+                    mostCommonError = reader.GetString(0);
+                    mostCommonErrorCount = reader.GetInt64(1);
                 }
             }
 
-            return stats;
+            return new DeadLetterStats
+            {
+                TotalCount = totalCount,
+                LastHourCount = lastHourCount,
+                Last24HoursCount = last24HoursCount,
+                Last7DaysCount = last7DaysCount,
+                MostCommonError = mostCommonError,
+                MostCommonErrorCount = mostCommonErrorCount
+            };
         }
         catch (Exception ex)
         {

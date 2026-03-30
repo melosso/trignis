@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -22,7 +23,7 @@ public class EnvironmentConfigService : IDisposable
     private readonly ILogger<EnvironmentConfigService> _logger;
     private readonly EncryptionService _encryptionService;
 
-    private volatile List<EnvironmentConfig> _environments = [];
+    private ImmutableList<EnvironmentConfig> _environments = ImmutableList<EnvironmentConfig>.Empty;
     private readonly object _lock = new();
 
     private string _envDir = "environments";
@@ -46,7 +47,7 @@ public class EnvironmentConfigService : IDisposable
     {
         _envDir = envDir;
         _selectedEnvironment = selectedEnvironment;
-        lock (_lock) { _environments = environments; }
+        lock (_lock) { _environments = ImmutableList.CreateRange(environments); }
     }
 
     public void StartWatching()
@@ -86,7 +87,7 @@ public class EnvironmentConfigService : IDisposable
         {
             removed = _environments.Where(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
             if (removed.Count == 0) return;
-            _environments = [.. _environments.Where(x => !x.Name.Equals(name, StringComparison.OrdinalIgnoreCase))];
+            _environments = _environments.RemoveAll(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         }
 
         _logger.LogInformation("Environment '{Name}' removed (file deleted)", name);
@@ -120,12 +121,12 @@ public class EnvironmentConfigService : IDisposable
             var existing = _environments.FirstOrDefault(x => x.Name.Equals(newEnv.Name, StringComparison.OrdinalIgnoreCase));
             if (existing != null)
             {
-                _environments = [.. _environments.Select(x => x.Name.Equals(newEnv.Name, StringComparison.OrdinalIgnoreCase) ? newEnv : x)];
+                _environments = _environments.SetItem(_environments.IndexOf(existing), newEnv);
                 updated.Add(newEnv);
             }
             else
             {
-                _environments = [.. _environments, newEnv];
+                _environments = _environments.Add(newEnv);
                 added.Add(newEnv);
             }
         }
@@ -155,33 +156,37 @@ public class EnvironmentConfigService : IDisposable
                 .AddEncryptedJsonFile(relativePath, _encryptionService, optional: true)
                 .Build();
 
-            var envConfig = new EnvironmentConfig
-            {
-                Name = name,
-                ConnectionStrings = [],
-                ChangeTracking = new EnvironmentChangeTracking()
-            };
-
+            var connectionStrings = new Dictionary<string, string>();
             foreach (var cs in cfg.GetSection("ConnectionStrings").GetChildren())
                 if (!string.IsNullOrEmpty(cs.Value))
-                    envConfig.ConnectionStrings[cs.Key] = cs.Value;
+                    connectionStrings[cs.Key] = cs.Value;
 
             var ct = cfg.GetSection("ChangeTracking");
 
-            var trackingObjects = ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? [];
-            foreach (var obj in trackingObjects) obj.EnvironmentFile = name;
-            envConfig.ChangeTracking.TrackingObjects = trackingObjects;
+            var trackingObjects = (ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? [])
+                .Select(obj => obj with { EnvironmentFile = name })
+                .ToArray();
 
-            var apiEndpoints = ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? [];
-            foreach (var ep in apiEndpoints) ep.EnvironmentFile = name;
-            envConfig.ChangeTracking.ApiEndpoints = apiEndpoints;
+            var apiEndpoints = (ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? [])
+                .Select(ep => ep with { EnvironmentFile = name })
+                .ToArray();
 
-            envConfig.ChangeTracking.PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds");
-            envConfig.ChangeTracking.ExportToFile = ct.GetValue<bool?>("ExportToFile");
-            envConfig.ChangeTracking.FilePath = ct.GetValue<string?>("FilePath");
-            envConfig.ChangeTracking.ExportToApi = ct.GetValue<bool?>("ExportToApi");
-            envConfig.ChangeTracking.RetryCount = ct.GetValue<int?>("RetryCount");
-            envConfig.ChangeTracking.RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds");
+            var envConfig = new EnvironmentConfig
+            {
+                Name = name,
+                ConnectionStrings = connectionStrings,
+                ChangeTracking = new EnvironmentChangeTracking
+                {
+                    TrackingObjects = trackingObjects,
+                    ApiEndpoints = apiEndpoints,
+                    PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds"),
+                    ExportToFile = ct.GetValue<bool?>("ExportToFile"),
+                    FilePath = ct.GetValue<string?>("FilePath"),
+                    ExportToApi = ct.GetValue<bool?>("ExportToApi"),
+                    RetryCount = ct.GetValue<int?>("RetryCount"),
+                    RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds")
+                }
+            };
 
             return envConfig;
         }
