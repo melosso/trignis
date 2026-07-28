@@ -2,7 +2,7 @@ name: Build And Push As Docker Image
 
 on:
   push:
-    tags: [ 'v.*' ]
+    tags: [ 'v*' ]
   workflow_dispatch: {}
 
 permissions:
@@ -54,27 +54,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
+      # A v0.4.0 tag publishes v0.4.0, 0.4.0 and 0.4, so users can pin exactly or float
+      # on a minor. The bare commit sha is kept so existing pins keep resolving.
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          flavor: latest=false
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long,prefix=
+            type=raw,value=latest
+
+      - name: Build and push image
         id: build-image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ${{ env.PROJECT_DIR }}/Dockerfile
-          push: false
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-      - name: Push image to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ env.PROJECT_DIR }}/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Upload image digest
         if: steps.build-image.outputs.digest != ''
