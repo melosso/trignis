@@ -43,6 +43,21 @@ volumes:
 
 Persist `state.db` and `sinkhole.db`. Losing `state.db` means every object re-initialises on next start; losing `sinkhole.db` discards unreplayed dead letters.
 
+### Pinning a version
+
+Every release publishes four tags. Pick by how much movement you want:
+
+| Tag | Moves when | Use for |
+|---|---|---|
+| `v0.4.0` | Never | Production |
+| `0.4` | A patch release | Production, if you want fixes automatically |
+| `latest` | Every release | Trying it out |
+| `<commit sha>` | Never | Reproducing a specific build |
+
+```yaml
+image: ghcr.io/melosso/trignis:v0.4.0
+```
+
 ## Selecting one environment
 
 By default every file in `environments/` is loaded. To run one instance per environment, set `TRIGNIS_ENVIRONMENT` to a filename without its extension:

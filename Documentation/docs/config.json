@@ -1,16 +1,12 @@
 {
   "title": "Trignis",
-  "description": "Change tracking for SQL Server: export changes to files, APIs and message queues",
+  "titleTemplate": ":title · :siteName",
+  "description": "Change tracking for SQL Server and PostgreSQL: export changes to files, APIs and message queues",
   "lang": "en",
   "brand": "Trignis",
-  "favicon": "✨",
+  "favicon": "📇",
   "lastUpdated": true,
   "footer": "© {year} Melosso.com · Licensed under [EUPL 1.2](https://github.com/melosso/trignis/blob/main/LICENSE). Built with [Bark](https://github.com/melosso/bark/).",
-  "editLink": {
-    "pattern": "https://github.com/melosso/trignis/edit/main/Documentation/docs/:path",
-    "text": "Edit this page on GitHub"
-  },
-  "head": [],
   "topNav": [
     { "text": "Home", "link": "/" },
     { "text": "Guide", "link": "/guide/" },
@@ -18,21 +14,19 @@
     {
       "text": "More",
       "items": [
-        {
-          "text": "Download",
-          "link": "https://github.com/melosso/trignis/releases/"
-        }
+        { "text": "GitHub", "link": "https://github.com/melosso/trignis" },
+        { "text": "Releases", "link": "https://github.com/melosso/trignis/releases" },
+        { "text": "Examples", "link": "/guide/examples" }
       ]
     }
-      
   ],
   "sidebar": {
     "/guide/": [
+      { "title": "What is Trignis?", "path": "guide/" },
       {
-        "title": "Getting started",
+        "title": "Introduction",
         "collapsed": false,
         "items": [
-          { "title": "What is Trignis?", "path": "guide/" },
           { "title": "Install", "path": "guide/install" },
           { "title": "Track your first table", "path": "guide/first-table" }
         ]
@@ -47,7 +41,7 @@
         ]
       },
       {
-        "title": "Running it",
+        "title": "Operations",
         "collapsed": false,
         "items": [
           { "title": "Deployment", "path": "guide/deployment" },
@@ -64,27 +58,46 @@
     ],
     "/reference/": [
       {
-        "title": "Configuration",
-        "collapsed": false,
+        "title": "Reference",
         "items": [
           { "title": "Overview", "path": "reference/" },
           { "title": "Environment files", "path": "reference/environment" },
           { "title": "Global settings", "path": "reference/global-settings" },
-          { "title": "Authentication", "path": "reference/authentication" }
+          { "title": "Authentication", "path": "reference/authentication" },
+          {
+            "title": "Contracts",
+            "items": [
+              { "title": "Procedure contract", "path": "reference/stored-procedure" },
+              { "title": "Health endpoints", "path": "reference/health" }
+            ]
+          }
         ]
       },
       {
-        "title": "Contracts",
-        "collapsed": false,
         "items": [
-          { "title": "Stored procedure", "path": "reference/stored-procedure" },
-          { "title": "Health endpoints", "path": "reference/health" }
+          { "title": "Examples", "path": "guide/examples" },
+          { "title": "Guide", "path": "guide/" }
         ]
-      },
-      { "title": "Guide", "path": "guide/" }
+      }
     ]
   },
   "socialLinks": [
     { "icon": "github", "url": "https://github.com/melosso/trignis", "title": "GitHub" }
-  ]
+  ],
+  "editLink": {
+    "pattern": "https://github.com/melosso/trignis/edit/main/Documentation/docs/:path",
+    "text": "Edit this page on GitHub"
+  },
+  "pageControls": {
+    "downloadMarkdown": true,
+    "subscribeRss": true,
+    "openInEditor": [
+      { "template": "vscode://file/{docsRoot}/{path}", "label": "Open in VSCode (Dev only)" },
+      { "template": "vscodium://file/{docsRoot}/{path}", "label": "Open in VSCodium (Dev only)" }
+    ],
+    "editLink": {
+      "label": "Edit on GitHub",
+      "icon": "github"
+    }
+  }
 }

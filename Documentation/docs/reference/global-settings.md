@@ -5,7 +5,9 @@ description: Every appsettings.json key
 
 # Global settings
 
-`appsettings.json` is read once at startup. Changes need a restart.
+`appsettings.json` holds the settings that apply to your whole installation: how often Trignis polls, what it does when an export fails, whether the dashboard is served at all. Unlike the environment files, this one is read once when the service starts, so a change here needs a restart before it takes effect.
+
+Here is the whole file with its defaults, so you can see the shape before working through the sections below:
 
 ```json
 {
@@ -27,6 +29,10 @@ description: Every appsettings.json key
       "DeadLetterThreshold": 100,
       "DeadLetterCheckIntervalMinutes": 30,
       "DeadLetterMonitorEnabled": true,
+      "DeadLetterAutoReplayEnabled": true,
+      "DeadLetterReplayIntervalSeconds": 60,
+      "DeadLetterMaxReplayAttempts": 5,
+      "DeadLetterReplayBackoffSeconds": 60,
       "HealthCheckEnabled": true,
       "HealthCheckIntervalMinutes": 15,
       "MaxPayloadSizeBytes": 5242880,
@@ -37,9 +43,11 @@ description: Every appsettings.json key
 }
 ```
 
+You are welcome to leave most of this alone. Every key has a working default, and a minimal `appsettings.json` with just `AdminApiKey` and `WebHost` will get you running.
+
 ## ChangeTracking:GlobalSettings
 
-Defaults for every environment. Six can be overridden per environment; the rest are global.
+These are the defaults every environment inherits. Six of them can be overridden by an individual [environment file](/reference/environment) when one environment needs to behave differently from the rest; the others stay global. The **Per-env** column tells you which is which.
 
 ### Polling and export
 
@@ -51,7 +59,7 @@ Defaults for every environment. Six can be overridden per environment; the rest 
 | `FilePathSizeLimit` | 500 | Export directory cap in MB | no |
 | `ExportToApi` | false | Send to endpoints | yes |
 
-Below 5 seconds or above 3600 logs a warning; neither is rejected.
+Trignis will log a friendly warning if you set the polling interval below 5 seconds or above an hour, since both tend to be accidents. Neither is rejected, though, so if you have a good reason for a 2 second interval it is yours to make.
 
 ### Retries
 
@@ -60,7 +68,9 @@ Below 5 seconds or above 3600 logs a warning; neither is rejected.
 | `RetryCount` | 3 | Attempts before a dead letter | yes |
 | `RetryDelaySeconds` | 5 | Fixed delay between attempts | yes |
 
-The delay is fixed, not exponential. Retries cover transport errors, IO errors and SQL errors. A payload over `MaxPayloadSizeBytes` is not retried, since a retry cannot shrink it.
+The delay here is fixed rather than exponential, which suits the transient failures these retries are meant for: a transport hiccup, a brief IO error, a database that was momentarily unreachable. Longer outages are better handled by the [dead letter replay](/guide/dead-letters), which does back off.
+
+One thing worth knowing: a payload larger than `MaxPayloadSizeBytes` is not retried, because a second attempt cannot make it smaller. It goes straight to the dead letter store instead.
 
 ### Payload size
 
@@ -70,7 +80,7 @@ The delay is fixed, not exponential. Retries cover transport errors, IO errors a
 | `MaxRecordsPerBatch` | 1000 | Records per batch when batching |
 | `EnablePayloadBatching` | true | Split large sets into batches |
 
-Measured after compression. Over the limit fails to a dead letter rather than sending.
+The size is measured after compression, so enabling gzip on an endpoint genuinely buys you headroom. Anything still over the limit fails to a dead letter rather than being sent, which keeps a receiving API from having to reject it for you.
 
 ### Dead letters
 
@@ -80,8 +90,12 @@ Measured after compression. Over the limit fails to a dead letter rather than se
 | `DeadLetterThreshold` | 100 | Total that triggers a warning |
 | `DeadLetterCheckIntervalMinutes` | 30 | Monitor interval |
 | `DeadLetterMonitorEnabled` | true | Enable the monitor |
+| `DeadLetterAutoReplayEnabled` | true | Retry dead letters automatically |
+| `DeadLetterReplayIntervalSeconds` | 60 | Seconds between replay sweeps |
+| `DeadLetterMaxReplayAttempts` | 5 | Attempts before a row waits for a human. 0 disables replay |
+| `DeadLetterReplayBackoffSeconds` | 60 | First backoff delay, doubling per attempt, capped at 6 hours |
 
-Purge runs at startup and every 24 hours.
+Purging runs when the service starts and every 24 hours after that. Since retention is a deletion policy, it is worth replaying anything you care about before it ages out. The [dead letters guide](/guide/dead-letters) walks through how the automatic retries and the manual ones fit together.
 
 ### Connection health
 
@@ -90,11 +104,13 @@ Purge runs at startup and every 24 hours.
 | `HealthCheckEnabled` | true | Probe databases and queues |
 | `HealthCheckIntervalMinutes` | 15 | Interval between probes |
 
-First probe runs 10 seconds after startup so the dashboard has data on first load.
+The first probe runs about ten seconds after startup, which means the dashboard already has something to show you the first time you open it rather than an empty panel.
 
 ## ChangeTracking:StateDbPath
 
-Where last processed versions are stored. Default `state.db` relative to the working directory. Deleting it re-initialises every object per its `InitialSyncMode`.
+This is where the last processed version for each object lives, defaulting to `state.db` next to the working directory. It is also where a [pause](/guide/dashboard#pausing-change-tracking) is recorded.
+
+Deleting the file is a valid way to start over: every object re-initialises according to its `InitialSyncMode` on the next cycle. Just be aware that an object set to `Full` will re-export its entire table when it does.
 
 ## Health
 
@@ -105,7 +121,7 @@ Where last processed versions are stored. Default `state.db` relative to the wor
 | `Host` | `*` | Binding host |
 | `CacheDurationSeconds` | 120 | How long `/health` is cached |
 
-`/health` opens a real connection per database, so caching stops a polling monitor from generating load.
+`/health` opens a real connection to each configured database rather than reporting a cached guess, which is what makes it trustworthy. That honesty has a cost, so the response is cached: a monitoring system polling every few seconds will not turn your health check into a load generator.
 
 ## WebHost
 
@@ -115,20 +131,22 @@ Where last processed versions are stored. Default `state.db` relative to the wor
 | `Host` | `*` | `localhost` or `127.0.0.1` restricts `/ui` to loopback |
 | `SecureCookies` | unset | Force the `Secure` cookie flag |
 
-Unset, `SecureCookies` follows the request scheme. Set `true` behind a TLS-terminating proxy where the app sees plain HTTP.
+If you would rather reach the dashboard through an SSH tunnel than expose it, setting `Host` to `127.0.0.1` is a tidy way to do that.
+
+Left unset, `SecureCookies` follows the scheme of the incoming request. Setting it to `true` is the right call behind a TLS-terminating proxy, where the app itself only ever sees plain HTTP and would otherwise decide the connection is insecure.
 
 ## Trignis:AdminApiKey
 
-The dashboard credential. Empty means the UI is unauthenticated.
+The credential for signing in to the dashboard, and the passphrase the UI asks for again before you [pause an environment](/guide/dashboard#pausing-change-tracking). Leaving it empty turns authentication off entirely, which is convenient on a laptop and unwise anywhere else.
 
 ::: danger
-Ships as a placeholder. Change it before exposing the port.
+Trignis ships with a placeholder value here. Please change it before the port is reachable by anyone else.
 :::
 
 ## Windows:UseEventLog
 
-Windows only. Writes to the Application event log as source `Trignis` alongside the file log.
+Windows only. Turning this on writes to the Application event log under the source `Trignis`, alongside the normal file log rather than instead of it. Handy when your monitoring already watches the event log.
 
 ## Serilog
 
-Standard [Serilog](https://github.com/serilog/serilog-settings-configuration) configuration. Default is console plus a daily rolling file in `log/`, five files retained.
+Standard [Serilog](https://github.com/serilog/serilog-settings-configuration) configuration, so anything you already know about configuring Serilog applies here unchanged. Out of the box you get console output plus a daily rolling file in `log/`, with five files retained.

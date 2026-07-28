@@ -7,13 +7,23 @@ description: What happens when an export fails, and how to replay it
 
 When an export fails every retry, the payload is stored in `sinkhole.db` rather than dropped. Each destination fails independently. If the file write succeeds and the webhook does not, only the webhook produces a dead letter.
 
-Nothing is resent automatically. A dead letter waits until you replay or discard it.
+Dead letters are retried automatically on a widening backoff. What survives that is a genuine "someone has to look at this", and waits on the dashboard until you replay or discard it.
 
-## Why not auto-retry
+## Automatic replay
 
-An endpoint that has been down for an hour has a backlog. Replaying it automatically on recovery would produce a thundering herd, in an order nobody chose, possibly after the data stopped being relevant.
+Every `DeadLetterReplayIntervalSeconds` (default 60) Trignis takes up to 25 dead letters whose backoff has elapsed and re-runs them. Each failure doubles the wait: 1, 2, 4, 8, then 16 minutes at the default base of 60 seconds, capped at six hours.
 
-Replay is therefore explicit: fix the cause, then decide what to do with the backlog.
+After `DeadLetterMaxReplayAttempts` (default 5) the row stops being retried and stays put. It is still listed, still readable, and still replayable by hand.
+
+The batch limit and the backoff exist for the same reason: an endpoint down for an hour has a backlog, and dumping it back the instant it recovers is a thundering herd. Retrying 25 at a time on a widening interval drains the backlog without becoming the next outage.
+
+A row whose environment or tracking object no longer exists is not retried at all. No amount of waiting brings back a deleted environment, so it surfaces immediately for a human instead of burning through attempts.
+
+Turn it off with `DeadLetterAutoReplayEnabled: false`, or by setting `DeadLetterMaxReplayAttempts` to 0. Manual replay keeps working either way.
+
+::: warning
+Automatic replay is new in this release. Earlier versions never resent anything without being asked.
+:::
 
 ## Working through them
 
@@ -21,7 +31,7 @@ The **Dead letters** page lists failures with their object, database, error and 
 
 Three actions:
 
-- **Replay**: re-runs the export through the same pipeline as a live change. The row is deleted only if every destination succeeds; a partial failure keeps it and reports which target refused.
+- **Replay**: re-runs the export through the same pipeline as a live change. The row is deleted only if every destination succeeds; a partial failure keeps it and reports which target refused. A manual replay also resets the attempt counter, on the assumption that you clicked it because you fixed something, so an exhausted row rejoins the automatic rotation.
 - **Discard**: deletes the row. The payload is gone.
 - **Purge**: deletes everything matching the current filter. With no filter, that is everything.
 
@@ -44,7 +54,11 @@ Rows older than `DeadletterRetentionDays` (default 60) are purged at startup and
       "DeadletterRetentionDays": 60,
       "DeadLetterThreshold": 100,
       "DeadLetterCheckIntervalMinutes": 30,
-      "DeadLetterMonitorEnabled": true
+      "DeadLetterMonitorEnabled": true,
+      "DeadLetterAutoReplayEnabled": true,
+      "DeadLetterReplayIntervalSeconds": 60,
+      "DeadLetterMaxReplayAttempts": 5,
+      "DeadLetterReplayBackoffSeconds": 60
     }
   }
 }

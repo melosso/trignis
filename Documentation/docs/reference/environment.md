@@ -5,10 +5,13 @@ description: Connection strings, tracked objects and endpoints
 
 # Environment files
 
-One file per environment in `environments/`. The filename without its extension becomes the environment name. Files are watched, so saving one reloads that environment within a second.
+Each file in `environments/` describes one self-contained environment: where to connect, what to track there, and where the changes should go. The filename without its extension becomes the environment name, so `production.json` gives you an environment called `production`.
+
+These files are watched. Saving one reloads that environment within about a second, which means you can iterate on what you track without restarting anything.
 
 ```json
 {
+  "Provider": "mssql",
   "ConnectionStrings": {
     "PrimaryDatabase": "Server=sql.example.com;Database=PrimaryDB;Trusted_Connection=True;"
   },
@@ -25,15 +28,35 @@ One file per environment in `environments/`. The filename without its extension 
 }
 ```
 
+## Provider
+
+The database platform every connection string in this file points at. Optional, defaults to `mssql`.
+
+| Value | Platform | Aliases |
+|---|---|---|
+| `mssql` | Microsoft SQL Server | `sqlserver` |
+| `postgres` | PostgreSQL | `postgresql`, `pgsql` |
+
+One environment is one platform. To track both, write two environment files.
+
+The provider decides how the procedure is invoked and whether Trignis can read a watermark from the server. See the [stored procedure contract](/reference/stored-procedure).
+
 ## ConnectionStrings
 
-A map of key to SQL Server connection string. Keys are referenced by `TrackingObjects[].Database`.
+A map of key to connection string, in the syntax of the chosen `Provider`. Keys are referenced by `TrackingObjects[].Database`.
 
-Values are encrypted in place on first read. Trignis sets `Application Name=Trignis`, and unless the string already specifies `Packet Size`, raises it to 32768 with a 30 second connect timeout for large payloads.
+Values are encrypted in place on first read.
+
+Trignis fills in a few keys, but only when you have not set them yourself:
+
+| Provider | Applied unless present |
+|---|---|
+| `mssql` | `Application Name=Trignis`, `Packet Size=32768`, `Connect Timeout=30` |
+| `postgres` | `Application Name=Trignis`, `Timeout=30` |
 
 ## ChangeTracking
 
-Every key here is optional. Omitted, it falls back to [global settings](/reference/global-settings).
+Everything in this section is optional. Anything you leave out falls back to your [global settings](/reference/global-settings), so it is quite reasonable for this block to contain nothing but `TrackingObjects` until you find a reason to differ.
 
 | Key | Type | Purpose |
 |---|---|---|
@@ -45,6 +68,8 @@ Every key here is optional. Omitted, it falls back to [global settings](/referen
 | `RetryDelaySeconds` | int | Delay between attempts |
 
 ## TrackingObjects
+
+Each entry here is one table you would like watched, paired with the procedure that reads its changes:
 
 ```json
 {
@@ -64,18 +89,18 @@ Every key here is optional. Omitted, it falls back to [global settings](/referen
 | `StoredProcedureName` | yes | Procedure Trignis executes |
 | `InitialSyncMode` | no | `Incremental` (default) or `Full` |
 
-`InitialSyncMode` only applies when no version is stored yet, which means first run or after a [reset](/guide/dashboard):
+`InitialSyncMode` only comes into play when there is no stored version yet, which means the very first run or a [reset](/guide/dashboard) from the dashboard. You have two options:
 
-- **`Incremental`** adopts the current version and exports nothing. Only later changes are sent.
-- **`Full`** exports every row, then continues incrementally.
+- **`Incremental`** adopts the current version and exports nothing, so only changes made from that point onwards are sent. This is the default, on the grounds that pointing Trignis at a large table should not immediately push its entire contents downstream.
+- **`Full`** exports every row first, then continues incrementally. Choose this when the downstream system is starting empty and needs the history.
 
 ::: warning
-`Name` is the state key. Renaming an object makes Trignis treat it as new and re-initialise it.
+`Name` is what Trignis uses as the key for stored state. Renaming an object therefore reads as a brand new object, and it will re-initialise according to its `InitialSyncMode`. Worth keeping in mind before a tidy-up rename on a `Full` object.
 :::
 
 ## ApiEndpoints
 
-An HTTP endpoint:
+Destinations for the changes Trignis reads. An HTTP endpoint looks like this:
 
 ```json
 {
@@ -87,7 +112,7 @@ An HTTP endpoint:
 }
 ```
 
-A queue endpoint, distinguished by `MessageQueueType`:
+A queue endpoint lives in the same list and is told apart by the presence of `MessageQueueType`:
 
 ```json
 {
@@ -107,11 +132,13 @@ A queue endpoint, distinguished by `MessageQueueType`:
 | `MessageQueueType` | `RabbitMQ`, `AzureServiceBus`, `AWSSQS`, `AzureEventHubs`, `Kafka` |
 | `MessageQueue` | Platform settings, see [queues](/guide/export-queues) |
 
-Every endpoint receives every change in the environment. There is no per-object routing; separate environments if you need that.
+It is worth knowing that every endpoint in an environment receives every change from that environment. There is no per-object routing within a single file.
+
+When you need different objects going to different places, splitting them across separate environment files is the way to do it, and it has the pleasant side effect of letting each one have its own polling interval and retry settings.
 
 ## Placeholders
 
-Valid in `FilePath`, `Url` and `CustomHeaders`:
+These are available in `FilePath`, `Url` and `CustomHeaders`, which makes it easy to keep exports organised without hardcoding a path per object:
 
 | Placeholder | Value |
 |---|---|
