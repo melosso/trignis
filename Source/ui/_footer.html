@@ -1,0 +1,17 @@
+<script>
+document.querySelectorAll('.nav-item').forEach(a => {
+  if (a.getAttribute('href') === window.location.pathname) a.classList.add('active');
+});
+
+fetch('/ui/api/overview').then(r => r.json()).then(d => {
+  const v = (d.version ?? '').split('+')[0];
+  document.getElementById('sidebarVersion').textContent = v ? `v${v}` : '';
+}).catch(() => {});
+
+function logout() {
+  fetch('/ui/api/auth/logout', { method: 'POST', credentials: 'include' })
+    .finally(() => { window.location.href = '/ui/login'; });
+}
+</script>
+</body>
+</html>

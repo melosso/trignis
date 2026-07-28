@@ -14,6 +14,31 @@ public record class ApiEndpoint
     public MessageQueueConfig? MessageQueue { get; init; }
 }
 
+public static class ApiEndpointExtensions
+{
+    /// <summary>Human-readable destination for logging, e.g. <c>queue 'orders'</c>.</summary>
+    public static string MessageQueueTarget(this ApiEndpoint endpoint)
+    {
+        var mq = endpoint.MessageQueue;
+        if (mq == null) return "unknown";
+
+        return endpoint.MessageQueueType?.ToLowerInvariant() switch
+        {
+            "rabbitmq" => !string.IsNullOrEmpty(mq.QueueName)
+                ? $"queue '{mq.QueueName}'"
+                : $"exchange '{mq.Exchange}'" +
+                  (!string.IsNullOrEmpty(mq.RoutingKey) ? $" (key: {mq.RoutingKey})" : ""),
+            "azureservicebus" => !string.IsNullOrEmpty(mq.QueueName)
+                ? $"queue '{mq.QueueName}'"
+                : $"topic '{mq.TopicName}'",
+            "awssqs" => $"queue '{mq.QueueUrl}'",
+            "azureeventhubs" => $"event hub '{mq.EventHubName}'",
+            "kafka" => $"topic '{mq.Topic}'",
+            _ => "unknown"
+        };
+    }
+}
+
 public record class ApiAuth
 {
     public string? Type { get; init; } // "Bearer", "Basic", "ApiKey", "OAuth2ClientCredentials"

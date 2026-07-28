@@ -6,26 +6,25 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Trignis.MicrosoftSQL.Models;
 
 namespace Trignis.MicrosoftSQL.Services;
 
 public class DeadLetterService
 {
     private readonly ILogger<DeadLetterService> _logger;
-    private readonly IConfiguration _config;
     private readonly string _sinkholeConnectionString;
     private readonly int _retentionDays;
 
     public DeadLetterService(
         ILogger<DeadLetterService> logger,
-        IConfiguration config)
+        IOptions<GlobalSettings> globalSettings)
     {
         _logger = logger;
-        _config = config;
         _sinkholeConnectionString = "Data Source=sinkhole.db";
-        _retentionDays = _config.GetValue<int>("ChangeTracking:DeadletterRetentionDays", 60);
+        _retentionDays = globalSettings.Value.DeadletterRetentionDays;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)

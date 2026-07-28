@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration.Json;
 using Microsoft.Extensions.FileProviders;
 using System;
 using System.IO;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Trignis.MicrosoftSQL.Services;
 using Serilog;
@@ -60,13 +59,15 @@ namespace Trignis.MicrosoftSQL.Helpers
                             // Decrypt Auth section
                             if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
                             {
-                                DecryptAuthObject(authObj);
+                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps,
+                                    (key, value) => DecryptIfEncrypted($"ApiEndpoints.Auth.{key}", value));
                             }
-                            
+
                             // Decrypt MessageQueue section
                             if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
                             {
-                                DecryptMessageQueueObject(mqObj);
+                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps,
+                                    (key, value) => DecryptIfEncrypted($"ApiEndpoints.MessageQueue.{key}", value));
                             }
                         }
                     }
@@ -82,57 +83,23 @@ namespace Trignis.MicrosoftSQL.Helpers
         Load(memoryStream);
     }
 
-    private void DecryptAuthObject(JsonObject authObj)
-    {
-        // Decrypt sensitive Auth properties
-        var sensitiveProps = new[] { "Token", "Password", "ApiKey", "ClientSecret", "ClientId" };
-        
-        foreach (var propName in sensitiveProps)
+        /// <summary>
+        /// Returns the decrypted value, or null when it was not encrypted to begin with.
+        /// A decryption failure is fatal — a half-readable config is worse than no start-up.
+        /// </summary>
+        private string? DecryptIfEncrypted(string label, string value)
         {
-            if (authObj.TryGetPropertyValue(propName, out var propValue) && 
-                propValue is JsonValue jsonValue && 
-                jsonValue.TryGetValue(out string? strValue) && 
-                strValue != null && 
-                _encryptionService.IsEncrypted(strValue))
+            if (!_encryptionService.IsEncrypted(value)) return null;
+            try
             {
-                try
-                {
-                    authObj[propName] = _encryptionService.Decrypt(strValue);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Failed to decrypt ApiEndpoints.Auth.{Key}, configuration may be corrupted", propName);
-                    throw;
-                }
+                return _encryptionService.Decrypt(value);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to decrypt {Key}, configuration may be corrupted", label);
+                throw;
             }
         }
-    }
-
-    private void DecryptMessageQueueObject(JsonObject mqObj)
-    {
-        // Decrypt sensitive MessageQueue properties
-        var sensitiveProps = new[] { "Password", "ConnectionString", "SecretAccessKey", "AccessKeyId" };
-        
-        foreach (var propName in sensitiveProps)
-        {
-            if (mqObj.TryGetPropertyValue(propName, out var propValue) && 
-                propValue is JsonValue jsonValue && 
-                jsonValue.TryGetValue(out string? strValue) && 
-                strValue != null && 
-                _encryptionService.IsEncrypted(strValue))
-            {
-                try
-                {
-                    mqObj[propName] = _encryptionService.Decrypt(strValue);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Failed to decrypt ApiEndpoints.MessageQueue.{Key}, configuration may be corrupted", propName);
-                    throw;
-                }
-            }
-        }
-    }
 
         private void DecryptJsonSection(JsonObject jsonObject, string sectionName)
         {
@@ -140,21 +107,8 @@ namespace Trignis.MicrosoftSQL.Helpers
             {
                 if (sectionNode is JsonObject sectionObj)
                 {
-                    foreach (var prop in sectionObj)
-                    {
-                        if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && _encryptionService.IsEncrypted(strValue))
-                        {
-                            try
-                            {
-                                sectionObj[prop.Key] = _encryptionService.Decrypt(strValue);
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Error(ex, "Failed to decrypt {Section}.{Key}, configuration may be corrupted", sectionName, prop.Key);
-                                throw; // Re-throw to fail fast
-                            }
-                        }
-                    }
+                    JsonSecrets.MapProps(sectionObj, null,
+                        (key, value) => DecryptIfEncrypted($"{sectionName}.{key}", value));
                 }
                 else if (sectionNode is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && _encryptionService.IsEncrypted(strValue))
                 {

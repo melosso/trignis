@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
-using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -47,8 +47,13 @@ public class OAuth2TokenService
             if (_tokenCache.TryGetValue(cacheKey, out var fresh) && !fresh.IsExpired)
                 return fresh.AccessToken;
 
-            var token = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
-            var expiration = DateTime.UtcNow.AddSeconds(auth.TokenExpirationSeconds ?? 3600).AddMinutes(-1);
+            var (token, expiresIn) = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
+
+            // Configured value wins, then whatever the server reported, then one hour.
+            // The minute of slack keeps a token from expiring mid-request.
+            var lifetime = auth.TokenExpirationSeconds ?? expiresIn ?? 3600;
+            var expiration = DateTime.UtcNow.AddSeconds(lifetime).AddMinutes(-1);
+
             _tokenCache[cacheKey] = new TokenCacheEntry(token, expiration);
             _logger.LogInformation($"Obtained new OAuth2 token for {cacheKey}, expires at {expiration}");
             return token;
@@ -56,7 +61,7 @@ public class OAuth2TokenService
         finally { sem.Release(); }
     }
 
-    private async Task<string> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken)
+    private async Task<(string Token, int? ExpiresIn)> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(auth.TokenEndpoint))
         {
@@ -89,28 +94,24 @@ public class OAuth2TokenService
             throw new InvalidOperationException("Failed to obtain access token from OAuth2 endpoint");
         }
 
-        return tokenResponse.AccessToken;
+        return (tokenResponse.AccessToken, tokenResponse.ExpiresIn);
     }
 
-    private class TokenCacheEntry
+    private readonly record struct TokenCacheEntry(string AccessToken, DateTime Expiration)
     {
-        public string AccessToken { get; }
-        public DateTime Expiration { get; }
-
         public bool IsExpired => DateTime.UtcNow >= Expiration;
-
-        public TokenCacheEntry(string accessToken, DateTime expiration)
-        {
-            AccessToken = accessToken;
-            Expiration = expiration;
-        }
     }
 
-    private class TokenResponse
+    /// <summary>
+    /// RFC 6749 names these fields in snake_case. The names must be stated explicitly: the web
+    /// JSON defaults are camelCase and case-insensitive, which never matches an underscore.
+    /// </summary>
+    private sealed class TokenResponse
     {
+        [JsonPropertyName("access_token")]
         public string? AccessToken { get; set; }
-        public string? TokenType { get; set; }
+
+        [JsonPropertyName("expires_in")]
         public int? ExpiresIn { get; set; }
-        public string? Scope { get; set; }
     }
 }

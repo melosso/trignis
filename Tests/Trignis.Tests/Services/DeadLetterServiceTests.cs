@@ -3,8 +3,9 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Trignis.MicrosoftSQL.Models;
 using Trignis.MicrosoftSQL.Services;
 using Xunit;
 
@@ -41,8 +42,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         _savedWorkingDir = Environment.CurrentDirectory;
         Environment.CurrentDirectory = _tempDir;
 
-        var config = new ConfigurationBuilder().Build();
-        _svc = new DeadLetterService(NullLogger<DeadLetterService>.Instance, config);
+        _svc = new DeadLetterService(NullLogger<DeadLetterService>.Instance, Options.Create(new GlobalSettings()));
         await _svc.InitializeAsync();
     }
 
@@ -55,10 +55,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         return Task.CompletedTask;
     }
 
-    // -------------------------------------------------------------------------
     // Schema initialisation
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task InitializeAsync_CreatesDeadLettersTable()
     {
@@ -76,10 +73,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         await _svc.InitializeAsync(); // must not throw on existing schema
     }
 
-    // -------------------------------------------------------------------------
     // SaveDeadLetterAsync
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task SaveDeadLetter_InsertsRecord()
     {
@@ -145,10 +139,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         Assert.Equal(2L, await CountRowsAsync());
     }
 
-    // -------------------------------------------------------------------------
     // PurgeOldDeadLettersAsync
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task PurgeOldDeadLetters_RemovesRecordsOlderThanRetention()
     {
@@ -184,10 +175,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         Assert.Equal(1L, await CountRowsAsync()); // recent record survives
     }
 
-    // -------------------------------------------------------------------------
     // Helpers
-    // -------------------------------------------------------------------------
-
     /// Opens a non-pooled connection to the current test's sinkhole.db.
     private static SqliteConnection Open() =>
         new("Data Source=sinkhole.db;Pooling=False");

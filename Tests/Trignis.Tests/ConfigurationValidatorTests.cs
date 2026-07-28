@@ -24,10 +24,7 @@ public class ConfigurationValidatorTests
 
     private static string EP => TestConfigurationBuilder.EP;
 
-    // -------------------------------------------------------------------------
     // Environment-level
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void NoEnvironments_Throws()
     {
@@ -130,10 +127,7 @@ public class ConfigurationValidatorTests
             ConfigurationValidator.ValidateConfiguration(config));
     }
 
-    // -------------------------------------------------------------------------
     // HTTP endpoints
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void HttpEndpoint_ValidBearerAuth_Passes()
     {
@@ -215,10 +209,7 @@ public class ConfigurationValidatorTests
         ConfigurationValidator.ValidateConfiguration(config);
     }
 
-    // -------------------------------------------------------------------------
     // RabbitMQ
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void RabbitMq_ValidDirectQueue_Passes()
     {
@@ -278,10 +269,7 @@ public class ConfigurationValidatorTests
             ConfigurationValidator.ValidateConfiguration(config));
     }
 
-    // -------------------------------------------------------------------------
     // Azure Service Bus
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void AzureServiceBus_ValidQueue_Passes()
     {
@@ -336,10 +324,7 @@ public class ConfigurationValidatorTests
             ConfigurationValidator.ValidateConfiguration(config));
     }
 
-    // -------------------------------------------------------------------------
     // AWS SQS
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void AwsSqs_ValidWithExplicitCredentials_Passes()
     {
@@ -413,10 +398,7 @@ public class ConfigurationValidatorTests
             ConfigurationValidator.ValidateConfiguration(config));
     }
 
-    // -------------------------------------------------------------------------
     // Azure Event Hubs
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void AzureEventHubs_Valid_Passes()
     {
@@ -458,10 +440,7 @@ public class ConfigurationValidatorTests
             ConfigurationValidator.ValidateConfiguration(config));
     }
 
-    // -------------------------------------------------------------------------
     // Kafka
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void Kafka_ValidWithSasl_Passes()
     {

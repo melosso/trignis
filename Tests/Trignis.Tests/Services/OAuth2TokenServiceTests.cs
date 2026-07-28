@@ -17,10 +17,7 @@ namespace Trignis.Tests.Services;
 /// </summary>
 public class OAuth2TokenServiceTests
 {
-    // -------------------------------------------------------------------------
     // Infrastructure stubs
-    // -------------------------------------------------------------------------
-
     private sealed class StubHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _respond;
@@ -57,14 +54,11 @@ public class OAuth2TokenServiceTests
         Scope = scope
     };
 
-    // -------------------------------------------------------------------------
     // Argument validation
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task NullAuth_ThrowsArgumentNullException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""tok""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""tok""}"));
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             svc.GetAccessTokenAsync(null!, "key"));
     }
@@ -72,7 +66,7 @@ public class OAuth2TokenServiceTests
     [Fact]
     public async Task MissingTokenEndpoint_ThrowsArgumentException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""tok""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""tok""}"));
         var auth = new ApiAuth { ClientId = "id", ClientSecret = "secret" };
 
         var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -83,7 +77,7 @@ public class OAuth2TokenServiceTests
     [Fact]
     public async Task MissingClientId_ThrowsArgumentException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""tok""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""tok""}"));
         var auth = new ApiAuth
         {
             TokenEndpoint = "https://auth.example.com/token",
@@ -99,7 +93,7 @@ public class OAuth2TokenServiceTests
     [Fact]
     public async Task MissingClientSecret_ThrowsArgumentException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""tok""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""tok""}"));
         var auth = new ApiAuth
         {
             TokenEndpoint = "https://auth.example.com/token",
@@ -112,14 +106,11 @@ public class OAuth2TokenServiceTests
         Assert.Contains("ClientSecret", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // Happy path
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task ValidRequest_ReturnsTokenFromResponse()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""my-access-token""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""my-access-token""}"));
         var token = await svc.GetAccessTokenAsync(ValidAuth(), "k1");
         Assert.Equal("my-access-token", token);
     }
@@ -131,7 +122,7 @@ public class OAuth2TokenServiceTests
         var svc = BuildService(req =>
         {
             capturedBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
-            return JsonResponse(@"{""AccessToken"":""tok""}");
+            return JsonResponse(@"{""access_token"":""tok""}");
         });
 
         await svc.GetAccessTokenAsync(ValidAuth(), "k1");
@@ -149,7 +140,7 @@ public class OAuth2TokenServiceTests
         var svc = BuildService(req =>
         {
             capturedBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
-            return JsonResponse(@"{""AccessToken"":""tok""}");
+            return JsonResponse(@"{""access_token"":""tok""}");
         });
 
         await svc.GetAccessTokenAsync(ValidAuth("api.read api.write"), "k1");
@@ -158,10 +149,7 @@ public class OAuth2TokenServiceTests
         Assert.Contains("scope=api.read+api.write", capturedBody);
     }
 
-    // -------------------------------------------------------------------------
     // Caching
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task SecondCall_WithSameKey_ReturnsCachedToken_WithoutHttpRequest()
     {
@@ -169,7 +157,7 @@ public class OAuth2TokenServiceTests
         var svc = BuildService(_ =>
         {
             callCount++;
-            return JsonResponse(@"{""AccessToken"":""cached-token""}");
+            return JsonResponse(@"{""access_token"":""cached-token""}");
         });
 
         var first = await svc.GetAccessTokenAsync(ValidAuth(), "cache-key");
@@ -187,7 +175,7 @@ public class OAuth2TokenServiceTests
         var svc = BuildService(_ =>
         {
             callCount++;
-            return JsonResponse($@"{{""AccessToken"":""token-{callCount}""}}");
+            return JsonResponse($@"{{""access_token"":""token-{callCount}""}}");
         });
 
         var t1 = await svc.GetAccessTokenAsync(ValidAuth(), "key-a");
@@ -197,10 +185,7 @@ public class OAuth2TokenServiceTests
         Assert.NotEqual(t1, t2);
     }
 
-    // -------------------------------------------------------------------------
     // Error paths
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task HttpError_ThrowsHttpRequestException()
     {
@@ -212,7 +197,7 @@ public class OAuth2TokenServiceTests
     [Fact]
     public async Task EmptyTokenInResponse_ThrowsInvalidOperationException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":""""}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":""""}"));
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.GetAccessTokenAsync(ValidAuth(), "k1"));
         Assert.Contains("access token", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -221,7 +206,7 @@ public class OAuth2TokenServiceTests
     [Fact]
     public async Task NullTokenInResponse_ThrowsInvalidOperationException()
     {
-        var svc = BuildService(_ => JsonResponse(@"{""AccessToken"":null}"));
+        var svc = BuildService(_ => JsonResponse(@"{""access_token"":null}"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             svc.GetAccessTokenAsync(ValidAuth(), "k1"));
     }
@@ -233,7 +218,7 @@ public class OAuth2TokenServiceTests
         var svc = BuildService(_ =>
         {
             cts.Cancel();
-            return JsonResponse(@"{""AccessToken"":""tok""}");
+            return JsonResponse(@"{""access_token"":""tok""}");
         });
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>

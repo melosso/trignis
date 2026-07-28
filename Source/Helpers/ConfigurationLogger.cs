@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Serilog;
 using Microsoft.Data.SqlClient;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Trignis.MicrosoftSQL.Models;
 
@@ -9,7 +10,7 @@ namespace Trignis.MicrosoftSQL.Helpers;
 
 public static class ConfigurationLogger
 {
-    public static void LogConfigurationStatus(IConfiguration configuration)
+    public static void LogConfigurationStatus(IConfiguration configuration, IReadOnlyList<EnvironmentConfig> environments, GlobalSettings globalSettings)
     {
         var version = typeof(ConfigurationLogger).Assembly.GetName().Version?.ToString() ?? "0.0.0";
 
@@ -20,8 +21,6 @@ public static class ConfigurationLogger
         Log.Information("");
         Log.Information("[Configuration]");
 
-        // Global Settings
-        var globalSettings = configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
         Log.Information("├─ Global Settings:");
         Log.Information($"│  ├─ Default Polling Interval: {globalSettings.PollingIntervalSeconds}s");
         Log.Information($"│  ├─ Max Payload Size: {globalSettings.MaxPayloadSizeBytes / 1024 / 1024}MB");
@@ -34,14 +33,12 @@ public static class ConfigurationLogger
         Log.Information($"│  └─ Connection Health Check: {(globalSettings.HealthCheckEnabled ? $"Every {globalSettings.HealthCheckIntervalMinutes}min" : "Disabled")}");
         Log.Information("│");
 
-        // Environments
-        var environments = configuration.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
-        Log.Information($"├─ Environments: {environments.Length}");
-        
-        for (int envIndex = 0; envIndex < environments.Length; envIndex++)
+        Log.Information($"├─ Environments: {environments.Count}");
+
+        for (int envIndex = 0; envIndex < environments.Count; envIndex++)
         {
             var env = environments[envIndex];
-            var isLastEnv = envIndex == environments.Length - 1;
+            var isLastEnv = envIndex == environments.Count - 1;
             var envPrefix = isLastEnv ? "└─" : "├─";
             var envVertical = isLastEnv ? " " : "│";
             
@@ -114,28 +111,10 @@ public static class ConfigurationLogger
                 if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
                 {
                     Log.Information($"│  {envVertical}     {epVertical}  ├─ Type: {endpoint.MessageQueueType}");
-                    
+
                     if (endpoint.MessageQueue != null)
                     {
-                        switch (endpoint.MessageQueueType.ToLower())
-                        {
-                            case "rabbitmq":
-                                var mqTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName) 
-                                    ? $"Queue: {endpoint.MessageQueue.QueueName}"
-                                    : $"Exchange: {endpoint.MessageQueue.Exchange}" + 
-                                      (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (Key: {endpoint.MessageQueue.RoutingKey})" : "");
-                                Log.Information($"│  {envVertical}     {epVertical}  └─ {mqTarget}");
-                                break;
-                            case "azureservicebus":
-                                var asbTarget = !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
-                                    ? $"Queue: {endpoint.MessageQueue.QueueName}"
-                                    : $"Topic: {endpoint.MessageQueue.TopicName}";
-                                Log.Information($"│  {envVertical}     {epVertical}  └─ {asbTarget}");
-                                break;
-                            case "awssqs":
-                                Log.Information($"│  {envVertical}     {epVertical}  └─ Queue: {endpoint.MessageQueue.QueueUrl}");
-                                break;
-                        }
+                        Log.Information($"│  {envVertical}     {epVertical}  └─ {endpoint.MessageQueueTarget()}");
                     }
                 }
                 // HTTP endpoint

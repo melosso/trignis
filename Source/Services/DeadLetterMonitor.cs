@@ -2,9 +2,10 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Trignis.MicrosoftSQL.Models;
 
 namespace Trignis.MicrosoftSQL.Services;
 
@@ -14,24 +15,30 @@ namespace Trignis.MicrosoftSQL.Services;
 public class DeadLetterQueueMonitor : BackgroundService
 {
     private readonly ILogger<DeadLetterQueueMonitor> _logger;
-    private readonly IConfiguration _config;
+    private readonly DeadLetterService _deadLetterService;
     private readonly string _sinkholeConnectionString;
     private readonly int _thresholdCount;
     private readonly int _checkIntervalMinutes;
     private readonly bool _enabled;
-    private long _lastAlertTimeTicks = DateTime.MinValue.Ticks;
+    // Only ever read and written from the single ExecuteAsync loop.
+    private DateTime _lastAlertTime = DateTime.MinValue;
+    private DateTime _lastPurgeTime = DateTime.UtcNow;
     private readonly TimeSpan _alertCooldown = TimeSpan.FromHours(1);
+    private readonly TimeSpan _purgeInterval = TimeSpan.FromHours(24);
 
     public DeadLetterQueueMonitor(
         ILogger<DeadLetterQueueMonitor> logger,
-        IConfiguration config)
+        DeadLetterService deadLetterService,
+        IOptions<GlobalSettings> globalSettings)
     {
         _logger = logger;
-        _config = config;
+        _deadLetterService = deadLetterService;
         _sinkholeConnectionString = "Data Source=sinkhole.db";
-        _thresholdCount = _config.GetValue<int>("ChangeTracking:DeadLetterThreshold", 100);
-        _checkIntervalMinutes = _config.GetValue<int>("ChangeTracking:DeadLetterCheckIntervalMinutes", 30);
-        _enabled = _config.GetValue<bool>("ChangeTracking:DeadLetterMonitorEnabled", true);
+
+        var settings = globalSettings.Value;
+        _thresholdCount = settings.DeadLetterThreshold;
+        _checkIntervalMinutes = settings.DeadLetterCheckIntervalMinutes;
+        _enabled = settings.DeadLetterMonitorEnabled;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -51,6 +58,14 @@ public class DeadLetterQueueMonitor : BackgroundService
             {
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
                 await CheckDeadLetterQueueAsync(stoppingToken);
+
+                // DeadletterRetentionDays is otherwise only enforced by the start-up purge,
+                // which never comes round again on a long-running service.
+                if (DateTime.UtcNow - _lastPurgeTime >= _purgeInterval)
+                {
+                    await _deadLetterService.PurgeOldDeadLettersAsync(stoppingToken);
+                    _lastPurgeTime = DateTime.UtcNow;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -105,8 +120,7 @@ public class DeadLetterQueueMonitor : BackgroundService
             _logger.LogDebug("Dead letter queue status - Total: {Total}, Recent (24h): {Recent}", totalCount, recentCount);
 
             // Alert if threshold exceeded and cooldown period has passed
-            var lastAlertTime = new DateTime(Interlocked.Read(ref _lastAlertTimeTicks), DateTimeKind.Utc);
-            if (totalCount >= _thresholdCount && (DateTime.UtcNow - lastAlertTime) > _alertCooldown)
+            if (totalCount >= _thresholdCount && (DateTime.UtcNow - _lastAlertTime) > _alertCooldown)
             {
                 _logger.LogWarning("⚠️ Dead letter queue threshold exceeded! Total: {Total} (Threshold: {Threshold})",
                     totalCount, _thresholdCount);
@@ -126,7 +140,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 }
 
                 _logger.LogWarning("Action required: Review dead letters in sinkhole.db and address recurring failures");
-                Interlocked.Exchange(ref _lastAlertTimeTicks, DateTime.UtcNow.Ticks);
+                _lastAlertTime = DateTime.UtcNow;
             }
             else if (totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
             {

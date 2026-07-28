@@ -6,13 +6,10 @@ namespace Trignis.MicrosoftSQL.Models;
 
 public record class EnvironmentConfig
 {
-    [JsonPropertyName("Name")]
     public string Name { get; init; } = string.Empty;
 
-    [JsonPropertyName("ConnectionStrings")]
     public IReadOnlyDictionary<string, string> ConnectionStrings { get; init; } = new Dictionary<string, string>();
 
-    [JsonPropertyName("ChangeTracking")]
     public EnvironmentChangeTracking ChangeTracking { get; init; } = new();
 }
 
@@ -21,34 +18,28 @@ public record class EnvironmentConfig
 /// </summary>
 public record class EnvironmentChangeTracking
 {
-    [JsonPropertyName("TrackingObjects")]
     public TrackingObject[] TrackingObjects { get; init; } = Array.Empty<TrackingObject>();
 
-    [JsonPropertyName("ApiEndpoints")]
     public ApiEndpoint[] ApiEndpoints { get; init; } = Array.Empty<ApiEndpoint>();
 
     // Environment-specific settings (can override global)
-    [JsonPropertyName("PollingIntervalSeconds")]
     public int? PollingIntervalSeconds { get; init; }
 
-    [JsonPropertyName("ExportToFile")]
     public bool? ExportToFile { get; init; }
 
-    [JsonPropertyName("FilePath")]
     public string? FilePath { get; init; }
 
-    [JsonPropertyName("ExportToApi")]
     public bool? ExportToApi { get; init; }
 
-    [JsonPropertyName("RetryCount")]
     public int? RetryCount { get; init; }
 
-    [JsonPropertyName("RetryDelaySeconds")]
     public int? RetryDelaySeconds { get; init; }
 }
 
 /// <summary>
-/// Global application settings (applies to all environments)
+/// Global application settings (applies to all environments).
+/// The JsonPropertyName attributes are load-bearing: /ui/api/settings serializes this record
+/// and the settings page reads the PascalCase names.
 /// </summary>
 public record class GlobalSettings
 {
