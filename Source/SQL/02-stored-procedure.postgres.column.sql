@@ -27,15 +27,15 @@ BEGIN
     END IF;
 
     IF TG_OP = 'UPDATE' THEN
-        IF NEW.recorded_on       IS DISTINCT FROM OLD.recorded_on       THEN changed_columns := changed_columns || 'recorded_on'::TEXT;       END IF;
-        IF NEW.type              IS DISTINCT FROM OLD.type              THEN changed_columns := changed_columns || 'type'::TEXT;              END IF;
-        IF NEW.steps             IS DISTINCT FROM OLD.steps             THEN changed_columns := changed_columns || 'steps'::TEXT;             END IF;
-        IF NEW.distance          IS DISTINCT FROM OLD.distance          THEN changed_columns := changed_columns || 'distance'::TEXT;          END IF;
-        IF NEW.duration          IS DISTINCT FROM OLD.duration          THEN changed_columns := changed_columns || 'duration'::TEXT;          END IF;
-        IF NEW.calories          IS DISTINCT FROM OLD.calories          THEN changed_columns := changed_columns || 'calories'::TEXT;          END IF;
-        IF NEW.post_processed_on IS DISTINCT FROM OLD.post_processed_on THEN changed_columns := changed_columns || 'post_processed_on'::TEXT; END IF;
-        IF NEW.adjusted_steps    IS DISTINCT FROM OLD.adjusted_steps    THEN changed_columns := changed_columns || 'adjusted_steps'::TEXT;    END IF;
-        IF NEW.adjusted_distance IS DISTINCT FROM OLD.adjusted_distance THEN changed_columns := changed_columns || 'adjusted_distance'::TEXT; END IF;
+        IF NEW.recorded_on       IS DISTINCT FROM OLD.recorded_on       THEN changed_columns := changed_columns || 'RecordedOn'::TEXT;       END IF;
+        IF NEW.type              IS DISTINCT FROM OLD.type              THEN changed_columns := changed_columns || 'Type'::TEXT;              END IF;
+        IF NEW.steps             IS DISTINCT FROM OLD.steps             THEN changed_columns := changed_columns || 'Steps'::TEXT;             END IF;
+        IF NEW.distance          IS DISTINCT FROM OLD.distance          THEN changed_columns := changed_columns || 'Distance'::TEXT;          END IF;
+        IF NEW.duration          IS DISTINCT FROM OLD.duration          THEN changed_columns := changed_columns || 'Duration'::TEXT;          END IF;
+        IF NEW.calories          IS DISTINCT FROM OLD.calories          THEN changed_columns := changed_columns || 'Calories'::TEXT;          END IF;
+        IF NEW.post_processed_on IS DISTINCT FROM OLD.post_processed_on THEN changed_columns := changed_columns || 'PostProcessedOn'::TEXT; END IF;
+        IF NEW.adjusted_steps    IS DISTINCT FROM OLD.adjusted_steps    THEN changed_columns := changed_columns || 'AdjustedSteps'::TEXT;    END IF;
+        IF NEW.adjusted_distance IS DISTINCT FROM OLD.adjusted_distance THEN changed_columns := changed_columns || 'AdjustedDistance'::TEXT; END IF;
 
         -- An UPDATE that changed nothing still fires the trigger. Recording it would send
         -- a row with every column null, which reads downstream as "everything was cleared".
@@ -86,16 +86,19 @@ BEGIN
                -- json_strip_nulls removes both. Absent from the payload but present here
                -- means the value was cleared.
                '$changed',         CASE WHEN o.operation = 'U' THEN o.changed END,
+               -- A NULL mask means the row predates column tracking, so $changed is absent
+               -- and every column is sent. Absent $changed on an update therefore reads as
+               -- "mask unknown, treat this as a full row" rather than "nothing changed".
                'Id',               o.session_id,
-               'RecordedOn',       CASE WHEN o.operation = 'I' OR 'recorded_on'       = ANY(o.changed) THEN o.recorded_on       END,
-               'Type',             CASE WHEN o.operation = 'I' OR 'type'              = ANY(o.changed) THEN o.type              END,
-               'Steps',            CASE WHEN o.operation = 'I' OR 'steps'             = ANY(o.changed) THEN o.steps             END,
-               'Distance',         CASE WHEN o.operation = 'I' OR 'distance'          = ANY(o.changed) THEN o.distance          END,
-               'Duration',         CASE WHEN o.operation = 'I' OR 'duration'          = ANY(o.changed) THEN o.duration          END,
-               'Calories',         CASE WHEN o.operation = 'I' OR 'calories'          = ANY(o.changed) THEN o.calories          END,
-               'PostProcessedOn',  CASE WHEN o.operation = 'I' OR 'post_processed_on' = ANY(o.changed) THEN o.post_processed_on END,
-               'AdjustedSteps',    CASE WHEN o.operation = 'I' OR 'adjusted_steps'    = ANY(o.changed) THEN o.adjusted_steps    END,
-               'AdjustedDistance', CASE WHEN o.operation = 'I' OR 'adjusted_distance' = ANY(o.changed) THEN o.adjusted_distance END
+               'RecordedOn',       CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'RecordedOn'       = ANY(o.changed) THEN o.recorded_on       END,
+               'Type',             CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Type'              = ANY(o.changed) THEN o.type              END,
+               'Steps',            CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Steps'             = ANY(o.changed) THEN o.steps             END,
+               'Distance',         CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Distance'          = ANY(o.changed) THEN o.distance          END,
+               'Duration',         CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Duration'          = ANY(o.changed) THEN o.duration          END,
+               'Calories',         CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Calories'          = ANY(o.changed) THEN o.calories          END,
+               'PostProcessedOn',  CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'PostProcessedOn' = ANY(o.changed) THEN o.post_processed_on END,
+               'AdjustedSteps',    CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'AdjustedSteps'    = ANY(o.changed) THEN o.adjusted_steps    END,
+               'AdjustedDistance', CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'AdjustedDistance' = ANY(o.changed) THEN o.adjusted_distance END
            )) ORDER BY o.id), '[]'::json)
       INTO rows_json
       FROM public.training_sessions_outbox o
@@ -116,10 +119,12 @@ GRANT EXECUTE ON FUNCTION web.get_training_sessions_sync(json) TO dotnetwebapp;
 
 -- Reading the payload downstream:
 --
---   $operation = 'I'  every column is present, this is the full row
+--   $operation = 'I'  the full row, though NULL columns are stripped, so a missing key
+--                     on an insert simply means that column is NULL
 --   $operation = 'U'  $changed lists the columns that moved. For each name in that list,
 --                     a matching key in the payload is the new value, and a missing key
---                     means the column was set to NULL.
+--                     means the column was set to NULL. If $changed itself is absent the
+--                     mask was never recorded, so treat the payload as a full row.
 --   $operation = 'D'  only Id is present, the row is gone
 --
 -- Columns absent from both the payload and $changed did not change, so leave them alone.
