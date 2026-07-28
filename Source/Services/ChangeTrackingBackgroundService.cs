@@ -9,70 +9,55 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Dapper;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
 using System.Net.Http.Headers;
+using Trignis.MicrosoftSQL.Helpers;
 using Trignis.MicrosoftSQL.Models;
-using System.Text.RegularExpressions;
 
 namespace Trignis.MicrosoftSQL.Services;
 
 public class ChangeTrackingBackgroundService : BackgroundService
 {
     private readonly ILogger<ChangeTrackingBackgroundService> _logger;
-    private readonly IConfiguration _config;
-    private readonly IServiceProvider _serviceProvider;
-    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly string _stateConnectionString;
-    private readonly long _maxExportDirectorySizeBytes;
     private readonly DeadLetterService _deadLetterService;
-    private readonly MessageQueueService _messageQueueService;
-    private readonly OAuth2TokenService _oauth2TokenService;
+    private readonly ExportService _exportService;
+    private readonly RetryPolicies _retryPolicies;
     private readonly GlobalSettings _globalSettings;
     private readonly EnvironmentConfigService _configService;
-    private readonly ConcurrentDictionary<string, bool> _isProcessing = new();
     private volatile CancellationTokenSource? _globalStoppingSource;
     private readonly Dictionary<string, (CancellationTokenSource Cts, Task Task)> _envTasks = new();
     private readonly object _envTasksLock = new();
-    private DateTime _lastPurgeTime = DateTime.MinValue;
 
     public ChangeTrackingBackgroundService(
         ILogger<ChangeTrackingBackgroundService> logger,
         IConfiguration config,
-        IServiceProvider serviceProvider,
-        IHttpClientFactory httpClientFactory,
+        IOptions<GlobalSettings> globalSettings,
         IHostApplicationLifetime lifetime,
         DeadLetterService deadLetterService,
-        MessageQueueService messageQueueService,
-        OAuth2TokenService oauth2TokenService,
+        ExportService exportService,
+        RetryPolicies retryPolicies,
         EnvironmentConfigService configService)
     {
         _logger = logger;
         _logger.LogDebug("ChangeTrackingBackgroundService constructor called");
-        _config = config;
-        _serviceProvider = serviceProvider;
-        _httpClientFactory = httpClientFactory;
         _lifetime = lifetime;
         _deadLetterService = deadLetterService;
-        _messageQueueService = messageQueueService;
-        _oauth2TokenService = oauth2TokenService;
+        _exportService = exportService;
+        _retryPolicies = retryPolicies;
         _configService = configService;
+        _globalSettings = globalSettings.Value;
 
-        var stateDbPath = _config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
+        var stateDbPath = config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
         _stateConnectionString = $"Data Source={stateDbPath}";
-
-        var maxSizeMB = _config.GetValue<int>("ChangeTracking:FilePathSizeLimit", 500);
-        _maxExportDirectorySizeBytes = maxSizeMB * 1024L * 1024L;
-
-        // Load global settings (appsettings.json — not hot-reloaded)
-        _globalSettings = _config.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)
@@ -210,12 +195,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         {
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
 
-            // Purge old dead letters once per day
-            if ((DateTime.UtcNow - _lastPurgeTime).TotalHours >= 24)
-            {
-                await _deadLetterService.PurgeOldDeadLettersAsync();
-                _lastPurgeTime = DateTime.UtcNow;
-            }
+            await _deadLetterService.PurgeOldDeadLettersAsync(stoppingToken);
 
             // Start a task per environment and subscribe to hot-reload changes
             foreach (var env in _configService.Environments)
@@ -241,12 +221,24 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
             // Cancel and await all per-environment tasks
             List<Task> runningTasks;
+            List<CancellationTokenSource> sources;
             lock (_envTasksLock)
             {
-                foreach (var (cts, _) in _envTasks.Values) cts.Cancel();
+                sources = [.. _envTasks.Values.Select(x => x.Cts)];
                 runningTasks = [.. _envTasks.Values.Select(x => x.Task)];
+                _envTasks.Clear();
             }
-            try { await Task.WhenAll(runningTasks); } catch { }
+            foreach (var cts in sources) cts.Cancel();
+            try
+            {
+                await Task.WhenAll(runningTasks);
+            }
+            catch (Exception ex)
+            {
+                // Shutdown must continue to the Dispose loop whatever the environments threw
+                _logger.LogDebug(ex, "Environment task(s) faulted while shutting down");
+            }
+            foreach (var cts in sources) cts.Dispose();
         }
 
         _logger.LogDebug("Background service execution completed");
@@ -263,10 +255,18 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         async Task SafeRestartAsync(EnvironmentConfig env)
         {
-            try { await RestartEnvironmentTaskAsync(env).ConfigureAwait(false); }
-            catch (OperationCanceledException) { /* shutdown */ }
+            try
+            {
+                await RestartEnvironmentTaskAsync(env).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException ex)
+            {
+                _logger.LogDebug(ex, "Restart of {Env} abandoned because the service is shutting down", env.Name);
+            }
             catch (Exception ex)
-            { _logger.LogError(ex, "Failed to restart environment task for {Env}", env.Name); }
+            {
+                _logger.LogError(ex, "Failed to restart environment task for {Env}", env.Name);
+            }
         }
     }
 
@@ -276,7 +276,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
         var task = ProcessEnvironmentAsync(env, cts.Token);
         lock (_envTasksLock)
         {
-            _isProcessing[env.Name] = false;
             _envTasks[env.Name] = (cts, task);
         }
     }
@@ -306,7 +305,17 @@ public class ChangeTrackingBackgroundService : BackgroundService
             }
         }
         if (oldTask != null)
-            try { await oldTask.WaitAsync(TimeSpan.FromSeconds(5)); } catch { }
+        {
+            try
+            {
+                await oldTask.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception ex)
+            {
+                // A slow or faulted old task must not block the reloaded one from starting
+                _logger.LogDebug(ex, "Previous task for {Env} did not stop cleanly within 5s", env.Name);
+            }
+        }
 
         var stoppingToken = _globalStoppingSource?.Token ?? CancellationToken.None;
         if (!stoppingToken.IsCancellationRequested)
@@ -322,7 +331,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            _isProcessing[environment.Name] = true;
             var cycleStartTime = DateTime.UtcNow;
             
             try
@@ -364,10 +372,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
             {
                 _logger.LogError(ex, $"[{environment.Name}] Error during change tracking cycle");
             }
-            finally
-            {
-                _isProcessing[environment.Name] = false;
-            }
 
             try
             {
@@ -384,25 +388,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
         _logger.LogDebug($"Environment '{environment.Name}' processing thread stopped");
     }
 
-    private AsyncRetryPolicy GetRetryPolicy(EnvironmentConfig environment, CancellationToken stoppingToken)
-    {
-        var retryCount = environment.ChangeTracking.RetryCount ?? _globalSettings.RetryCount;
-        var retryDelay = TimeSpan.FromSeconds(environment.ChangeTracking.RetryDelaySeconds ?? _globalSettings.RetryDelaySeconds);
-        
-        return Policy
-            .Handle<HttpRequestException>()
-            .Or<IOException>()
-            .Or<SqlException>()
-            .WaitAndRetryAsync(retryCount, attempt => retryDelay, (exception, timeSpan, attempt, context) =>
-            {
-                if (stoppingToken.IsCancellationRequested)
-                {
-                    throw new OperationCanceledException();
-                }
-                _logger.LogWarning($"[{environment.Name}] Retry {attempt} of {retryCount} after {timeSpan.TotalSeconds}s due to {exception.Message}");
-            });
-    }
-
     private async Task ProcessChangesForObjectAsync(EnvironmentConfig environment, TrackingObject trackingObject, CancellationToken stoppingToken)
     {
         _logger.LogInformation($"[{environment.Name}] Processing changes for {trackingObject.Name} ({trackingObject.TableName})...");
@@ -415,8 +400,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         stoppingToken.ThrowIfCancellationRequested();
 
-        var retryPolicy = GetRetryPolicy(environment, stoppingToken);
-        await retryPolicy.ExecuteAsync(async () =>
+        var retryPolicy = _retryPolicies.For(environment);
+        await retryPolicy.ExecuteAsync(async _ =>
         {
             // Modify connection string to handle large text
             var builder = new SqlConnectionStringBuilder(connectionString);
@@ -450,8 +435,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 }
                 else
                 {
-                    var currentVersion = await conn.ExecuteScalarAsync<long>("SELECT CHANGE_TRACKING_CURRENT_VERSION()");
-                    lastVersion = (int)currentVersion;
+                    using var versionCommand = new SqlCommand("SELECT CHANGE_TRACKING_CURRENT_VERSION()", conn);
+                    lastVersion = Convert.ToInt32(await versionCommand.ExecuteScalarAsync(stoppingToken));
                     await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, lastVersion);
                     fromVersion = lastVersion;
                     _logger.LogInformation($"[{environment.Name}] Initialized last processed version for {trackingObject.Name} to {lastVersion}");
@@ -466,10 +451,6 @@ public class ChangeTrackingBackgroundService : BackgroundService
             var json = JsonSerializer.Serialize(payload);
 
             stoppingToken.ThrowIfCancellationRequested();
-
-            // Build the SQL to wrap the SP call in a table variable for reliable retrieval. Source: https://stackoverflow.com/a/63090846
-            var parameters = new DynamicParameters();
-            parameters.Add("@JsonParam", json);  // Note: Renamed to avoid conflict with the table variable
 
             string result;
 
@@ -497,7 +478,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 return sb.ToString();
             }
 
-            using (var reader = await conn.ExecuteReaderAsync(sql, parameters, commandTimeout: 300))
+            using var spCommand = new SqlCommand(sql, conn) { CommandTimeout = 300 };
+            spCommand.Parameters.AddWithValue("@JsonParam", json);
+
+            using (var reader = await spCommand.ExecuteReaderAsync(stoppingToken))
             {
                 // Read the result from the first column
                 result = await ReadClobAsync(reader, stoppingToken);
@@ -555,13 +539,19 @@ public class ChangeTrackingBackgroundService : BackgroundService
                             .Where(v => v.HasValue).Select(v => v!.Value)
                             .DefaultIfEmpty(version).Max();
 
-                        await ExportChangesAsync(environment, trackingObject, data, stoppingToken);
+                        // Every destination that failed becomes a dead letter, so the payload can
+                        // be replayed once the downstream problem is fixed.
+                        foreach (var failure in await _exportService.ExportAsync(environment, trackingObject, data, stoppingToken))
+                        {
+                            await _deadLetterService.SaveDeadLetterAsync(
+                                environment.Name, trackingObject.Name, trackingObject.Database, data, failure.Error, stoppingToken);
+                        }
                     }
                 }
 
                 await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, maxVersion);
             }
-        });
+        }, stoppingToken);
     }
 
     private async Task<int> GetLastProcessedVersionAsync(string environmentName, string objectName)
@@ -600,367 +590,14 @@ public class ChangeTrackingBackgroundService : BackgroundService
         await command.ExecuteNonQueryAsync();
     }
 
-    private async Task ExportChangesAsync(EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data, CancellationToken stoppingToken)
-    {
-        var exportToFile = environment.ChangeTracking.ExportToFile ?? _globalSettings.ExportToFile;
-        var exportToApi = environment.ChangeTracking.ExportToApi ?? _globalSettings.ExportToApi;
-        var retryPolicy = GetRetryPolicy(environment, stoppingToken);
-
-        // Calculate total number of exports
-        var apiEndpoints = exportToApi ? (environment.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()) : Array.Empty<ApiEndpoint>();
-        var totalExports = (exportToFile ? 1 : 0) + apiEndpoints.Length;
-        var currentExportIndex = 0;
-
-        // File export
-        if (exportToFile)
-        {
-            currentExportIndex++;
-            var isLast = currentExportIndex == totalExports;
-            var prefix = isLast ? "└─" : "├─";
-
-            stoppingToken.ThrowIfCancellationRequested();
-            try
-            {
-                var filePathTemplate = environment.ChangeTracking.FilePath ?? _globalSettings.FilePath;
-                var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-                var filePath = filePathTemplate
-                    .Replace("{timestamp}", timestamp)
-                    .Replace("{object}", trackingObject.Name)
-                    .Replace("{database}", trackingObject.Database)
-                    .Replace("{environment}", environment.Name);
-
-                await retryPolicy.ExecuteAsync(async () => await ExportToFileAsync(environment, trackingObject, data));
-                _logger.LogInformation($"[{environment.Name}]  {prefix} [FILE] Exported to: {filePath}");
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                _logger.LogDebug($"[{environment.Name}]  {prefix} File export cancelled due to shutdown");
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, $"[{environment.Name}]  {prefix} [FILE] Export FAILED: {ex.Message}");
-                await _deadLetterService.SaveDeadLetterAsync($"{environment.Name}_{trackingObject.Name}", trackingObject.Database, data, ex);
-            }
-        }
-
-        // API/Message Queue exports
-        if (exportToApi && apiEndpoints.Length > 0)
-        {
-            foreach (var endpoint in apiEndpoints)
-            {
-                currentExportIndex++;
-                var isLast = currentExportIndex == totalExports;
-                var prefix = isLast ? "└─" : "├─";
-
-                stoppingToken.ThrowIfCancellationRequested();
-
-                try
-                {
-                    await retryPolicy.ExecuteAsync(async () =>
-                    {
-                        // Handle Message Queue endpoints
-                        if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
-                        {
-                            await _messageQueueService.SendToQueueAsync(endpoint, data, stoppingToken);
-                        }
-                        else
-                        {
-                            // Handle HTTP endpoints with batching if needed
-                            var recordCount = data.GetArrayLength();
-                            var maxRecordsPerBatch = _globalSettings.MaxRecordsPerBatch;
-                            var enableBatching = _globalSettings.EnablePayloadBatching;
-
-                            if (enableBatching && recordCount > maxRecordsPerBatch)
-                            {
-                                var batches = data.EnumerateArray()
-                                    .Select((record, index) => new { record, index })
-                                    .GroupBy(x => x.index / maxRecordsPerBatch)
-                                    .Select(g => g.Select(x => x.record).ToArray())
-                                    .ToList();
-
-                                _logger.LogDebug($"[{environment.Name}] Batching {recordCount} records into {batches.Count} batches");
-
-                                for (int i = 0; i < batches.Count; i++)
-                                {
-                                    var batch = batches[i];
-                                    var batchJson = JsonSerializer.Serialize(batch);
-                                    var batchElement = JsonDocument.Parse(batchJson).RootElement;
-
-                                    await SendHttpRequestAsync(endpoint, trackingObject, environment, batchElement, i + 1, batches.Count, stoppingToken);
-                                }
-                            }
-                            else
-                            {
-                                await SendHttpRequestAsync(endpoint, trackingObject, environment, data, null, null, stoppingToken);
-                            }
-                        }
-                    });
-
-                    // Log success based on endpoint type
-                    if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
-                    {
-                        var target = GetMessageQueueTarget(endpoint);
-                        _logger.LogInformation($"[{environment.Name}]  {prefix} [MQ] Exported to {endpoint.MessageQueueType} {target}");
-                    }
-                    else
-                    {
-                        var endpointName = endpoint.Key ?? "unnamed";
-                        _logger.LogInformation($"[{environment.Name}]  {prefix} [HTTP] Exported to endpoint '{endpointName}': {endpoint.Url}");
-                    }
-                }
-                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-                {
-                    _logger.LogDebug($"[{environment.Name}]  {prefix} Export cancelled due to shutdown");
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    var exportType = !string.IsNullOrEmpty(endpoint.MessageQueueType) ? "MQ" : "HTTP";
-                    _logger.LogError(ex, $"[{environment.Name}]  {prefix} [{exportType}] Export FAILED: {ex.Message}");
-                    await _deadLetterService.SaveDeadLetterAsync($"{environment.Name}_{trackingObject.Name}", trackingObject.Database, data, ex);
-                }
-            }
-        }
-    }
-
-    private async Task ExportToFileAsync(EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data)
-    {
-        var filePathTemplate = environment.ChangeTracking.FilePath ?? _globalSettings.FilePath;
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-        var filePath = filePathTemplate
-            .Replace("{timestamp}", timestamp)
-            .Replace("{object}", trackingObject.Name)
-            .Replace("{database}", trackingObject.Database)
-            .Replace("{environment}", environment.Name);
-
-        var directory = Path.GetDirectoryName(filePath);
-        if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(filePath, json);
-        
-        // Don't log here - caller logs with proper context
-
-        CleanupOldFiles("exports", _maxExportDirectorySizeBytes);
-    }
-
-    private async Task SendHttpRequestAsync(
-        ApiEndpoint endpoint,
-        TrackingObject trackingObject,
-        EnvironmentConfig environment,
-        JsonElement data,
-        int? batchNumber,
-        int? totalBatches,
-        CancellationToken stoppingToken)
-    {
-        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-        var apiUrl = endpoint.Url?
-            .Replace("{timestamp}", Uri.EscapeDataString(timestamp))
-            .Replace("{object}", Uri.EscapeDataString(trackingObject.Name))
-            .Replace("{database}", Uri.EscapeDataString(trackingObject.Database))
-            .Replace("{environment}", Uri.EscapeDataString(environment.Name))
-            .Replace("{key}", Uri.EscapeDataString(endpoint.Key ?? ""));
-
-        if (string.IsNullOrEmpty(apiUrl))
-            throw new InvalidOperationException("API URL is required for HTTP endpoints");
-
-        using var client = _httpClientFactory.CreateClient();
-        client.Timeout = TimeSpan.FromSeconds(30);
-
-        // Add authentication
-        if (endpoint.Auth != null)
-        {
-            switch (endpoint.Auth.Type?.ToLower())
-            {
-                case "bearer":
-                    if (!string.IsNullOrEmpty(endpoint.Auth.Token))
-                    {
-                        client.DefaultRequestHeaders.Authorization =
-                            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", endpoint.Auth.Token);
-                    }
-                    break;
-                case "basic":
-                    if (!string.IsNullOrEmpty(endpoint.Auth.Username) && !string.IsNullOrEmpty(endpoint.Auth.Password))
-                    {
-                        var credentials = Convert.ToBase64String(
-                            Encoding.UTF8.GetBytes($"{endpoint.Auth.Username}:{endpoint.Auth.Password}"));
-                        client.DefaultRequestHeaders.Authorization =
-                            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
-                    }
-                    break;
-                case "apikey":
-                    var apiKey = endpoint.Auth.ApiKey;
-                    var headerName = endpoint.Auth.HeaderName ?? "X-API-Key";
-                    if (!string.IsNullOrEmpty(apiKey))
-                    {
-                        client.DefaultRequestHeaders.Add(headerName, apiKey);
-                    }
-                    break;
-                case "oauth2clientcredentials":
-                    var cacheKey = $"{endpoint.Key ?? "default"}_{endpoint.Auth.ClientId}";
-                    var token = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, cacheKey);
-                    if (!string.IsNullOrEmpty(token))
-                    {
-                        client.DefaultRequestHeaders.Authorization =
-                            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
-                    }
-                    break;
-            }
-        }
-
-        // Add custom headers
-        if (endpoint.CustomHeaders != null)
-        {
-            foreach (var header in endpoint.CustomHeaders)
-            {
-                var headerValue = header.Value
-                    .Replace("{timestamp}", timestamp)
-                    .Replace("{object}", trackingObject.Name)
-                    .Replace("{database}", trackingObject.Database)
-                    .Replace("{environment}", environment.Name)
-                    .Replace("{guid}", Guid.NewGuid().ToString());
-
-                if (batchNumber.HasValue && totalBatches.HasValue)
-                {
-                    headerValue = headerValue
-                        .Replace("{batch}", batchNumber.Value.ToString())
-                        .Replace("{totalbatches}", totalBatches.Value.ToString());
-                }
-
-                client.DefaultRequestHeaders.Add(header.Key, headerValue);
-            }
-        }
-
-        // Add batch info to headers if batching
-        if (batchNumber.HasValue && totalBatches.HasValue)
-        {
-            client.DefaultRequestHeaders.Add("X-Batch-Number", batchNumber.Value.ToString());
-            client.DefaultRequestHeaders.Add("X-Total-Batches", totalBatches.Value.ToString());
-        }
-
-        var jsonContent = JsonSerializer.Serialize(data);
-        HttpContent content;
-
-        // Apply compression if enabled
-        if (endpoint.EnableCompression)
-        {
-            var compressedBytes = CompressString(jsonContent);
-            content = new ByteArrayContent(compressedBytes);
-            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-            content.Headers.ContentEncoding.Add("gzip");
-            _logger.LogDebug($"[{environment.Name}] Compressed payload from {jsonContent.Length} to {compressedBytes.Length} bytes");
-        }
-        else
-        {
-            content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
-        }
-
-        var response = await client.PostAsync(apiUrl, content, stoppingToken);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"API export to '{endpoint.Key ?? apiUrl}' failed with status {response.StatusCode}");
-        }
-
-        // Don't log here - caller logs with proper context
-    }
-
-    private string GetMessageQueueTarget(ApiEndpoint endpoint)
-    {
-        if (endpoint.MessageQueue == null)
-            return "unknown";
-
-        return endpoint.MessageQueueType?.ToLower() switch
-        {
-            "rabbitmq" => !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
-                ? $"queue '{endpoint.MessageQueue.QueueName}'"
-                : $"exchange '{endpoint.MessageQueue.Exchange}'" +
-                  (!string.IsNullOrEmpty(endpoint.MessageQueue.RoutingKey) ? $" (key: {endpoint.MessageQueue.RoutingKey})" : ""),
-            "azureservicebus" => !string.IsNullOrEmpty(endpoint.MessageQueue.QueueName)
-                ? $"queue '{endpoint.MessageQueue.QueueName}'"
-                : $"topic '{endpoint.MessageQueue.TopicName}'",
-            "awssqs" => $"queue '{endpoint.MessageQueue.QueueUrl}'",
-            _ => "unknown"
-        };
-    }
-    
-    private void CleanupOldFiles(string basePath, long maxSizeBytes)
-    {
-        if (!Directory.Exists(basePath))
-            return;
-
-        var allFiles = Directory.EnumerateFiles(basePath, "*", SearchOption.AllDirectories)
-            .Select(f => new FileInfo(f))
-            .OrderBy(f => f.CreationTime)
-            .ToList();
-
-        long currentSize = allFiles.Sum(f => f.Length);
-        if (currentSize <= maxSizeBytes) return;
-
-        _logger.LogInformation($"Export directory size {currentSize / 1024 / 1024} MB exceeds limit {maxSizeBytes / 1024 / 1024} MB. Cleaning up old files...");
-
-        foreach (var file in allFiles)
-        {
-            if (currentSize <= maxSizeBytes) break;
-            try
-            {
-                file.Delete();
-                currentSize -= file.Length;
-                _logger.LogInformation($"Deleted old export file: {file.FullName}");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, $"Failed to delete file {file.FullName}");
-            }
-        }
-    }
-    private byte[] CompressString(string text)
-    {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        using var outputStream = new System.IO.MemoryStream();
-        using (var gzipStream = new System.IO.Compression.GZipStream(outputStream, System.IO.Compression.CompressionMode.Compress))
-        {
-            gzipStream.Write(bytes, 0, bytes.Length);
-        }
-        return outputStream.ToArray();
-    }
-
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Exit: Background service is stopping...");
-        
-        try
-        {
-            // Wait for all environments to finish processing
-            var timeout = TimeSpan.FromSeconds(30);
-            var startWait = DateTime.UtcNow;
-            
-            while (_isProcessing.Any(kvp => kvp.Value) && (DateTime.UtcNow - startWait) < timeout)
-            {
-                await Task.Delay(500, cancellationToken);
-            }
 
-            if (_isProcessing.Any(kvp => kvp.Value))
-            {
-                _logger.LogWarning("Some environments did not complete within timeout, forcing shutdown");
-            }
-
-            _logger.LogDebug("Exit: Background service stopped");
-        }
-        catch (OperationCanceledException)
-        {
-            _logger.LogDebug("Shutdown cancelled or timed out");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during service shutdown");
-        }
-
+        // base.StopAsync awaits ExecuteAsync, whose finally awaits every environment task
         await base.StopAsync(cancellationToken);
+
+        _logger.LogDebug("Exit: Background service stopped");
     }
 
     public override void Dispose()

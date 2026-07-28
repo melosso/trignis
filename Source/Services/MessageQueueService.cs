@@ -15,21 +15,17 @@ using Polly;
 using Polly.CircuitBreaker;
 using System.Collections.Concurrent;
 using System.Threading;
-using System.IO.Compression;
-using System.IO;
+using Trignis.MicrosoftSQL.Helpers;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Trignis.MicrosoftSQL.Services;
 
-public class MessageQueueService : IDisposable, IAsyncDisposable
+public class MessageQueueService : IAsyncDisposable
 {
     private readonly ILogger<MessageQueueService> _logger;
-    private readonly ConcurrentDictionary<string, IConnection> _rabbitConnections = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _rabbitLocks = new();
+    private readonly ConcurrentDictionary<string, Lazy<Task<IConnection>>> _rabbitConnections = new();
     private readonly ConcurrentDictionary<string, IProducer<Null, string>> _kafkaProducers = new();
     private readonly ConcurrentDictionary<string, AsyncCircuitBreakerPolicy> _circuitBreakers = new();
-    private readonly DeadLetterQueueMonitor _dlqMonitor;
 
     // Message size limits
     private const int RABBITMQ_MAX_SIZE = 128 * 1024 * 1024; // 128MB
@@ -37,16 +33,9 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
     private const int AWS_SQS_MAX_SIZE = 256 * 1024; // 256KB
     private const int AZURE_EH_MAX_SIZE = 1 * 1024 * 1024; // 1MB
     private const int KAFKA_DEFAULT_MAX_SIZE = 1 * 1024 * 1024; // 1MB (Kafka server default)
-    private const int BATCH_SIZE = 10; // For SQS batching
     private const int COMPRESSION_THRESHOLD = 1024; // Compress messages > 1KB
 
-    public MessageQueueService(
-        ILogger<MessageQueueService> logger,
-        DeadLetterQueueMonitor dlqMonitor)
-    {
-        _logger = logger;
-        _dlqMonitor = dlqMonitor;
-    }
+    public MessageQueueService(ILogger<MessageQueueService> logger) => _logger = logger;
 
     public async Task SendToQueueAsync(ApiEndpoint endpoint, JsonElement data, CancellationToken cancellationToken = default)
     {
@@ -79,7 +68,7 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
                         // Try compression if message is too large
                         if (messageSizeBytes > AZURE_SB_STANDARD_MAX)
                         {
-                            messageBody = await CompressMessageAsync(messageBody);
+                            messageBody = CompressMessage(messageBody);
                             messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
                             ValidateMessageSize(messageSizeBytes, AZURE_SB_STANDARD_MAX, "Azure Service Bus");
                         }
@@ -89,7 +78,7 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
                         // Try compression if message is too large
                         if (messageSizeBytes > AWS_SQS_MAX_SIZE)
                         {
-                            messageBody = await CompressMessageAsync(messageBody);
+                            messageBody = CompressMessage(messageBody);
                             messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
                             ValidateMessageSize(messageSizeBytes, AWS_SQS_MAX_SIZE, "AWS SQS");
                         }
@@ -150,20 +139,15 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
         }
     }
 
-    private async Task<string> CompressMessageAsync(string message)
+    private string CompressMessage(string message)
     {
-        var bytes = Encoding.UTF8.GetBytes(message);
-        using var outputStream = new MemoryStream();
-        using (var gzipStream = new GZipStream(outputStream, CompressionLevel.Optimal))
-        {
-            await gzipStream.WriteAsync(bytes, 0, bytes.Length);
-        }
-        var compressed = Convert.ToBase64String(outputStream.ToArray());
-        
-        _logger.LogDebug("Compressed message from {Original} to {Compressed} bytes ({Ratio:P2} reduction)", 
-            bytes.Length, outputStream.Length, 1.0 - (double)outputStream.Length / bytes.Length);
-        
-        return compressed;
+        var originalLength = Encoding.UTF8.GetByteCount(message);
+        var compressed = Gzip.Compress(message);
+
+        _logger.LogDebug("Compressed message from {Original} to {Compressed} bytes ({Ratio:P2} reduction)",
+            originalLength, compressed.Length, 1.0 - (double)compressed.Length / originalLength);
+
+        return Convert.ToBase64String(compressed);
     }
 
     private async Task SendToRabbitMQAsync(MessageQueueConfig config, string message, string correlationId, CancellationToken cancellationToken)
@@ -174,35 +158,7 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
         }
 
         var connectionKey = $"{config.HostName}:{config.Port}:{config.VirtualHost}";
-        IConnection connection;
-
-        // Reuse connection (connection pooling) — per-key semaphore prevents TOCTOU race
-        var sem = _rabbitLocks.GetOrAdd(connectionKey, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (!_rabbitConnections.TryGetValue(connectionKey, out connection!) || !connection.IsOpen)
-            {
-                var factory = new ConnectionFactory
-                {
-                    HostName = config.HostName,
-                    Port = config.Port,
-                    VirtualHost = config.VirtualHost ?? "/",
-                    UserName = config.Username ?? "guest",
-                    Password = config.Password ?? "guest",
-                    AutomaticRecoveryEnabled = true,
-                    NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
-                    RequestedConnectionTimeout = TimeSpan.FromSeconds(30),
-                    RequestedHeartbeat = TimeSpan.FromSeconds(60)
-                };
-
-                connection = await factory.CreateConnectionAsync(cancellationToken);
-                _rabbitConnections[connectionKey] = connection;
-                _logger.LogDebug("Created RabbitMQ connection to {Host}:{Port}{VHost}",
-                    config.HostName, config.Port, config.VirtualHost ?? "/");
-            }
-        }
-        finally { sem.Release(); }
+        var connection = await GetOrCreateConnectionAsync(connectionKey, config, cancellationToken).ConfigureAwait(false);
 
         IChannel? channel = null;
         try
@@ -301,6 +257,68 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// One connection per host/port/vhost. The Lazy is the single-flight gate; a closed
+    /// connection is swapped out atomically.
+    /// ponytail: the first caller's token drives the shared creation, so its cancellation
+    /// faults the other waiters too; they retry on the next send.
+    /// </summary>
+    private async Task<IConnection> GetOrCreateConnectionAsync(string key, MessageQueueConfig config, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var lazy = _rabbitConnections.GetOrAdd(key,
+                _ => new Lazy<Task<IConnection>>(() => CreateRabbitConnectionAsync(config, cancellationToken)));
+
+            IConnection connection;
+            try
+            {
+                connection = await lazy.Value.ConfigureAwait(false);
+            }
+            catch
+            {
+                // never cache a failed creation
+                _rabbitConnections.TryRemove(new KeyValuePair<string, Lazy<Task<IConnection>>>(key, lazy));
+                throw;
+            }
+
+            if (connection.IsOpen) return connection;
+
+            if (_rabbitConnections.TryRemove(new KeyValuePair<string, Lazy<Task<IConnection>>>(key, lazy)))
+            {
+                try
+                {
+                    connection.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Discarding an already-dead RabbitMQ connection for {Key}", key);
+                }
+            }
+        }
+    }
+
+    private async Task<IConnection> CreateRabbitConnectionAsync(MessageQueueConfig config, CancellationToken cancellationToken)
+    {
+        var factory = new ConnectionFactory
+        {
+            HostName = config.HostName!, // SendToRabbitMQAsync rejects a null/empty host first
+            Port = config.Port,
+            VirtualHost = config.VirtualHost ?? "/",
+            UserName = config.Username ?? "guest",
+            Password = config.Password ?? "guest",
+            AutomaticRecoveryEnabled = true,
+            NetworkRecoveryInterval = TimeSpan.FromSeconds(10),
+            RequestedConnectionTimeout = TimeSpan.FromSeconds(30),
+            RequestedHeartbeat = TimeSpan.FromSeconds(60)
+        };
+
+        var connection = await factory.CreateConnectionAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogDebug("Created RabbitMQ connection to {Host}:{Port}{VHost}",
+            config.HostName, config.Port, config.VirtualHost ?? "/");
+        return connection;
     }
 
     private async Task SendToAzureServiceBusAsync(MessageQueueConfig config, string message, string correlationId, bool isCompressed, CancellationToken cancellationToken)
@@ -642,11 +660,13 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
     {
         foreach (var kvp in _rabbitConnections)
         {
+            if (!kvp.Value.IsValueCreated) continue;
             try
             {
-                if (kvp.Value.IsOpen)
-                    await kvp.Value.CloseAsync().ConfigureAwait(false);
-                kvp.Value.Dispose();
+                var connection = await kvp.Value.Value.ConfigureAwait(false);
+                if (connection.IsOpen)
+                    await connection.CloseAsync().ConfigureAwait(false);
+                connection.Dispose();
             }
             catch (Exception ex)
             {
@@ -654,9 +674,6 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
             }
         }
         _rabbitConnections.Clear();
-
-        foreach (var kvp in _rabbitLocks)
-            kvp.Value.Dispose();
 
         foreach (var kvp in _kafkaProducers)
         {
@@ -672,9 +689,4 @@ public class MessageQueueService : IDisposable, IAsyncDisposable
         }
         _kafkaProducers.Clear();
     }
-
-    /// <summary>
-    /// Synchronous dispose shim for non-async DI teardown paths. Prefer DisposeAsync where possible.
-    /// </summary>
-    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 }

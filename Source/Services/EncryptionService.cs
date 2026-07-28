@@ -6,6 +6,7 @@ using System.Linq;
 using Serilog;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Trignis.MicrosoftSQL.Helpers;
 
 namespace Trignis.MicrosoftSQL.Services
 {
@@ -13,7 +14,6 @@ namespace Trignis.MicrosoftSQL.Services
     {
         private const string EncryptedHeader = "PWENC:";
         private const string PrivateKeyFileName = "recovery.baklz4";
-        private const string PublicKeyFileName = "snapshot_blob.bin";
         private readonly string _certsPath;
         private string _currentPublicKeyPem = string.Empty;
         
@@ -61,40 +61,9 @@ namespace Trignis.MicrosoftSQL.Services
                 return envKey;
             }
 
-            // Priority 3: Check .env file (for Docker)
-            var projectRoot = FindProjectRoot(AppContext.BaseDirectory);
-            var envFilePath = Path.Combine(projectRoot, ".env");
-            
-            if (File.Exists(envFilePath))
-            {
-                try
-                {
-                    var envLines = File.ReadAllLines(envFilePath);
-                    foreach (var line in envLines)
-                    {
-                        var trimmed = line.Trim();
-                        if (trimmed.StartsWith("#") || string.IsNullOrWhiteSpace(trimmed))
-                            continue;
+            // .env is not read here — Program.cs loads it into the process environment first
 
-                        var parts = trimmed.Split('=', 2);
-                        if (parts.Length == 2 && parts[0].Trim() == "TRIGNIS_ENCRYPTION_KEY")
-                        {
-                            var key = parts[1].Trim().Trim('"', '\'');
-                            if (!string.IsNullOrWhiteSpace(key))
-                            {
-                                Log.Debug("Using encryption key from .env file");
-                                return key;
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.Warning(ex, "Failed to read environment file at {Path}", envFilePath);
-                }
-            }
-
-            // Priority 4: Fallback to hardcoded key (with warning)
+            // Priority 3: Fallback to hardcoded key (with warning)
             Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +
                         "For production, set TRIGNIS_ENCRYPTION_KEY environment variable or create .env file.");
             
@@ -121,40 +90,19 @@ namespace Trignis.MicrosoftSQL.Services
         private void InitializeKeyPair()
         {
             var privateKeyPath = Path.Combine(_certsPath, PrivateKeyFileName);
-            var publicKeyPath = Path.Combine(_certsPath, PublicKeyFileName);
 
+            // public key is always derived from the private key, never read from disk
             if (!File.Exists(privateKeyPath))
             {
                 Log.Debug("Private key not found. Generating new keypair...");
 
-                // Generate new keypair
                 using var rsa = RSA.Create(2048);
                 var privateKeyPem = ExportPrivateKeyPem(rsa);
-                var publicKeyPem = ExportPublicKeyPem(rsa);
 
-                // Save private key
                 File.WriteAllText(privateKeyPath, EncryptPrivateKey(privateKeyPem));
                 Log.Debug("Private key saved to: {PrivateKeyPath}", privateKeyPath);
 
-                // Save public key
-                File.WriteAllText(publicKeyPath, publicKeyPem);
-                Log.Debug("Public key saved to: {PublicKeyPath}", publicKeyPath);
-
-                // Save reference file
-                var referencePath = Path.Combine(_certsPath, "store.jsonc");
-                var machine = Environment.MachineName;
-                var timestamp = DateTimeOffset.Now.ToString("o"); // ISO 8601
-
-                var referenceContent = new
-                {
-                    MachineIdentity = Convert.ToBase64String(Encoding.UTF8.GetBytes(machine)),
-                    Timestamp = timestamp
-                };
-                File.WriteAllText(referencePath, JsonSerializer.Serialize(referenceContent, new JsonSerializerOptions { WriteIndented = true }));
-                Log.Debug("Reference file saved to: {ReferencePath}", referencePath);
-
-                // Update current public key
-                _currentPublicKeyPem = publicKeyPem;
+                _currentPublicKeyPem = ExportPublicKeyPem(rsa);
                 Log.Information("⚠ Generated new RSA keypair for encryption");
             }
             else
@@ -166,11 +114,7 @@ namespace Trignis.MicrosoftSQL.Services
                     var privateKeyPem = DecryptPrivateKey(encrypted);
                     using var rsa = RSA.Create();
                     rsa.ImportFromPem(privateKeyPem);
-                    var derivedPublicKeyPem = ExportPublicKeyPem(rsa);
-                    _currentPublicKeyPem = derivedPublicKeyPem;
-
-                    // Also save/update public key file
-                    File.WriteAllText(publicKeyPath, derivedPublicKeyPem);
+                    _currentPublicKeyPem = ExportPublicKeyPem(rsa);
 
                     Log.Debug("Loaded existing private key and derived public key");
                 }
@@ -374,13 +318,7 @@ namespace Trignis.MicrosoftSQL.Services
                             // Encrypt ConnectionStrings
                             if (jsonObject.TryGetPropertyValue("ConnectionStrings", out csNode) && csNode is JsonObject csObj)
                             {
-                                foreach (var prop in csObj.ToList())
-                                {
-                                    if (prop.Value is JsonValue jv && jv.TryGetValue(out string? val) && val != null && !IsEncrypted(val))
-                                    {
-                                        csObj[prop.Key] = Encrypt(val);
-                                    }
-                                }
+                                JsonSecrets.MapProps(csObj, null, EncryptIfPlain);
                             }
 
                             // Encrypt ChangeTracking sections
@@ -389,7 +327,7 @@ namespace Trignis.MicrosoftSQL.Services
                                 // Encrypt legacy ApiAuth
                                 if (ctObj.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject aaObj)
                                 {
-                                    EncryptJsonObject(aaObj);
+                                    JsonSecrets.MapProps(aaObj, null, EncryptIfPlain);
                                 }
 
                                 // Encrypt ApiEndpoints
@@ -399,16 +337,14 @@ namespace Trignis.MicrosoftSQL.Services
                                     {
                                         if (endpoint is JsonObject epObj)
                                         {
-                                            // Encrypt Auth section
                                             if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
                                             {
-                                                EncryptAuthObject(authObj);
+                                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps, EncryptIfPlain);
                                             }
 
-                                            // Encrypt MessageQueue section
                                             if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
                                             {
-                                                EncryptMessageQueueObject(mqObj);
+                                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps, EncryptIfPlain);
                                             }
                                         }
                                     }
@@ -429,51 +365,7 @@ namespace Trignis.MicrosoftSQL.Services
             }
         }
 
-        private void EncryptJsonObject(JsonObject obj)
-        {
-            foreach (var prop in obj.ToList())
-            {
-                if (prop.Value is JsonValue jsonValue && jsonValue.TryGetValue(out string? strValue) && strValue != null && !IsEncrypted(strValue))
-                {
-                    obj[prop.Key] = Encrypt(strValue);
-                }
-            }
-        }
-
-        private void EncryptAuthObject(JsonObject authObj)
-        {
-            // Encrypt sensitive Auth properties
-            var sensitiveProps = new[] { "Token", "Password", "ApiKey", "ClientSecret", "ClientId" };
-
-            foreach (var propName in sensitiveProps)
-            {
-                if (authObj.TryGetPropertyValue(propName, out var propValue) &&
-                    propValue is JsonValue jsonValue &&
-                    jsonValue.TryGetValue(out string? strValue) &&
-                    strValue != null &&
-                    !IsEncrypted(strValue))
-                {
-                    authObj[propName] = Encrypt(strValue);
-                }
-            }
-        }
-
-        private void EncryptMessageQueueObject(JsonObject mqObj)
-        {
-            // Encrypt sensitive MessageQueue properties
-            var sensitiveProps = new[] { "Password", "ConnectionString", "SecretAccessKey", "AccessKeyId" };
-
-            foreach (var propName in sensitiveProps)
-            {
-                if (mqObj.TryGetPropertyValue(propName, out var propValue) &&
-                    propValue is JsonValue jsonValue &&
-                    jsonValue.TryGetValue(out string? strValue) &&
-                    strValue != null &&
-                    !IsEncrypted(strValue))
-                {
-                    mqObj[propName] = Encrypt(strValue);
-                }
-            }
-        }
+        /// <summary>Returns the encrypted value, or null when it is already encrypted.</summary>
+        private string? EncryptIfPlain(string key, string value) => IsEncrypted(value) ? null : Encrypt(value);
     }
 }

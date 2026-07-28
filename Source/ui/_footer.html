@@ -1,0 +1,32 @@
+<script>
+// Double-submit: echo the session CSRF cookie back in a header. .NET URL-encodes cookie values, so decode to match what the server reads.
+function csrfToken() {
+  const entry = document.cookie.split('; ').find(c => c.startsWith('trignis_csrf='));
+  return entry ? decodeURIComponent(entry.slice('trignis_csrf='.length)) : '';
+}
+
+function postJson(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+}
+
+document.querySelectorAll('.nav-item').forEach(a => {
+  if (a.getAttribute('href') === window.location.pathname) a.classList.add('active');
+});
+
+fetch('/ui/api/overview').then(r => r.json()).then(d => {
+  const v = (d.version ?? '').split('+')[0];
+  document.getElementById('sidebarVersion').textContent = v ? `v${v}` : '';
+}).catch(() => {});
+
+function logout() {
+  fetch('/ui/api/auth/logout', { method: 'POST', credentials: 'include' })
+    .finally(() => { window.location.href = '/ui/login'; });
+}
+</script>
+</body>
+</html>

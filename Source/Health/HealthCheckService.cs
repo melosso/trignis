@@ -20,9 +20,10 @@ public class HealthCheckService
     private readonly DateTime _startTime;
     private readonly string _version;
     private readonly int _cacheDurationSeconds;
-    private volatile string? _cachedResponse;
-    private long _lastCheckTimeTicks = DateTime.MinValue.Ticks;
+    private volatile CacheEntry? _cache;
     private readonly SemaphoreSlim _semaphore = new(1, 1);
+
+    private sealed record CacheEntry(string Json, DateTime At);
 
     public HealthCheckService(
         ILogger<HealthCheckService> logger,
@@ -41,11 +42,8 @@ public class HealthCheckService
     {
         var now = DateTime.UtcNow;
 
-        // Check if we have a valid cached response (outer fast path — no lock)
-        if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
-        {
-            return _cachedResponse;
-        }
+        // Fast path — no lock
+        if (IsFresh(_cache, now)) return _cache!.Json;
 
         // Use semaphore to prevent multiple simultaneous health checks
         await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -53,10 +51,7 @@ public class HealthCheckService
         {
             // Double-check after acquiring lock; re-read now so the staleness check is accurate
             now = DateTime.UtcNow;
-            if (_cachedResponse != null && (now - new DateTime(Interlocked.Read(ref _lastCheckTimeTicks), DateTimeKind.Utc)).TotalSeconds < _cacheDurationSeconds)
-            {
-                return _cachedResponse;
-            }
+            if (IsFresh(_cache, now)) return _cache!.Json;
 
             // Perform actual health check
             var uptime = (long)(now - _startTime).TotalSeconds;
@@ -82,16 +77,18 @@ public class HealthCheckService
                 }
             };
 
-            _cachedResponse = JsonSerializer.Serialize(healthResponse, new JsonSerializerOptions { WriteIndented = true });
-            Interlocked.Exchange(ref _lastCheckTimeTicks, now.Ticks);
-
-            return _cachedResponse;
+            var json = JsonSerializer.Serialize(healthResponse, new JsonSerializerOptions { WriteIndented = true });
+            _cache = new CacheEntry(json, now);
+            return json;
         }
         finally
         {
             _semaphore.Release();
         }
     }
+
+    private bool IsFresh(CacheEntry? entry, DateTime now) =>
+        entry != null && (now - entry.At).TotalSeconds < _cacheDurationSeconds;
 
     private async Task<(string status, long responseTimeMs)> CheckDatabaseHealthAsync(CancellationToken cancellationToken = default)
     {

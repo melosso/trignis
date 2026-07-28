@@ -30,10 +30,7 @@ public sealed class EncryptionServiceTests : IDisposable
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
     }
 
-    // -------------------------------------------------------------------------
     // IsEncrypted
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void IsEncrypted_ReturnsFalse_ForPlaintext()
     {
@@ -61,10 +58,7 @@ public sealed class EncryptionServiceTests : IDisposable
         Assert.False(_svc.IsEncrypted("NOTENC:data"));
     }
 
-    // -------------------------------------------------------------------------
     // Encrypt
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void Encrypt_ReturnsPwencPrefixedString()
     {
@@ -88,10 +82,7 @@ public sealed class EncryptionServiceTests : IDisposable
         Assert.DoesNotContain("super-secret", result);
     }
 
-    // -------------------------------------------------------------------------
     // Round-trip
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void Encrypt_ThenDecrypt_ReturnsOriginalValue()
     {
@@ -120,10 +111,7 @@ public sealed class EncryptionServiceTests : IDisposable
         Assert.Equal(longValue, _svc.Decrypt(_svc.Encrypt(longValue)));
     }
 
-    // -------------------------------------------------------------------------
     // Decrypt error handling
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void Decrypt_ThrowsInvalidOperation_ForPlaintext()
     {
@@ -148,10 +136,7 @@ public sealed class EncryptionServiceTests : IDisposable
             _svc.Decrypt("PWENC:"));
     }
 
-    // -------------------------------------------------------------------------
     // Key pair persistence
-    // -------------------------------------------------------------------------
-
     [Fact]
     public void SecondInstance_SameDirectory_ReusesExistingKeyPair()
     {

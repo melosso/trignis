@@ -3,9 +3,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Trignis.MicrosoftSQL.Models;
 using RabbitMQ.Client;
 using Azure.Messaging.ServiceBus;
@@ -21,7 +21,6 @@ namespace Trignis.MicrosoftSQL.Services;
 public class ConnectionHealthCheckService : BackgroundService
 {
     private readonly ILogger<ConnectionHealthCheckService> _logger;
-    private readonly IConfiguration _config;
     private readonly int _checkIntervalMinutes;
     private readonly bool _enabled;
     private readonly ConcurrentDictionary<string, ConnectionHealth> _healthStatus = new();
@@ -30,14 +29,15 @@ public class ConnectionHealthCheckService : BackgroundService
 
     public ConnectionHealthCheckService(
         ILogger<ConnectionHealthCheckService> logger,
-        IConfiguration config,
+        IOptions<GlobalSettings> globalSettings,
         EnvironmentConfigService envConfigService)
     {
         _logger = logger;
-        _config = config;
         _envConfigService = envConfigService;
-        _checkIntervalMinutes = _config.GetValue<int>("ChangeTracking:HealthCheckIntervalMinutes", 15);
-        _enabled = _config.GetValue<bool>("ChangeTracking:HealthCheckEnabled", true);
+
+        var settings = globalSettings.Value;
+        _checkIntervalMinutes = settings.HealthCheckIntervalMinutes;
+        _enabled = settings.HealthCheckEnabled;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -319,29 +319,8 @@ public class ConnectionHealthCheckService : BackgroundService
         }
     }
 
-    public ConnectionHealthStatus GetHealthStatus()
-    {
-        var details = new Dictionary<string, EndpointHealthDetail>();
-        foreach (var kvp in _healthStatus)
-        {
-            details[kvp.Key] = new EndpointHealthDetail
-            {
-                IsHealthy = kvp.Value.IsHealthy,
-                ConsecutiveFailures = kvp.Value.ConsecutiveFailures,
-                LastFailureTime = kvp.Value.LastFailureTime,
-                DowntimeDuration = kvp.Value.IsHealthy ? TimeSpan.Zero : DateTime.UtcNow - kvp.Value.LastFailureTime
-            };
-        }
-
-        return new ConnectionHealthStatus
-        {
-            CheckTime = DateTime.UtcNow,
-            TotalEndpoints = _healthStatus.Count,
-            HealthyEndpoints = _healthStatus.Values.Count(h => h.IsHealthy),
-            UnhealthyEndpoints = _healthStatus.Values.Count(h => !h.IsHealthy),
-            Details = details
-        };
-    }
+    public IReadOnlyDictionary<string, ConnectionHealth> GetHealthStatus() =>
+        new Dictionary<string, ConnectionHealth>(_healthStatus);
 }
 
 public record class ConnectionHealth
@@ -349,21 +328,4 @@ public record class ConnectionHealth
     public bool IsHealthy { get; init; }
     public int ConsecutiveFailures { get; init; }
     public DateTime LastFailureTime { get; init; }
-}
-
-public record class ConnectionHealthStatus
-{
-    public DateTime CheckTime { get; init; }
-    public int TotalEndpoints { get; init; }
-    public int HealthyEndpoints { get; init; }
-    public int UnhealthyEndpoints { get; init; }
-    public IReadOnlyDictionary<string, EndpointHealthDetail> Details { get; init; } = new Dictionary<string, EndpointHealthDetail>();
-}
-
-public record class EndpointHealthDetail
-{
-    public bool IsHealthy { get; init; }
-    public int ConsecutiveFailures { get; init; }
-    public DateTime? LastFailureTime { get; init; }
-    public TimeSpan DowntimeDuration { get; init; }
 }

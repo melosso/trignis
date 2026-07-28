@@ -12,21 +12,26 @@ namespace Trignis.MicrosoftSQL.Helpers;
 /// </summary>
 public static class ConfigurationValidator
 {
-    public static void ValidateConfiguration(IConfiguration configuration)
+    /// <summary>Binds from configuration and validates. Kept for callers that only hold an IConfiguration.</summary>
+    public static void ValidateConfiguration(IConfiguration configuration) =>
+        ValidateConfiguration(
+            configuration.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? [],
+            configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings(),
+            configuration.GetValue<bool>("Health:Enabled", false)
+                ? configuration.GetValue<int>("Health:Port", 2455)
+                : null);
+
+    /// <param name="healthPort">Null when the health endpoint is disabled.</param>
+    public static void ValidateConfiguration(IReadOnlyList<EnvironmentConfig> environments, GlobalSettings globalSettings, int? healthPort)
     {
         var errors = new List<string>();
         var warnings = new List<string>();
 
         Log.Debug("Validating configuration...");
 
-        // Validate global settings
-        var globalSettings = configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
         ValidateGlobalSettings(globalSettings, warnings);
 
-        // Validate environments
-        var environments = configuration.GetSection("ChangeTracking:Environments").Get<EnvironmentConfig[]>() ?? Array.Empty<EnvironmentConfig>();
-        
-        if (environments.Length == 0)
+        if (environments.Count == 0)
         {
             errors.Add("No environments configured in ChangeTracking:Environments");
         }
@@ -38,15 +43,9 @@ public static class ConfigurationValidator
             }
         }
 
-        // Validate health endpoint settings
-        var healthEnabled = configuration.GetValue<bool>("Health:Enabled", false);
-        if (healthEnabled)
+        if (healthPort is < 1 or > 65535)
         {
-            var healthPort = configuration.GetValue<int>("Health:Port", 2455);
-            if (healthPort < 1 || healthPort > 65535)
-            {
-                errors.Add($"Health:Port is set to {healthPort} which is invalid. Valid range: 1-65535");
-            }
+            errors.Add($"Health:Port is set to {healthPort} which is invalid. Valid range: 1-65535");
         }
 
         // Report results
@@ -239,27 +238,7 @@ public static class ConfigurationValidator
                 return;
             }
 
-            switch (endpoint.MessageQueueType.ToLower())
-            {
-                case "rabbitmq":
-                    ValidateRabbitMQConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
-                    break;
-                case "azureservicebus":
-                    ValidateAzureServiceBusConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
-                    break;
-                case "awssqs":
-                    ValidateAwsSqsConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
-                    break;
-                case "azureeventhubs":
-                    ValidateAzureEventHubsConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
-                    break;
-                case "kafka":
-                    ValidateKafkaConfig(endpoint.MessageQueue, envName, endpointName, errors, warnings);
-                    break;
-                default:
-                    errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported MessageQueueType '{endpoint.MessageQueueType}'. Valid types: RabbitMQ, AzureServiceBus, AWSSQS, AzureEventHubs, Kafka");
-                    break;
-            }
+            ValidateMessageQueue(endpoint.MessageQueueType, endpoint.MessageQueue, envName, endpointName, errors, warnings);
         }
         else
         {
@@ -282,113 +261,76 @@ public static class ConfigurationValidator
         }
     }
 
-    private static void ValidateRabbitMQConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
+    private static void ValidateMessageQueue(string queueType, MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
     {
-        if (string.IsNullOrWhiteSpace(config.HostName))
+        void Required(string label, params (string Name, string? Value)[] fields)
         {
-            errors.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' has no HostName specified");
+            foreach (var (name, value) in fields)
+                if (string.IsNullOrWhiteSpace(value))
+                    errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has no {name} specified");
         }
 
-        if (config.Port <= 0 || config.Port > 65535)
+        // Exactly one of the two; both set is a warning naming the one that wins.
+        void EitherOr(string label, (string Name, string? Value) a, (string Name, string? Value) b, string winner)
         {
-            warnings.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' has invalid Port {config.Port}. Using default 5672");
+            var hasA = !string.IsNullOrWhiteSpace(a.Value);
+            var hasB = !string.IsNullOrWhiteSpace(b.Value);
+
+            if (!hasA && !hasB)
+                errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' must specify either {a.Name} or {b.Name}");
+            else if (hasA && hasB)
+                warnings.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has both {a.Name} and {b.Name} specified. {winner} will be used");
         }
 
-        if (string.IsNullOrWhiteSpace(config.QueueName) && string.IsNullOrWhiteSpace(config.Exchange))
+        // Both or neither; neither is a warning about the fallback.
+        void Paired(string label, (string Name, string? Value) a, (string Name, string? Value) b, string noneMessage)
         {
-            errors.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' must specify either QueueName or Exchange");
+            var hasA = !string.IsNullOrWhiteSpace(a.Value);
+            var hasB = !string.IsNullOrWhiteSpace(b.Value);
+
+            if (hasA != hasB)
+                errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has incomplete credentials. Both {a.Name} and {b.Name} must be provided, or neither");
+            else if (!hasA)
+                warnings.Add($"Environment '{envName}': {label} endpoint '{endpointName}' {noneMessage}");
         }
 
-        if (!string.IsNullOrWhiteSpace(config.QueueName) && !string.IsNullOrWhiteSpace(config.Exchange))
+        switch (queueType.ToLower())
         {
-            warnings.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' has both QueueName and Exchange specified. Exchange will be used");
-        }
-    }
+            case "rabbitmq":
+                Required("RabbitMQ", ("HostName", config.HostName));
+                if (config.Port <= 0 || config.Port > 65535)
+                    warnings.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' has invalid Port {config.Port}. Using default 5672");
+                EitherOr("RabbitMQ", ("QueueName", config.QueueName), ("Exchange", config.Exchange), winner: "Exchange");
+                break;
 
-    private static void ValidateAzureServiceBusConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
-    {
-        if (string.IsNullOrWhiteSpace(config.ConnectionString))
-        {
-            errors.Add($"Environment '{envName}': Azure Service Bus endpoint '{endpointName}' has no ConnectionString specified");
-        }
+            case "azureservicebus":
+                Required("Azure Service Bus", ("ConnectionString", config.ConnectionString));
+                EitherOr("Azure Service Bus", ("QueueName", config.QueueName), ("TopicName", config.TopicName), winner: "QueueName");
+                break;
 
-        if (string.IsNullOrWhiteSpace(config.QueueName) && string.IsNullOrWhiteSpace(config.TopicName))
-        {
-            errors.Add($"Environment '{envName}': Azure Service Bus endpoint '{endpointName}' must specify either QueueName or TopicName");
-        }
+            case "awssqs":
+                Required("AWS SQS", ("QueueUrl", config.QueueUrl));
+                if (!string.IsNullOrWhiteSpace(config.QueueUrl) && !Uri.TryCreate(config.QueueUrl, UriKind.Absolute, out _))
+                    errors.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has invalid QueueUrl '{config.QueueUrl}'");
+                if (string.IsNullOrWhiteSpace(config.Region))
+                    warnings.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no Region specified. Will use default region");
+                Paired("AWS SQS", ("AccessKeyId", config.AccessKeyId), ("SecretAccessKey", config.SecretAccessKey),
+                    "has no explicit credentials. Will use default AWS credential chain");
+                break;
 
-        if (!string.IsNullOrWhiteSpace(config.QueueName) && !string.IsNullOrWhiteSpace(config.TopicName))
-        {
-            warnings.Add($"Environment '{envName}': Azure Service Bus endpoint '{endpointName}' has both QueueName and TopicName specified. QueueName will be used");
-        }
-    }
+            case "azureeventhubs":
+                Required("Azure Event Hubs", ("ConnectionString", config.ConnectionString), ("EventHubName", config.EventHubName));
+                break;
 
-    private static void ValidateAwsSqsConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
-    {
-        if (string.IsNullOrWhiteSpace(config.QueueUrl))
-        {
-            errors.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no QueueUrl specified");
-        }
-        else if (!Uri.TryCreate(config.QueueUrl, UriKind.Absolute, out var uri))
-        {
-            errors.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has invalid QueueUrl '{config.QueueUrl}'");
-        }
+            case "kafka":
+                Required("Kafka", ("BootstrapServers", config.BootstrapServers), ("Topic", config.Topic));
+                Paired("Kafka", ("Username", config.Username), ("Password", config.Password),
+                    "has no credentials. Connecting without authentication (PLAINTEXT)");
+                break;
 
-        if (string.IsNullOrWhiteSpace(config.Region))
-        {
-            warnings.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no Region specified. Will use default region");
-        }
-
-        var hasAccessKey = !string.IsNullOrWhiteSpace(config.AccessKeyId);
-        var hasSecretKey = !string.IsNullOrWhiteSpace(config.SecretAccessKey);
-
-        if (hasAccessKey != hasSecretKey)
-        {
-            errors.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has incomplete credentials. Both AccessKeyId and SecretAccessKey must be provided, or neither");
-        }
-
-        if (!hasAccessKey && !hasSecretKey)
-        {
-            warnings.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no explicit credentials. Will use default AWS credential chain");
-        }
-    }
-
-    private static void ValidateAzureEventHubsConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
-    {
-        if (string.IsNullOrWhiteSpace(config.ConnectionString))
-        {
-            errors.Add($"Environment '{envName}': Azure Event Hubs endpoint '{endpointName}' has no ConnectionString specified");
-        }
-
-        if (string.IsNullOrWhiteSpace(config.EventHubName))
-        {
-            errors.Add($"Environment '{envName}': Azure Event Hubs endpoint '{endpointName}' has no EventHubName specified");
-        }
-    }
-
-    private static void ValidateKafkaConfig(MessageQueueConfig config, string envName, string endpointName, List<string> errors, List<string> warnings)
-    {
-        if (string.IsNullOrWhiteSpace(config.BootstrapServers))
-        {
-            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no BootstrapServers specified");
-        }
-
-        if (string.IsNullOrWhiteSpace(config.Topic))
-        {
-            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no Topic specified");
-        }
-
-        var hasUsername = !string.IsNullOrWhiteSpace(config.Username);
-        var hasPassword = !string.IsNullOrWhiteSpace(config.Password);
-
-        if (hasUsername != hasPassword)
-        {
-            errors.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has incomplete credentials. Both Username and Password must be provided, or neither");
-        }
-
-        if (!hasUsername && !hasPassword)
-        {
-            warnings.Add($"Environment '{envName}': Kafka endpoint '{endpointName}' has no credentials. Connecting without authentication (PLAINTEXT)");
+            default:
+                errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported MessageQueueType '{queueType}'. Valid types: RabbitMQ, AzureServiceBus, AWSSQS, AzureEventHubs, Kafka");
+                break;
         }
     }
 

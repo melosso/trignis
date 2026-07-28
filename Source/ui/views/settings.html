@@ -1,0 +1,120 @@
+
+<main>
+  <div class="page-header">
+    <div class="page-title">
+      <h1 class="select-none">Settings</h1>
+      <span class="page-subtitle">Read-only view</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-outline" onclick="load()">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <div class="page-body">
+    <div class="settings-grid">
+
+      <!-- Global Change Tracking -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Change Tracking</span></div>
+        <div class="card-body" id="globalSettingsBody">
+          <span class="muted" style="font-size:0.8rem">Loading…</span>
+        </div>
+      </div>
+
+      <!-- Server -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Server</span></div>
+        <div class="card-body" id="serverBody">
+          <span class="muted" style="font-size:0.8rem">Loading…</span>
+        </div>
+      </div>
+
+      <!-- Dead Letter Queue -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Dead Letter Queue</span></div>
+        <div class="card-body" id="dlqBody">
+          <span class="muted" style="font-size:0.8rem">Loading…</span>
+        </div>
+      </div>
+
+      <!-- Logging -->
+      <div class="card">
+        <div class="card-header"><span class="card-title">Logging</span></div>
+        <div class="card-body" id="loggingBody">
+          <span class="muted" style="font-size:0.8rem">Loading…</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<script>
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function settingItem(label, value, desc) {
+  return `<div class="settings-item">
+    <div>
+      <div class="settings-item-label">${label}</div>
+      ${desc ? `<div class="settings-item-desc">${desc}</div>` : ''}
+    </div>
+    <span class="settings-item-value">${esc(value)}</span>
+  </div>`;
+}
+
+function boolItem(label, value, desc) {
+  return settingItem(label, value ? 'Enabled' : 'Disabled', desc);
+}
+
+async function load() {
+  try {
+    const d = await fetch('/ui/api/settings').then(r => r.json());
+    const g = d.global ?? {};
+    const srv = d.server ?? {};
+    const log = d.logging ?? {};
+
+    document.getElementById('globalSettingsBody').innerHTML = [
+      settingItem('Polling Interval', g.PollingIntervalSeconds != null ? `${g.PollingIntervalSeconds}s` : '—'),
+      boolItem('Export to File', g.ExportToFile),
+      boolItem('Export to API', g.ExportToApi),
+      settingItem('Retry Count', g.RetryCount ?? '—'),
+      settingItem('Retry Delay', g.RetryDelaySeconds != null ? `${g.RetryDelaySeconds}s` : '—'),
+      boolItem('Payload Batching', g.EnablePayloadBatching),
+      settingItem('Max Records / Batch', g.MaxRecordsPerBatch ?? '—'),
+      settingItem('Max Payload Size', g.MaxPayloadSizeBytes != null ? `${Math.round(g.MaxPayloadSizeBytes / 1024 / 1024)}MB` : '—'),
+    ].join('');
+
+    document.getElementById('serverBody').innerHTML = [
+      settingItem('Host', srv.host ?? '—'),
+      settingItem('Port', srv.port ?? '—'),
+      settingItem('Cache Duration', srv.cache_duration_seconds != null ? `${srv.cache_duration_seconds}s` : '—'),
+    ].join('');
+
+    document.getElementById('dlqBody').innerHTML = [
+      settingItem('Retention', g.DeadletterRetentionDays != null ? `${g.DeadletterRetentionDays} days` : '—'),
+      boolItem('Monitor', g.DeadLetterMonitorEnabled),
+      settingItem('Threshold', g.DeadLetterThreshold ?? '—'),
+      settingItem('Check Interval', g.DeadLetterCheckIntervalMinutes != null ? `${g.DeadLetterCheckIntervalMinutes}min` : '—'),
+    ].join('');
+
+    document.getElementById('loggingBody').innerHTML = [
+      settingItem('Minimum Level', log.min_level ?? '—'),
+      settingItem('Sinks', (log.sinks ?? []).join(', ') || '—'),
+    ].join('');
+
+  } catch(e) {
+    const msg = `<div class="muted" style="font-size:0.8rem">Failed to load: ${esc(e.message)}</div>`;
+    ['globalSettingsBody','serverBody','dlqBody','loggingBody'].forEach(id => {
+      document.getElementById(id).innerHTML = msg;
+    });
+  }
+}
+
+load();
+</script>

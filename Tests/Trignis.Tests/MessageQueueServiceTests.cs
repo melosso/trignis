@@ -1,8 +1,8 @@
 using System;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Trignis.MicrosoftSQL.Models;
 using Trignis.MicrosoftSQL.Services;
 using Xunit;
@@ -16,24 +16,18 @@ namespace Trignis.Tests;
 /// These tests verify behaviour that does NOT require a live broker: all guards
 /// that throw InvalidOperationException before a network connection is attempted.
 /// </summary>
-public class MessageQueueServiceTests : IDisposable
+public class MessageQueueServiceTests : IAsyncLifetime
 {
     private readonly MessageQueueService _svc;
 
     public MessageQueueServiceTests()
     {
-        var logger = NullLogger<MessageQueueService>.Instance;
-        var dlqLogger = NullLogger<DeadLetterQueueMonitor>.Instance;
-        var config = new ConfigurationBuilder().Build();
-        var dlqMonitor = new DeadLetterQueueMonitor(dlqLogger, config);
-        _svc = new MessageQueueService(logger, dlqMonitor);
+        _svc = new MessageQueueService(NullLogger<MessageQueueService>.Instance);
     }
 
-    public void Dispose() => _svc.Dispose();
+    public Task InitializeAsync() => Task.CompletedTask;
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
+    public async Task DisposeAsync() => await _svc.DisposeAsync();
 
     private static JsonElement EmptyJson() =>
         JsonDocument.Parse("{}").RootElement;
@@ -49,10 +43,7 @@ public class MessageQueueServiceTests : IDisposable
     private static ApiEndpoint MqEndpoint(string type, MessageQueueConfig config, string key = "test") =>
         new() { Key = key, MessageQueueType = type, MessageQueue = config };
 
-    // -------------------------------------------------------------------------
     // General dispatch
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task NullMessageQueue_Throws()
     {
@@ -70,10 +61,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("FancyQueue", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // RabbitMQ
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task RabbitMq_MissingHostName_Throws()
     {
@@ -87,10 +75,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("HostName", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // Azure Service Bus
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task AzureServiceBus_MissingConnectionString_Throws()
     {
@@ -119,10 +104,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("QueueName or TopicName", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // AWS SQS
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task AwsSqs_MissingQueueUrl_Throws()
     {
@@ -136,10 +118,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("QueueUrl", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // Azure Event Hubs
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task AzureEventHubs_MissingConnectionString_Throws()
     {
@@ -179,10 +158,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("Azure Event Hubs", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // Kafka
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task Kafka_MissingBootstrapServers_Throws()
     {
@@ -222,10 +198,7 @@ public class MessageQueueServiceTests : IDisposable
         Assert.Contains("Kafka", ex.Message);
     }
 
-    // -------------------------------------------------------------------------
     // Case-insensitivity of MessageQueueType
-    // -------------------------------------------------------------------------
-
     [Fact]
     public async Task RabbitMq_TypeIsCaseInsensitive_ThrowsOnMissingHostName()
     {

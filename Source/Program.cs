@@ -10,6 +10,7 @@ using System;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using System.Linq;
 using Trignis.MicrosoftSQL.Models;
 using System.Collections.Generic;
@@ -91,137 +92,10 @@ try
     var globalSettings = builder.Configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
 
     // Determine which environment file(s) to load
-    var envDir = Directory.GetDirectories(".").FirstOrDefault(d => d.Equals("environments", StringComparison.OrdinalIgnoreCase)) ?? "environments";
+    const string envDir = "environments";
     var selectedEnvironment = Environment.GetEnvironmentVariable("TRIGNIS_ENVIRONMENT") 
         ?? builder.Configuration.GetValue<string>("SelectedEnvironment");
     
-    List<EnvironmentConfig> environments = new();
-    
-    if (Directory.Exists(envDir))
-    {
-        var jsonFiles = Directory.GetFiles(envDir, "*.json").OrderBy(f => Path.GetFileName(f)).ToList();
-        
-        // Filter files based on selected environment
-        if (!string.IsNullOrEmpty(selectedEnvironment))
-        {
-            var targetFile = jsonFiles.FirstOrDefault(f => 
-                Path.GetFileNameWithoutExtension(f).Equals(selectedEnvironment, StringComparison.OrdinalIgnoreCase));
-            
-            if (targetFile != null)
-            {
-                jsonFiles = new List<string> { targetFile };
-                Log.Information($"Loading specific environment: {selectedEnvironment}");
-            }
-            else
-            {
-                Log.Warning($"Environment '{selectedEnvironment}' not found. Available: {string.Join(", ", jsonFiles.Select(f => Path.GetFileNameWithoutExtension(f)))}");
-                Log.Information("Loading all environment files...");
-            }
-        }
-        else
-        {
-            Log.Debug("No specific environment selected. Loading all environment files...");
-        }
-
-        foreach (var file in jsonFiles)
-        {
-            var relativePath = Path.GetRelativePath(".", file);
-            var environmentName = Path.GetFileNameWithoutExtension(file);
-            
-            // Load configuration
-            var tempBuilder = new ConfigurationBuilder();
-            tempBuilder.AddEncryptedJsonFile(relativePath, encryptionService, optional: true);
-            var tempCfg = tempBuilder.Build();
-            
-            // Collect connection strings
-            var connStrings = tempCfg.GetSection("ConnectionStrings").GetChildren();
-            var connectionStrings = new Dictionary<string, string>();
-            foreach (var connString in connStrings)
-            {
-                var key = connString.Key;
-                var value = connString.Value;
-                if (!string.IsNullOrEmpty(value))
-                {
-                    connectionStrings[key] = value;
-                }
-            }
-
-            // Collect ChangeTracking settings
-            var ct = tempCfg.GetSection("ChangeTracking");
-
-            // Load tracking objects (stamp EnvironmentFile at construction via `with`)
-            var trackingObjects = (ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? Array.Empty<TrackingObject>())
-                .Select(obj => obj with { EnvironmentFile = environmentName })
-                .ToArray();
-
-            // Load API endpoints (stamp EnvironmentFile at construction via `with`)
-            var apiEndpoints = (ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? Array.Empty<ApiEndpoint>())
-                .Select(endpoint => endpoint with { EnvironmentFile = environmentName })
-                .ToArray();
-
-            // Build environment config
-            var envConfig = new EnvironmentConfig
-            {
-                Name = environmentName,
-                ConnectionStrings = connectionStrings,
-                ChangeTracking = new EnvironmentChangeTracking
-                {
-                    TrackingObjects = trackingObjects,
-                    ApiEndpoints = apiEndpoints,
-                    // Load environment-specific overrides (if present)
-                    PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds"),
-                    ExportToFile = ct.GetValue<bool?>("ExportToFile"),
-                    FilePath = ct.GetValue<string?>("FilePath"),
-                    ExportToApi = ct.GetValue<bool?>("ExportToApi"),
-                    RetryCount = ct.GetValue<int?>("RetryCount"),
-                    RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds")
-                }
-            };
-
-            environments.Add(envConfig);
-            
-            Log.Debug($"Loaded environment: {environmentName} ({trackingObjects.Length} objects, {apiEndpoints.Length} endpoints)");
-        }
-    }
-    else
-    {
-        Log.Warning($"Environments directory '{envDir}' does not exist. Please create it and add environment configuration files.");
-    }
-
-    // Add environments to configuration
-    if (environments.Any())
-    {
-        var combinedObj = new 
-        { 
-            ChangeTracking = new 
-            { 
-                GlobalSettings = globalSettings,
-                Environments = environments 
-            } 
-        };
-        var options = new JsonSerializerOptions 
-        { 
-            WriteIndented = true,
-            PropertyNamingPolicy = null // Preserve property names as-is
-        };
-        var combinedJson = JsonSerializer.Serialize(combinedObj, options);
-        
-        Log.Debug("Environments configuration loaded successfully");
-        
-        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(combinedJson));
-        builder.Configuration.AddJsonStream(stream);
-    }
-    else
-    {
-        Log.Warning("No environments were loaded from the environments folder");
-    }
-
-    // Validate configuration
-    ConfigurationValidator.ValidateConfiguration(builder.Configuration);
-
-    // Log configuration status
-    ConfigurationLogger.LogConfigurationStatus(builder.Configuration);
-
     // Use Windows Service hosting
     builder.Services.AddWindowsService(options =>
     {
@@ -235,12 +109,18 @@ try
     });
 
     // Register services
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, ".core", "dp-keys")));
+    builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(globalSettings));
+    builder.Services.AddSingleton<WebUiAuth>();
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterQueueMonitor>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DeadLetterQueueMonitor>());
     builder.Services.AddSingleton<ConnectionHealthCheckService>();
     builder.Services.AddHostedService<ConnectionHealthCheckService>();
     builder.Services.AddSingleton<DeadLetterService>();
+    builder.Services.AddSingleton<RetryPolicies>();
+    builder.Services.AddSingleton<ExportService>();
     builder.Services.AddSingleton<HealthCheckService>();
     builder.Services.AddSingleton<MessageQueueService>();
     builder.Services.AddSingleton<OAuth2TokenService>();
@@ -250,8 +130,61 @@ try
 
     var app = builder.Build();
 
-    // Initialize environment config service with the already-loaded environments and start file watcher
     var envConfigService = app.Services.GetRequiredService<EnvironmentConfigService>();
+
+    List<EnvironmentConfig> environments = [];
+
+    if (Directory.Exists(envDir))
+    {
+        var jsonFiles = Directory.GetFiles(envDir, "*.json").OrderBy(Path.GetFileName).ToList();
+
+        if (!string.IsNullOrEmpty(selectedEnvironment))
+        {
+            var targetFile = jsonFiles.FirstOrDefault(f =>
+                Path.GetFileNameWithoutExtension(f).Equals(selectedEnvironment, StringComparison.OrdinalIgnoreCase));
+
+            if (targetFile != null)
+            {
+                jsonFiles = [targetFile];
+                Log.Information($"Loading specific environment: {selectedEnvironment}");
+            }
+            else
+            {
+                Log.Warning($"Environment '{selectedEnvironment}' not found. Available: {string.Join(", ", jsonFiles.Select(Path.GetFileNameWithoutExtension))}");
+                Log.Information("Loading all environment files...");
+            }
+        }
+        else
+        {
+            Log.Debug("No specific environment selected. Loading all environment files...");
+        }
+
+        foreach (var file in jsonFiles)
+        {
+            var envConfig = envConfigService.LoadFile(file);
+            if (envConfig == null) continue;
+
+            environments.Add(envConfig);
+            Log.Debug($"Loaded environment: {envConfig.Name} ({envConfig.ChangeTracking.TrackingObjects.Length} objects, {envConfig.ChangeTracking.ApiEndpoints.Length} endpoints)");
+        }
+    }
+    else
+    {
+        Log.Warning($"Environments directory '{envDir}' does not exist. Please create it and add environment configuration files.");
+    }
+
+    if (environments.Count == 0)
+    {
+        Log.Warning("No environments were loaded from the environments folder");
+    }
+
+    ConfigurationValidator.ValidateConfiguration(environments, globalSettings,
+        builder.Configuration.GetValue<bool>("Health:Enabled", false)
+            ? builder.Configuration.GetValue<int>("Health:Port", 2455)
+            : null);
+
+    ConfigurationLogger.LogConfigurationStatus(builder.Configuration, environments, globalSettings);
+
     envConfigService.Initialize(environments, envDir, selectedEnvironment);
     envConfigService.StartWatching();
 
@@ -267,32 +200,45 @@ try
     var adminApiKey = builder.Configuration.GetValue<string>("Trignis:AdminApiKey", "");
     var authEnabled = webHostEnabled && !string.IsNullOrEmpty(adminApiKey);
 
-    // Auth token helpers — stateless HMAC-SHA256 signed tokens
     const string AuthCookieName = "trignis_auth";
+    const string CsrfCookieName = "trignis_csrf";
     const int AuthTokenExpiryHours = 24;
 
-    byte[] GetSigningKey() =>
-        System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
+    var webUiAuth = app.Services.GetRequiredService<WebUiAuth>();
 
-    string GenerateAuthToken()
+    // Explicit config wins; otherwise follow the scheme of the request being answered, so a
+    // plain-HTTP dev run still works while a TLS deployment gets the flag automatically.
+    var configuredSecureCookies = builder.Configuration.GetValue<bool?>("WebHost:SecureCookies");
+    bool UseSecureCookies(HttpContext context) => configuredSecureCookies ?? context.Request.IsHttps;
+
+    CookieOptions SessionCookie(HttpContext context, bool httpOnly, DateTimeOffset expires) => new()
     {
-        var expiry = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours).ToUnixTimeSeconds();
-        using var hmac = new System.Security.Cryptography.HMACSHA256(GetSigningKey());
-        return $"{expiry}.{Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(expiry.ToString())))}";
-    }
+        HttpOnly = httpOnly,
+        Secure = UseSecureCookies(context),
+        SameSite = SameSiteMode.Lax,
+        Path = "/",
+        Expires = expires
+    };
+
+    var authProtector = app.Services
+        .GetRequiredService<IDataProtectionProvider>()
+        .CreateProtector("Trignis.WebUi.Auth")
+        .ToTimeLimitedDataProtector();
+
+    string GenerateAuthToken() =>
+        authProtector.Protect("authenticated", TimeSpan.FromHours(AuthTokenExpiryHours));
 
     bool ValidateAuthToken(string token)
     {
-        var dot = token.IndexOf('.');
-        if (dot < 0) return false;
-        var expiryStr = token[..dot];
-        if (!long.TryParse(expiryStr, out var expiry)) return false;
-        if (DateTimeOffset.FromUnixTimeSeconds(expiry) < DateTimeOffset.UtcNow) return false;
-        using var hmac = new System.Security.Cryptography.HMACSHA256(GetSigningKey());
-        var expected = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(expiryStr)));
-        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(expected),
-            Encoding.UTF8.GetBytes(token[(dot + 1)..]));
+        try
+        {
+            authProtector.Unprotect(token);
+            return true;
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            return false;
+        }
     }
 
     // Auth middleware — registered before static files so .html paths are also protected
@@ -317,10 +263,6 @@ try
         });
     }
 
-    var defaultFilesOptions = new DefaultFilesOptions { RequestPath = "/ui" };
-    defaultFilesOptions.DefaultFileNames.Clear();
-    defaultFilesOptions.DefaultFileNames.Add("dashboard.html");
-    app.UseDefaultFiles(defaultFilesOptions);
     app.UseStaticFiles();
 
     if (healthEnabled || webHostEnabled)
@@ -350,50 +292,191 @@ try
         if (webHostEnabled)
         {
         // Auth routes
-        var loginFilePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "ui", "login.html");
+        var uiRoot = Path.Combine(AppContext.BaseDirectory, "ui");
+        var uiVersion = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
+
         app.MapGet("/ui/login", () =>
-            authEnabled ? Results.File(loginFilePath, "text/html") : Results.Redirect("/ui/dashboard"));
+            authEnabled ? WebUiPages.ServePage(Path.Combine(uiRoot, "login.html"), uiVersion) : Results.Redirect("/ui/dashboard"));
         app.MapGet("/ui/login.html", () => Results.Redirect("/ui/login"));
+
+        // One-time token the login form must echo back
+        app.MapGet("/ui/api/auth/csrf", () => Results.Json(new { csrf = webUiAuth.GenerateCsrfToken() }));
 
         app.MapPost("/ui/api/auth", async (HttpContext context) =>
         {
+            var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            if (webUiAuth.CheckAccess(clientIp) is { } blockReason)
+                return Results.Json(new { error = blockReason }, statusCode: 429);
+
             var body = await context.Request.ReadFromJsonAsync<JsonElement>();
+
+            var csrfToken = body.TryGetProperty("csrf", out var csrf) ? csrf.GetString() : null;
+            if (!webUiAuth.ValidateCsrfToken(csrfToken))
+            {
+                webUiAuth.RecordFailedAttempt(clientIp);
+                return Results.Json(new { error = "Invalid or expired CSRF token" }, statusCode: 403);
+            }
+
             var provided = body.TryGetProperty("apiKey", out var kp) ? kp.GetString() ?? "" : "";
             var provHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(provided));
             var expHash  = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
             if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(provHash, expHash))
-                return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
-            var token = GenerateAuthToken();
-            context.Response.Cookies.Append(AuthCookieName, token, new CookieOptions
             {
-                HttpOnly = true,
-                SameSite = SameSiteMode.Lax,
-                Path = "/",
-                Expires = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours)
-            });
+                webUiAuth.RecordFailedAttempt(clientIp);
+                return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
+            }
+
+            webUiAuth.ClearFailedAttempts(clientIp);
+            webUiAuth.ConsumeCsrfToken(csrfToken!);
+
+            var expires = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours);
+            context.Response.Cookies.Append(AuthCookieName, GenerateAuthToken(),
+                SessionCookie(context, httpOnly: true, expires));
+
+            // Readable by page JS so mutating fetches can echo it in X-CSRF-Token
+            context.Response.Cookies.Append(CsrfCookieName, WebUiAuth.NewSessionCsrf(),
+                SessionCookie(context, httpOnly: false, expires));
+
             return Results.Ok(new { ok = true });
         });
 
         app.MapPost("/ui/api/auth/logout", (HttpContext context) =>
         {
-            context.Response.Cookies.Append(AuthCookieName, "", new CookieOptions
-            {
-                HttpOnly = true,
-                SameSite = SameSiteMode.Lax,
-                Path = "/",
-                Expires = DateTimeOffset.UnixEpoch
-            });
+            context.Response.Cookies.Append(AuthCookieName, "",
+                SessionCookie(context, httpOnly: true, DateTimeOffset.UnixEpoch));
+            context.Response.Cookies.Append(CsrfCookieName, "",
+                SessionCookie(context, httpOnly: false, DateTimeOffset.UnixEpoch));
             return Results.Ok();
+        });
+
+        // Double-submit gate for every mutating UI endpoint. Null means the request may proceed.
+        // Skipped when auth is off, since there is no session to forge against.
+        IResult? RejectIfCsrfInvalid(HttpContext context)
+        {
+            if (!authEnabled)
+                return null;
+
+            context.Request.Cookies.TryGetValue(CsrfCookieName, out var cookie);
+            var header = context.Request.Headers["X-CSRF-Token"].ToString();
+
+            return WebUiAuth.IsDoubleSubmitValid(header, cookie)
+                ? null
+                : Results.Json(new { error = "Missing or invalid CSRF token" }, statusCode: 403);
+        }
+
+        // Clearing the row makes the next cycle re-initialise the object per its InitialSyncMode.
+        // Without this the only recovery from a bad sync is stopping the service and editing state.db.
+        app.MapPost("/ui/api/state/{environmentName}/{objectName}/reset", async (HttpContext context, string environmentName, string objectName) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            try
+            {
+                var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
+
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stateDbPath}");
+                await conn.OpenAsync();
+
+                var command = conn.CreateCommand();
+                command.CommandText = "DELETE FROM LastVersions WHERE EnvironmentName = @environmentName AND ObjectName = @objectName";
+                command.Parameters.AddWithValue("@environmentName", environmentName);
+                command.Parameters.AddWithValue("@objectName", objectName);
+
+                if (await command.ExecuteNonQueryAsync() == 0)
+                    return Results.NotFound(new { error = "No sync state stored for that environment and object" });
+
+                Log.Warning("Sync state for {Environment}/{Object} reset from the web UI; the next cycle will re-initialise it",
+                    environmentName, objectName);
+
+                return Results.Ok(new { ok = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to reset sync state for {Environment}/{Object}", environmentName, objectName);
+                return Results.Json(new { error = "Failed to reset sync state", message = ex.Message }, statusCode: 500);
+            }
+        });
+
+        // Resend a dead letter to its environment's destinations. The row is only removed once
+        // every destination succeeds, so a partial failure stays queued for another attempt.
+        app.MapPost("/ui/api/deadletters/{id:long}/replay", async (
+            HttpContext context, long id, DeadLetterService deadLetters, ExportService exportService) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var record = await deadLetters.GetAsync(id, context.RequestAborted);
+            if (record == null)
+                return Results.NotFound(new { error = "Dead letter not found" });
+
+            if (record.EnvironmentName == null)
+                return Results.Json(new { error = "This dead letter predates environment tracking and cannot be replayed" }, statusCode: 409);
+
+            var environment = envConfigService.Environments
+                .FirstOrDefault(e => e.Name.Equals(record.EnvironmentName, StringComparison.OrdinalIgnoreCase));
+            if (environment == null)
+                return Results.Json(new { error = $"Environment '{record.EnvironmentName}' is no longer configured" }, statusCode: 409);
+
+            var trackingObject = environment.ChangeTracking.TrackingObjects
+                .FirstOrDefault(t => t.Name.Equals(record.ObjectName, StringComparison.OrdinalIgnoreCase));
+            if (trackingObject == null)
+                return Results.Json(new { error = $"Tracking object '{record.ObjectName}' is no longer configured" }, statusCode: 409);
+
+            try
+            {
+                using var document = JsonDocument.Parse(record.Data);
+                var failures = await exportService.ExportAsync(environment, trackingObject, document.RootElement, context.RequestAborted);
+
+                if (failures.Count > 0)
+                {
+                    return Results.Json(new
+                    {
+                        error = "Replay failed; the dead letter was kept",
+                        failures = failures.Select(f => new { target = f.Target, message = f.Error.Message })
+                    }, statusCode: 502);
+                }
+
+                await deadLetters.DeleteAsync(id, context.RequestAborted);
+                Log.Information("Dead letter {Id} replayed from the web UI and removed", id);
+                return Results.Ok(new { ok = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Replay of dead letter {Id} failed", id);
+                return Results.Json(new { error = "Replay failed", message = ex.Message }, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/ui/api/deadletters/{id:long}/discard", async (
+            HttpContext context, long id, DeadLetterService deadLetters) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            if (!await deadLetters.DeleteAsync(id, context.RequestAborted))
+                return Results.NotFound(new { error = "Dead letter not found" });
+
+            Log.Warning("Dead letter {Id} discarded from the web UI", id);
+            return Results.Ok(new { ok = true });
+        });
+
+        // Purges exactly what the current filter selects, so the UI cannot delete more than it shows
+        app.MapPost("/ui/api/deadletters/purge", async (
+            HttpContext context, DeadLetterService deadLetters, string? search = null, string? objectFilter = null) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var deleted = await deadLetters.PurgeAsync(search, objectFilter, context.RequestAborted);
+            return Results.Ok(new { ok = true, deleted });
         });
 
         app.MapGet("/ui", () => Results.Redirect("/ui/dashboard"));
 
-        // Clean URLs: serve pages at /ui/{page} and redirect /ui/{page}.html → /ui/{page}
-        foreach (var page in new[] { "dashboard", "environments", "settings", "deadletters", "logs" })
+        // Clean URLs: compose pages at /ui/{page} and redirect /ui/{page}.html → /ui/{page}
+        foreach (var (page, title) in WebUiPages.Titles)
         {
             var p = page;
-            var filePath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "ui", $"{p}.html");
-            app.MapGet($"/ui/{p}", () => Results.File(filePath, "text/html"));
+            var t = title;
+            app.MapGet($"/ui/{p}", () => WebUiPages.Compose(uiRoot, p, t, uiVersion));
             app.MapGet($"/ui/{p}.html", () => Results.Redirect($"/ui/{p}"));
         }
 
@@ -407,7 +490,11 @@ try
                 dlLast24h = stats.Last24HoursCount;
                 dlLastHour = stats.LastHourCount;
             }
-            catch { /* sinkhole.db may not exist yet */ }
+            catch (Exception ex)
+            {
+                // sinkhole.db is created on first dead letter, so this is expected on a fresh install
+                Log.Debug(ex, "Dead letter stats unavailable for the overview card");
+            }
 
             return Results.Json(new
             {
@@ -628,7 +715,11 @@ try
                     lastFile ??= file;
                     if (allEntries.Count >= limit * 5) break;
                 }
-                catch { /* skip if file is inaccessible */ }
+                catch (Exception ex)
+                {
+                    // A log file being rolled or held open should not blank the whole log view
+                    Log.Debug(ex, "Skipped unreadable log file {File}", file);
+                }
             }
 
             // Newest first — sort by timestamp string (ISO-like format is lexicographically comparable)
@@ -701,8 +792,7 @@ try
 
         app.MapGet("/health/connections", (ConnectionHealthCheckService connHealth) =>
         {
-            var status = connHealth.GetHealthStatus();
-            var result = status.Details.ToDictionary(
+            var result = connHealth.GetHealthStatus().ToDictionary(
                 kvp => kvp.Key,
                 kvp => new
                 {
@@ -716,10 +806,13 @@ try
             return Results.Json(result);
         });
 
-        // State database endpoint showing tracking versions per environment
-        app.MapGet("/health/state", async () =>
+        // Tracking versions per environment; the whole set, or one named environment
+        app.MapGet("/health/state", () => ReadStateAsync(null));
+        app.MapGet("/health/state/{environmentName}", (string environmentName) => ReadStateAsync(environmentName));
+
+        async Task<IResult> ReadStateAsync(string? environmentName)
         {
-            // Build a lookup: envName -> objectName -> stored procedure
+            // envName -> objectName -> stored procedure
             var spLookup = envConfigService.Environments
                 .ToDictionary(
                     e => e.Name,
@@ -731,150 +824,73 @@ try
             try
             {
                 var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
-                var connectionString = $"Data Source={stateDbPath}";
 
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stateDbPath}");
                 await conn.OpenAsync();
 
-                // Get all state grouped by environment
                 var command = conn.CreateCommand();
                 command.CommandText = @"
-                    SELECT 
-                        EnvironmentName,
-                        COUNT(*) as ObjectCount
+                    SELECT EnvironmentName, ObjectName, LastVersion, LastUpdated
                     FROM LastVersions
-                    GROUP BY EnvironmentName
-                    ORDER BY EnvironmentName
+                    WHERE @environmentName IS NULL OR EnvironmentName = @environmentName
+                    ORDER BY EnvironmentName, ObjectName
                 ";
+                command.Parameters.AddWithValue("@environmentName", (object?)environmentName ?? DBNull.Value);
 
-                var environments = new List<object>();
-
-                using var reader = await command.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
+                var byEnvironment = new Dictionary<string, List<object>>(StringComparer.OrdinalIgnoreCase);
+                using (var reader = await command.ExecuteReaderAsync())
                 {
-                    var envName = reader.GetString(0);
-                    var objectCount = reader.GetInt32(1);
-
-                    // Get objects for this environment
-                    var objectCommand = conn.CreateCommand();
-                    objectCommand.CommandText = @"
-                        SELECT 
-                            ObjectName,
-                            LastVersion,
-                            LastUpdated
-                        FROM LastVersions
-                        WHERE EnvironmentName = @environmentName
-                        ORDER BY ObjectName
-                    ";
-                    objectCommand.Parameters.AddWithValue("@environmentName", envName);
-
-                    var envSpLookup = spLookup.TryGetValue(envName, out var envSps) ? envSps : null;
-                    var objects = new List<object>();
-                    using var objectReader = await objectCommand.ExecuteReaderAsync();
-                    while (await objectReader.ReadAsync())
+                    while (await reader.ReadAsync())
                     {
-                        var objName = objectReader.GetString(0);
-                        var sp = envSpLookup != null && envSpLookup.TryGetValue(objName, out var spName) ? spName : null;
+                        var envName = reader.GetString(0);
+                        var objName = reader.GetString(1);
+
+                        if (!byEnvironment.TryGetValue(envName, out var objects))
+                            byEnvironment[envName] = objects = new List<object>();
+
                         objects.Add(new
                         {
                             object_name = objName,
-                            stored_procedure_name = sp,
-                            last_version = objectReader.GetInt32(1),
-                            last_updated = objectReader.GetDateTime(2).ToString("yyyy-MM-ddTHH:mm:ssZ")
+                            stored_procedure_name = spLookup.TryGetValue(envName, out var sps)
+                                && sps.TryGetValue(objName, out var sp) ? sp : null,
+                            last_version = reader.GetInt32(2),
+                            last_updated = reader.GetDateTime(3).ToString("yyyy-MM-ddTHH:mm:ssZ")
                         });
                     }
+                }
 
-                    environments.Add(new
+                var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+                if (environmentName != null)
+                {
+                    if (!byEnvironment.TryGetValue(environmentName, out var objects))
+                        return Results.NotFound(new { error = "Environment not found", environment = environmentName });
+
+                    return Results.Json(new
                     {
-                        name = envName,
-                        object_count = objectCount,
-                        objects = objects
+                        environment = environmentName,
+                        timestamp,
+                        object_count = objects.Count,
+                        objects
                     });
                 }
 
-                var response = new
+                var environments = byEnvironment
+                    .Select(kv => new { name = kv.Key, object_count = kv.Value.Count, objects = kv.Value })
+                    .ToList();
+
+                return Results.Json(new
                 {
-                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    timestamp,
                     total_environments = environments.Count,
-                    environments = environments
-                };
-
-                return Results.Json(response);
+                    environments
+                });
             }
             catch (Exception ex)
             {
-                return Results.Json(new
-                {
-                    error = "Failed to read state database",
-                    message = ex.Message
-                });
+                return Results.Json(new { error = "Failed to read state database", message = ex.Message });
             }
-        });
-
-        // Endpoint to query specific environment state
-        app.MapGet("/health/state/{environmentName}", async (string environmentName) =>
-        {
-            try
-            {
-                var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
-                var connectionString = $"Data Source={stateDbPath}";
-
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
-                await conn.OpenAsync();
-
-                var command = conn.CreateCommand();
-                command.CommandText = @"
-                    SELECT 
-                        ObjectName,
-                        LastVersion,
-                        LastUpdated
-                    FROM LastVersions
-                    WHERE EnvironmentName = @environmentName
-                    ORDER BY ObjectName
-                ";
-                command.Parameters.AddWithValue("@environmentName", environmentName);
-
-                var objects = new List<object>();
-
-                using var reader = await command.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                {
-                    objects.Add(new
-                    {
-                        object_name = reader.GetString(0),
-                        last_version = reader.GetInt32(1),
-                        last_updated = reader.GetDateTime(2).ToString("yyyy-MM-ddTHH:mm:ssZ")
-                    });
-                }
-
-                if (objects.Count == 0)
-                {
-                    return Results.NotFound(new
-                    {
-                        error = "Environment not found",
-                        environment = environmentName
-                    });
-                }
-
-                var response = new
-                {
-                    environment = environmentName,
-                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
-                    object_count = objects.Count,
-                    objects = objects
-                };
-
-                return Results.Json(response);
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new
-                {
-                    error = "Failed to read state database",
-                    message = ex.Message
-                });
-            }
-        });
+        }
 
         } // end if (healthEnabled)
 

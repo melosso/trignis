@@ -103,7 +103,12 @@ public class EnvironmentConfigService : IDisposable
 
     private void HandleFileChange(string fullPath)
     {
-        lock (_debounceTimers) { _debounceTimers.Remove(fullPath); }
+        // Dispose on removal, or every file change leaks a timer for the process lifetime.
+        // Disposing a one-shot Timer from inside its own callback is supported.
+        lock (_debounceTimers)
+        {
+            if (_debounceTimers.Remove(fullPath, out var fired)) fired.Dispose();
+        }
 
         var newEnv = LoadFile(fullPath);
         if (newEnv == null) return;
