@@ -288,7 +288,14 @@ public class MessageQueueService : IAsyncDisposable
 
             if (_rabbitConnections.TryRemove(new KeyValuePair<string, Lazy<Task<IConnection>>>(key, lazy)))
             {
-                try { connection.Dispose(); } catch { /* already dead */ }
+                try
+                {
+                    connection.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Discarding an already-dead RabbitMQ connection for {Key}", key);
+                }
             }
         }
     }

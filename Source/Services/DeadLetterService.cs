@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Security.Cryptography;
 using System.Text;
@@ -47,13 +48,30 @@ public class DeadLetterService
             CREATE INDEX IF NOT EXISTS idx_timestamp ON DeadLetters(Timestamp);
         ";
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        // Replay needs to know which environment to resend to. Older rows folded the environment
+        // into SourceKey/TrackingObjectName, where an underscore in a name makes it unrecoverable —
+        // those stay null and are not replayable.
+        var columnExists = conn.CreateCommand();
+        columnExists.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DeadLetters') WHERE name = 'EnvironmentName'";
+        if (Convert.ToInt64(await columnExists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) == 0)
+        {
+            var addColumn = conn.CreateCommand();
+            addColumn.CommandText = "ALTER TABLE DeadLetters ADD COLUMN EnvironmentName TEXT";
+            await addColumn.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Added EnvironmentName to the dead letter table; existing rows cannot be replayed");
+        }
+
         _logger.LogDebug("Dead letter database initialized");
     }
 
-    public async Task SaveDeadLetterAsync(string trackingObjectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default)
+    public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default)
     {
         var dataJson = JsonSerializer.Serialize(data);
         var dataHash = ComputeSha256Hash(dataJson);
+
+        // Kept in the original shape so existing rows and the UI's filters stay consistent
+        var trackingObjectName = $"{environmentName}_{objectName}";
         var sourceKey = $"{trackingObjectName}_{databaseName}";
 
         using var conn = new SqliteConnection(_sinkholeConnectionString);
@@ -81,11 +99,12 @@ public class DeadLetterService
             var insertCommand = conn.CreateCommand();
             insertCommand.Transaction = tx;
             insertCommand.CommandText = @"
-                INSERT INTO DeadLetters (SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage)
-                VALUES (@sourceKey, @trackingObjectName, @databaseName, @dataHash, @data, @errorMessage)
+                INSERT INTO DeadLetters (SourceKey, TrackingObjectName, EnvironmentName, DatabaseName, DataHash, Data, ErrorMessage)
+                VALUES (@sourceKey, @trackingObjectName, @environmentName, @databaseName, @dataHash, @data, @errorMessage)
             ";
             insertCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
             insertCommand.Parameters.AddWithValue("@trackingObjectName", trackingObjectName);
+            insertCommand.Parameters.AddWithValue("@environmentName", environmentName);
             insertCommand.Parameters.AddWithValue("@databaseName", databaseName);
             insertCommand.Parameters.AddWithValue("@dataHash", dataHash);
             insertCommand.Parameters.AddWithValue("@data", dataJson);
@@ -93,7 +112,7 @@ public class DeadLetterService
 
             await insertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
-            _logger.LogWarning($"Saved dead letter for {trackingObjectName} ({databaseName}): {exception.Message}");
+            _logger.LogWarning($"Saved dead letter for {objectName} in {environmentName} ({databaseName}): {exception.Message}");
         }
         catch
         {
@@ -117,6 +136,68 @@ public class DeadLetterService
         {
             _logger.LogInformation($"Purged {deletedCount} dead letters older than {_retentionDays} days");
         }
+    }
+
+    /// <summary>Everything replay needs. Null EnvironmentName means the row predates the column.</summary>
+    public sealed record DeadLetterRecord(long Id, string? EnvironmentName, string ObjectName, string DatabaseName, string Data);
+
+    public async Task<DeadLetterRecord?> GetAsync(long id, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = "SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data FROM DeadLetters WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", id);
+
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var environmentName = reader.IsDBNull(1) ? null : reader.GetString(1);
+        var trackingObjectName = reader.GetString(2);
+
+        // TrackingObjectName is "{environment}_{object}"; knowing the environment makes the
+        // split unambiguous even when either name contains an underscore.
+        var objectName = environmentName != null && trackingObjectName.StartsWith(environmentName + "_", StringComparison.Ordinal)
+            ? trackingObjectName[(environmentName.Length + 1)..]
+            : trackingObjectName;
+
+        return new DeadLetterRecord(reader.GetInt64(0), environmentName, objectName, reader.GetString(3), reader.GetString(4));
+    }
+
+    public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = "DELETE FROM DeadLetters WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", id);
+
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <summary>Deletes every row matching the same filters the list view uses.</summary>
+    public async Task<int> PurgeAsync(string? search, string? objectFilter, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var conditions = new List<string>();
+        if (!string.IsNullOrEmpty(search))
+            conditions.Add("(TrackingObjectName LIKE @search OR ErrorMessage LIKE @search OR DatabaseName LIKE @search)");
+        if (!string.IsNullOrEmpty(objectFilter))
+            conditions.Add("TrackingObjectName = @objectFilter");
+
+        var command = conn.CreateCommand();
+        command.CommandText = "DELETE FROM DeadLetters" + (conditions.Count > 0 ? " WHERE " + string.Join(" AND ", conditions) : "");
+        if (!string.IsNullOrEmpty(search)) command.Parameters.AddWithValue("@search", $"%{search}%");
+        if (!string.IsNullOrEmpty(objectFilter)) command.Parameters.AddWithValue("@objectFilter", objectFilter);
+
+        var deleted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        _logger.LogWarning("Purged {Count} dead letter(s) from the web UI", deleted);
+        return deleted;
     }
 
     private static string ComputeSha256Hash(string input)

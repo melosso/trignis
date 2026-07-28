@@ -6,7 +6,7 @@
   <title>Sign In · Trignis</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link href="/css/site.css" rel="stylesheet" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
@@ -84,15 +84,21 @@ async function signIn() {
   btn.classList.add('is-loading');
   btn.disabled = true;
   try {
+    // One-time token, issued per attempt and consumed by a successful sign-in
+    const { csrf } = await fetch('/ui/api/auth/csrf', { credentials: 'include' }).then(r => r.json());
+
     const r = await fetch('/ui/api/auth', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ apiKey: key })
+      body: JSON.stringify({ apiKey: key, csrf })
     });
     if (r.ok) {
       window.location.href = '/ui/dashboard';
     } else {
+      // 429 carries a lockout message worth showing verbatim
+      const body = await r.json().catch(() => null);
+      err.textContent = body?.error ?? 'Invalid access key. Please try again.';
       err.style.display = 'block';
       btn.classList.remove('is-loading');
       btn.disabled = false;

@@ -21,7 +21,7 @@ public class ExportRootTests
     [InlineData("exports/dump.json", "exports")]
     public void DerivesTheFixedPrefixDirectory(string template, string expected)
     {
-        Assert.Equal(expected, ChangeTrackingBackgroundService.ExportRoot(template));
+        Assert.Equal(expected, ExportService.ExportRoot(template));
     }
 
     [Theory]
@@ -31,6 +31,6 @@ public class ExportRootTests
     [InlineData("changes.json")]
     public void SkipsCleanupWhenRootWouldBeTheWorkingDirectory(string template)
     {
-        Assert.Null(ChangeTrackingBackgroundService.ExportRoot(template));
+        Assert.Null(ExportService.ExportRoot(template));
     }
 }

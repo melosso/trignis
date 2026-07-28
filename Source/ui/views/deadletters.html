@@ -26,6 +26,11 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
         Refresh
       </button>
+      <button class="btn btn-outline" id="purgeBtn" onclick="purgeFiltered()"
+              title="Delete every dead letter matching the current filter">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Purge
+      </button>
     </div>
   </div>
 
@@ -174,7 +179,12 @@ function openDrawer(row) {
         <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem" onclick="copyPayload()">Copy</button>
       </div>
       <div class="code-block" id="drawerPayload">${esc(prettyPayload)}</div>
-    </div>`;
+    </div>
+    <div class="drawer-field" style="display:flex;gap:0.5rem">
+      <button class="btn btn-outline" id="replayBtn" onclick="replayDeadLetter(${Number(row.id)})">Replay</button>
+      <button class="btn btn-ghost" id="discardBtn" onclick="discardDeadLetter(${Number(row.id)})">Discard</button>
+    </div>
+    <div id="drawerActionError" class="drawer-field" style="display:none;color:hsl(var(--destructive));font-size:0.8125rem"></div>`;
 
   document.getElementById('drawerBackdrop').classList.add('open');
   document.getElementById('drawer').classList.add('open');
@@ -183,6 +193,77 @@ function openDrawer(row) {
 function copyPayload() {
   const text = document.getElementById('drawerPayload').textContent;
   navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function showDrawerError(message) {
+  const box = document.getElementById('drawerActionError');
+  if (!box) return;
+  box.textContent = message;
+  box.style.display = 'block';
+}
+
+async function runDrawerAction(buttonId, url, busyLabel) {
+  const btn = document.getElementById(buttonId);
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = busyLabel;
+  document.getElementById('drawerActionError').style.display = 'none';
+
+  try {
+    const r = await postJson(url);
+    if (r.ok) {
+      closeDrawer();
+      await load(currentPage);
+      return;
+    }
+
+    const body = await r.json().catch(() => null);
+    // A failed replay lists the destinations that rejected it
+    const detail = body?.failures?.map(f => `${f.target}: ${f.message}`).join('; ');
+    showDrawerError(detail ? `${body.error} — ${detail}` : (body?.error ?? 'Action failed.'));
+  } catch (e) {
+    showDrawerError('Action failed — is the server running?');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+function replayDeadLetter(id) {
+  runDrawerAction('replayBtn', `/ui/api/deadletters/${id}/replay`, 'Replaying…');
+}
+
+function discardDeadLetter(id) {
+  if (!confirm('Discard this dead letter? The payload is deleted and cannot be replayed.')) return;
+  runDrawerAction('discardBtn', `/ui/api/deadletters/${id}/discard`, 'Discarding…');
+}
+
+async function purgeFiltered() {
+  const search = document.getElementById('searchInput').value;
+  const objectFilter = document.getElementById('objectFilter').value;
+  const scope = search || objectFilter ? 'every dead letter matching the current filter' : 'ALL dead letters';
+
+  if (!confirm(`Purge ${scope}? The payloads are deleted and cannot be replayed.`)) return;
+
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (objectFilter) params.set('objectFilter', objectFilter);
+
+  const btn = document.getElementById('purgeBtn');
+  btn.disabled = true;
+  try {
+    const r = await postJson(`/ui/api/deadletters/purge?${params}`);
+    const body = await r.json().catch(() => null);
+    if (!r.ok) {
+      alert(body?.error ?? 'Purge failed.');
+      return;
+    }
+    await load(1);
+  } catch (e) {
+    alert('Purge failed — is the server running?');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function closeDrawer() {

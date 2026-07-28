@@ -72,10 +72,11 @@
                 <th>Object</th>
                 <th>Version</th>
                 <th>Last Sync</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="syncBody">
-              <tr><td colspan="3" class="empty-state">Loading…</td></tr>
+              <tr><td colspan="4" class="empty-state">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -171,7 +172,7 @@ async function loadSyncState() {
     const rows = envs.flatMap(env => {
       const objs = env.objects ?? [];
       const header = `<tr class="sync-env-row">
-        <td colspan="3"><span class="badge badge-muted">${esc(env.name)}</span>
+        <td colspan="4"><span class="badge badge-muted">${esc(env.name)}</span>
           <span class="muted" style="font-size:0.75rem;margin-left:0.5rem">${objs.length} object${objs.length !== 1 ? 's' : ''}</span>
         </td>
       </tr>`;
@@ -179,15 +180,40 @@ async function loadSyncState() {
         <td>${esc(obj.object_name)}</td>
         <td class="col-mono">${obj.last_version ?? '—'}</td>
         <td class="col-mono" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
+        <td style="text-align:right">
+          <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem"
+                  onclick="resetSync('${esc(env.name)}', '${esc(obj.object_name)}')"
+                  title="Clear the stored version so the next cycle re-initialises this object">Reset</button>
+        </td>
       </tr>`);
       return [header, ...objRows];
     });
 
     body.innerHTML = rows.length
       ? rows.join('')
-      : '<tr><td colspan="3" class="empty-state">No objects tracked yet</td></tr>';
+      : '<tr><td colspan="4" class="empty-state">No objects tracked yet</td></tr>';
   } catch(e) {
-    body.innerHTML = '<tr><td colspan="3" class="empty-state muted">Sync state unavailable</td></tr>';
+    body.innerHTML = '<tr><td colspan="4" class="empty-state muted">Sync state unavailable</td></tr>';
+  }
+}
+
+async function resetSync(envName, objectName) {
+  const confirmed = confirm(
+    `Reset sync state for "${objectName}" in ${envName}?\n\n` +
+    `The stored version is cleared. On the next cycle the object re-initialises using its ` +
+    `InitialSyncMode — "Full" replays every row, which can be a large export.`);
+  if (!confirmed) return;
+
+  try {
+    const r = await postJson(`/ui/api/state/${encodeURIComponent(envName)}/${encodeURIComponent(objectName)}/reset`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => null);
+      alert(body?.error ?? 'Reset failed.');
+      return;
+    }
+    await loadSyncState();
+  } catch (e) {
+    alert('Reset failed — is the server running?');
   }
 }
 

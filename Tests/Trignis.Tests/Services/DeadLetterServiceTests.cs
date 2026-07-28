@@ -79,7 +79,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
     {
         var data = JsonDocument.Parse(@"{""id"":1,""name"":""Test""}").RootElement;
 
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, new InvalidOperationException("downstream timeout"));
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new InvalidOperationException("downstream timeout"));
 
         Assert.Equal(1L, await CountRowsAsync());
     }
@@ -89,17 +89,71 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
     {
         var data = JsonDocument.Parse(@"{""orderId"":42}").RootElement;
 
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, new Exception("connection refused"));
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("connection refused"));
 
         await using var conn = Open();
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT TrackingObjectName, DatabaseName, ErrorMessage FROM DeadLetters LIMIT 1";
+        cmd.CommandText = "SELECT TrackingObjectName, EnvironmentName, DatabaseName, ErrorMessage FROM DeadLetters LIMIT 1";
         await using var reader = await cmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        Assert.Equal("Orders", reader.GetString(0));
-        Assert.Equal("SalesDB", reader.GetString(1));
-        Assert.Equal("connection refused", reader.GetString(2));
+        // TrackingObjectName keeps its "{environment}_{object}" shape; the environment is now
+        // also stored on its own so replay can resolve the target unambiguously.
+        Assert.Equal("TestEnv_Orders", reader.GetString(0));
+        Assert.Equal("TestEnv", reader.GetString(1));
+        Assert.Equal("SalesDB", reader.GetString(2));
+        Assert.Equal("connection refused", reader.GetString(3));
+    }
+
+    [Fact]
+    public async Task GetAsync_SplitsObjectNameBackOut_WhenNamesContainUnderscores()
+    {
+        var data = JsonDocument.Parse(@"{""orderId"":42}").RootElement;
+        await _svc.SaveDeadLetterAsync("prod_eu", "sales_orders", "SalesDB", data, new Exception("boom"));
+
+        await using var conn = Open();
+        await conn.OpenAsync();
+        var idCmd = conn.CreateCommand();
+        idCmd.CommandText = "SELECT Id FROM DeadLetters LIMIT 1";
+        var id = (long)(await idCmd.ExecuteScalarAsync())!;
+
+        var record = await _svc.GetAsync(id);
+
+        Assert.NotNull(record);
+        Assert.Equal("prod_eu", record!.EnvironmentName);
+        Assert.Equal("sales_orders", record.ObjectName);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_RemovesOnlyThatRow()
+    {
+        var ex = new Exception("err");
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", JsonDocument.Parse(@"{""id"":1}").RootElement, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", JsonDocument.Parse(@"{""id"":2}").RootElement, ex);
+
+        await using var conn = Open();
+        await conn.OpenAsync();
+        var idCmd = conn.CreateCommand();
+        idCmd.CommandText = "SELECT MIN(Id) FROM DeadLetters";
+        var id = (long)(await idCmd.ExecuteScalarAsync())!;
+
+        Assert.True(await _svc.DeleteAsync(id));
+        Assert.False(await _svc.DeleteAsync(id)); // already gone
+        Assert.Equal(1L, await CountRowsAsync());
+    }
+
+    [Fact]
+    public async Task PurgeAsync_HonoursTheObjectFilter()
+    {
+        var ex = new Exception("err");
+        var data = JsonDocument.Parse(@"{""id"":1}").RootElement;
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Customers", "SalesDB", data, ex);
+
+        var deleted = await _svc.PurgeAsync(search: null, objectFilter: "TestEnv_Orders");
+
+        Assert.Equal(1, deleted);
+        Assert.Equal(1L, await CountRowsAsync()); // Customers survives
     }
 
     [Fact]
@@ -108,8 +162,8 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         var data = JsonDocument.Parse(@"{""id"":99}").RootElement;
         var ex = new Exception("fail");
 
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, ex);
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, ex); // exact duplicate
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, ex); // exact duplicate
 
         Assert.Equal(1L, await CountRowsAsync()); // only one row written
     }
@@ -121,8 +175,8 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         var data2 = JsonDocument.Parse(@"{""id"":2}").RootElement;
         var ex = new Exception("fail");
 
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data1, ex);
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data2, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data1, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data2, ex);
 
         Assert.Equal(2L, await CountRowsAsync());
     }
@@ -133,8 +187,8 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         var data = JsonDocument.Parse(@"{""id"":1}").RootElement;
         var ex = new Exception("fail");
 
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, ex);
-        await _svc.SaveDeadLetterAsync("Customers", "SalesDB", data, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, ex);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Customers", "SalesDB", data, ex);
 
         Assert.Equal(2L, await CountRowsAsync());
     }
@@ -154,7 +208,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
     public async Task PurgeOldDeadLetters_PreservesRecentRecords()
     {
         var data = JsonDocument.Parse(@"{""id"":1}").RootElement;
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, new Exception("err"));
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("err"));
 
         await _svc.PurgeOldDeadLettersAsync();
 
@@ -165,7 +219,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
     public async Task PurgeOldDeadLetters_OnlyRemovesOldRecords_WhenMixed()
     {
         var data = JsonDocument.Parse(@"{""id"":1}").RootElement;
-        await _svc.SaveDeadLetterAsync("Orders", "SalesDB", data, new Exception("err"));
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("err"));
         await InsertOldRecordAsync("stale_SalesDB", "stale", "SalesDB", "hash-stale", 100);
 
         Assert.Equal(2L, await CountRowsAsync());

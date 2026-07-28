@@ -109,16 +109,18 @@ try
     });
 
     // Register services
-    // Keys live beside the app so web-UI sessions survive a restart
     builder.Services.AddDataProtection()
         .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, ".core", "dp-keys")));
     builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(globalSettings));
+    builder.Services.AddSingleton<WebUiAuth>();
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterQueueMonitor>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DeadLetterQueueMonitor>());
     builder.Services.AddSingleton<ConnectionHealthCheckService>();
     builder.Services.AddHostedService<ConnectionHealthCheckService>();
     builder.Services.AddSingleton<DeadLetterService>();
+    builder.Services.AddSingleton<RetryPolicies>();
+    builder.Services.AddSingleton<ExportService>();
     builder.Services.AddSingleton<HealthCheckService>();
     builder.Services.AddSingleton<MessageQueueService>();
     builder.Services.AddSingleton<OAuth2TokenService>();
@@ -199,7 +201,24 @@ try
     var authEnabled = webHostEnabled && !string.IsNullOrEmpty(adminApiKey);
 
     const string AuthCookieName = "trignis_auth";
+    const string CsrfCookieName = "trignis_csrf";
     const int AuthTokenExpiryHours = 24;
+
+    var webUiAuth = app.Services.GetRequiredService<WebUiAuth>();
+
+    // Explicit config wins; otherwise follow the scheme of the request being answered, so a
+    // plain-HTTP dev run still works while a TLS deployment gets the flag automatically.
+    var configuredSecureCookies = builder.Configuration.GetValue<bool?>("WebHost:SecureCookies");
+    bool UseSecureCookies(HttpContext context) => configuredSecureCookies ?? context.Request.IsHttps;
+
+    CookieOptions SessionCookie(HttpContext context, bool httpOnly, DateTimeOffset expires) => new()
+    {
+        HttpOnly = httpOnly,
+        Secure = UseSecureCookies(context),
+        SameSite = SameSiteMode.Lax,
+        Path = "/",
+        Expires = expires
+    };
 
     var authProtector = app.Services
         .GetRequiredService<IDataProtectionProvider>()
@@ -280,35 +299,174 @@ try
             authEnabled ? WebUiPages.ServePage(Path.Combine(uiRoot, "login.html"), uiVersion) : Results.Redirect("/ui/dashboard"));
         app.MapGet("/ui/login.html", () => Results.Redirect("/ui/login"));
 
+        // One-time token the login form must echo back
+        app.MapGet("/ui/api/auth/csrf", () => Results.Json(new { csrf = webUiAuth.GenerateCsrfToken() }));
+
         app.MapPost("/ui/api/auth", async (HttpContext context) =>
         {
+            var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            if (webUiAuth.CheckAccess(clientIp) is { } blockReason)
+                return Results.Json(new { error = blockReason }, statusCode: 429);
+
             var body = await context.Request.ReadFromJsonAsync<JsonElement>();
+
+            var csrfToken = body.TryGetProperty("csrf", out var csrf) ? csrf.GetString() : null;
+            if (!webUiAuth.ValidateCsrfToken(csrfToken))
+            {
+                webUiAuth.RecordFailedAttempt(clientIp);
+                return Results.Json(new { error = "Invalid or expired CSRF token" }, statusCode: 403);
+            }
+
             var provided = body.TryGetProperty("apiKey", out var kp) ? kp.GetString() ?? "" : "";
             var provHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(provided));
             var expHash  = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
             if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(provHash, expHash))
-                return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
-            var token = GenerateAuthToken();
-            context.Response.Cookies.Append(AuthCookieName, token, new CookieOptions
             {
-                HttpOnly = true,
-                SameSite = SameSiteMode.Lax,
-                Path = "/",
-                Expires = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours)
-            });
+                webUiAuth.RecordFailedAttempt(clientIp);
+                return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
+            }
+
+            webUiAuth.ClearFailedAttempts(clientIp);
+            webUiAuth.ConsumeCsrfToken(csrfToken!);
+
+            var expires = DateTimeOffset.UtcNow.AddHours(AuthTokenExpiryHours);
+            context.Response.Cookies.Append(AuthCookieName, GenerateAuthToken(),
+                SessionCookie(context, httpOnly: true, expires));
+
+            // Readable by page JS so mutating fetches can echo it in X-CSRF-Token
+            context.Response.Cookies.Append(CsrfCookieName, WebUiAuth.NewSessionCsrf(),
+                SessionCookie(context, httpOnly: false, expires));
+
             return Results.Ok(new { ok = true });
         });
 
         app.MapPost("/ui/api/auth/logout", (HttpContext context) =>
         {
-            context.Response.Cookies.Append(AuthCookieName, "", new CookieOptions
-            {
-                HttpOnly = true,
-                SameSite = SameSiteMode.Lax,
-                Path = "/",
-                Expires = DateTimeOffset.UnixEpoch
-            });
+            context.Response.Cookies.Append(AuthCookieName, "",
+                SessionCookie(context, httpOnly: true, DateTimeOffset.UnixEpoch));
+            context.Response.Cookies.Append(CsrfCookieName, "",
+                SessionCookie(context, httpOnly: false, DateTimeOffset.UnixEpoch));
             return Results.Ok();
+        });
+
+        // Double-submit gate for every mutating UI endpoint. Null means the request may proceed.
+        // Skipped when auth is off, since there is no session to forge against.
+        IResult? RejectIfCsrfInvalid(HttpContext context)
+        {
+            if (!authEnabled)
+                return null;
+
+            context.Request.Cookies.TryGetValue(CsrfCookieName, out var cookie);
+            var header = context.Request.Headers["X-CSRF-Token"].ToString();
+
+            return WebUiAuth.IsDoubleSubmitValid(header, cookie)
+                ? null
+                : Results.Json(new { error = "Missing or invalid CSRF token" }, statusCode: 403);
+        }
+
+        // Clearing the row makes the next cycle re-initialise the object per its InitialSyncMode.
+        // Without this the only recovery from a bad sync is stopping the service and editing state.db.
+        app.MapPost("/ui/api/state/{environmentName}/{objectName}/reset", async (HttpContext context, string environmentName, string objectName) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            try
+            {
+                var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
+
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stateDbPath}");
+                await conn.OpenAsync();
+
+                var command = conn.CreateCommand();
+                command.CommandText = "DELETE FROM LastVersions WHERE EnvironmentName = @environmentName AND ObjectName = @objectName";
+                command.Parameters.AddWithValue("@environmentName", environmentName);
+                command.Parameters.AddWithValue("@objectName", objectName);
+
+                if (await command.ExecuteNonQueryAsync() == 0)
+                    return Results.NotFound(new { error = "No sync state stored for that environment and object" });
+
+                Log.Warning("Sync state for {Environment}/{Object} reset from the web UI; the next cycle will re-initialise it",
+                    environmentName, objectName);
+
+                return Results.Ok(new { ok = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to reset sync state for {Environment}/{Object}", environmentName, objectName);
+                return Results.Json(new { error = "Failed to reset sync state", message = ex.Message }, statusCode: 500);
+            }
+        });
+
+        // Resend a dead letter to its environment's destinations. The row is only removed once
+        // every destination succeeds, so a partial failure stays queued for another attempt.
+        app.MapPost("/ui/api/deadletters/{id:long}/replay", async (
+            HttpContext context, long id, DeadLetterService deadLetters, ExportService exportService) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var record = await deadLetters.GetAsync(id, context.RequestAborted);
+            if (record == null)
+                return Results.NotFound(new { error = "Dead letter not found" });
+
+            if (record.EnvironmentName == null)
+                return Results.Json(new { error = "This dead letter predates environment tracking and cannot be replayed" }, statusCode: 409);
+
+            var environment = envConfigService.Environments
+                .FirstOrDefault(e => e.Name.Equals(record.EnvironmentName, StringComparison.OrdinalIgnoreCase));
+            if (environment == null)
+                return Results.Json(new { error = $"Environment '{record.EnvironmentName}' is no longer configured" }, statusCode: 409);
+
+            var trackingObject = environment.ChangeTracking.TrackingObjects
+                .FirstOrDefault(t => t.Name.Equals(record.ObjectName, StringComparison.OrdinalIgnoreCase));
+            if (trackingObject == null)
+                return Results.Json(new { error = $"Tracking object '{record.ObjectName}' is no longer configured" }, statusCode: 409);
+
+            try
+            {
+                using var document = JsonDocument.Parse(record.Data);
+                var failures = await exportService.ExportAsync(environment, trackingObject, document.RootElement, context.RequestAborted);
+
+                if (failures.Count > 0)
+                {
+                    return Results.Json(new
+                    {
+                        error = "Replay failed; the dead letter was kept",
+                        failures = failures.Select(f => new { target = f.Target, message = f.Error.Message })
+                    }, statusCode: 502);
+                }
+
+                await deadLetters.DeleteAsync(id, context.RequestAborted);
+                Log.Information("Dead letter {Id} replayed from the web UI and removed", id);
+                return Results.Ok(new { ok = true });
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Replay of dead letter {Id} failed", id);
+                return Results.Json(new { error = "Replay failed", message = ex.Message }, statusCode: 500);
+            }
+        });
+
+        app.MapPost("/ui/api/deadletters/{id:long}/discard", async (
+            HttpContext context, long id, DeadLetterService deadLetters) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            if (!await deadLetters.DeleteAsync(id, context.RequestAborted))
+                return Results.NotFound(new { error = "Dead letter not found" });
+
+            Log.Warning("Dead letter {Id} discarded from the web UI", id);
+            return Results.Ok(new { ok = true });
+        });
+
+        // Purges exactly what the current filter selects, so the UI cannot delete more than it shows
+        app.MapPost("/ui/api/deadletters/purge", async (
+            HttpContext context, DeadLetterService deadLetters, string? search = null, string? objectFilter = null) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var deleted = await deadLetters.PurgeAsync(search, objectFilter, context.RequestAborted);
+            return Results.Ok(new { ok = true, deleted });
         });
 
         app.MapGet("/ui", () => Results.Redirect("/ui/dashboard"));
@@ -332,7 +490,11 @@ try
                 dlLast24h = stats.Last24HoursCount;
                 dlLastHour = stats.LastHourCount;
             }
-            catch { /* sinkhole.db may not exist yet */ }
+            catch (Exception ex)
+            {
+                // sinkhole.db is created on first dead letter, so this is expected on a fresh install
+                Log.Debug(ex, "Dead letter stats unavailable for the overview card");
+            }
 
             return Results.Json(new
             {
@@ -553,7 +715,11 @@ try
                     lastFile ??= file;
                     if (allEntries.Count >= limit * 5) break;
                 }
-                catch { /* skip if file is inaccessible */ }
+                catch (Exception ex)
+                {
+                    // A log file being rolled or held open should not blank the whole log view
+                    Log.Debug(ex, "Skipped unreadable log file {File}", file);
+                }
             }
 
             // Newest first — sort by timestamp string (ISO-like format is lexicographically comparable)
