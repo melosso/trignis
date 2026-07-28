@@ -4,7 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 /// <summary>
 /// Web UI brute-force and CSRF protection with request-driven, opportunistic cache pruning.

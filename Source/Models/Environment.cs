@@ -2,11 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace Trignis.MicrosoftSQL.Models;
+namespace Trignis.Models;
 
 public record class EnvironmentConfig
 {
     public string Name { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Database platform every connection string in this environment points at.
+    /// One environment is one platform; split the file to mix them.
+    /// </summary>
+    public string Provider { get; init; } = "mssql";
 
     public IReadOnlyDictionary<string, string> ConnectionStrings { get; init; } = new Dictionary<string, string>();
 
@@ -77,6 +83,21 @@ public record class GlobalSettings
 
     [JsonPropertyName("DeadLetterMonitorEnabled")]
     public bool DeadLetterMonitorEnabled { get; init; } = true;
+
+    // Automatic dead letter replay (global)
+    [JsonPropertyName("DeadLetterAutoReplayEnabled")]
+    public bool DeadLetterAutoReplayEnabled { get; init; } = true;
+
+    [JsonPropertyName("DeadLetterReplayIntervalSeconds")]
+    public int DeadLetterReplayIntervalSeconds { get; init; } = 60;
+
+    /// <summary>Attempts before a dead letter is left for a human. Zero disables automatic replay.</summary>
+    [JsonPropertyName("DeadLetterMaxReplayAttempts")]
+    public int DeadLetterMaxReplayAttempts { get; init; } = 5;
+
+    /// <summary>First backoff delay. Each further attempt doubles it, capped at six hours.</summary>
+    [JsonPropertyName("DeadLetterReplayBackoffSeconds")]
+    public int DeadLetterReplayBackoffSeconds { get; init; } = 60;
 
     // Health check settings (global)
     [JsonPropertyName("HealthCheckEnabled")]

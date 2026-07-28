@@ -6,10 +6,10 @@ using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Trignis.MicrosoftSQL.Helpers;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Helpers;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class EnvironmentChangeEvent
 {
@@ -179,6 +179,7 @@ public class EnvironmentConfigService : IDisposable
             var envConfig = new EnvironmentConfig
             {
                 Name = name,
+                Provider = cfg.GetValue<string?>("Provider") ?? "mssql",
                 ConnectionStrings = connectionStrings,
                 ChangeTracking = new EnvironmentChangeTracking
                 {

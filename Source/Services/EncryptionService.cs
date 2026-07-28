@@ -6,9 +6,9 @@ using System.Linq;
 using Serilog;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Trignis.MicrosoftSQL.Helpers;
+using Trignis.Helpers;
 
-namespace Trignis.MicrosoftSQL.Services
+namespace Trignis.Services
 {
     public class EncryptionService
     {

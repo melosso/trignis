@@ -9,7 +9,6 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -18,10 +17,11 @@ using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
 using System.Net.Http.Headers;
-using Trignis.MicrosoftSQL.Helpers;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Data;
+using Trignis.Helpers;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class ChangeTrackingBackgroundService : BackgroundService
 {
@@ -33,6 +33,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly RetryPolicies _retryPolicies;
     private readonly GlobalSettings _globalSettings;
     private readonly EnvironmentConfigService _configService;
+    private readonly PauseService _pauseService;
     private volatile CancellationTokenSource? _globalStoppingSource;
     private readonly Dictionary<string, (CancellationTokenSource Cts, Task Task)> _envTasks = new();
     private readonly object _envTasksLock = new();
@@ -45,7 +46,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
         DeadLetterService deadLetterService,
         ExportService exportService,
         RetryPolicies retryPolicies,
-        EnvironmentConfigService configService)
+        EnvironmentConfigService configService,
+        PauseService pauseService)
     {
         _logger = logger;
         _logger.LogDebug("ChangeTrackingBackgroundService constructor called");
@@ -54,6 +56,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         _exportService = exportService;
         _retryPolicies = retryPolicies;
         _configService = configService;
+        _pauseService = pauseService;
         _globalSettings = globalSettings.Value;
 
         var stateDbPath = config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
@@ -71,6 +74,9 @@ public class ChangeTrackingBackgroundService : BackgroundService
             
             // Initialize dead letter database
             await _deadLetterService.InitializeAsync();
+
+            // Pause state lives in the same file as the watermarks
+            await _pauseService.InitializeAsync();
             
             _logger.LogDebug("Databases initialized successfully");
         }
@@ -329,13 +335,37 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         _logger.LogDebug($"Starting processing thread for environment '{environment.Name}' (Interval: {pollingInterval.TotalSeconds}s)");
 
+        // Paused scopes are logged on transition only; at one cycle every 30s, logging the
+        // steady state would bury everything else.
+        var environmentWasPaused = false;
+        var pausedObjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var cycleStartTime = DateTime.UtcNow;
-            
+
             try
             {
                 _logger.LogDebug($"[{environment.Name}] Starting change tracking cycle at {cycleStartTime:HH:mm:ss}");
+
+                // One query per cycle, then in-memory checks per object
+                var paused = await _pauseService.GetPausedScopesAsync(stoppingToken);
+
+                var environmentPaused = paused.Contains(PauseService.EnvironmentScope(environment.Name));
+                if (environmentPaused != environmentWasPaused)
+                {
+                    if (environmentPaused)
+                        _logger.LogWarning($"[{environment.Name}] Environment is paused; no changes will be read or exported until it is resumed");
+                    else
+                        _logger.LogInformation($"[{environment.Name}] Environment resumed");
+                    environmentWasPaused = environmentPaused;
+                }
+
+                if (environmentPaused)
+                {
+                    await Task.Delay(pollingInterval, stoppingToken);
+                    continue;
+                }
 
                 foreach (var trackingObject in environment.ChangeTracking.TrackingObjects)
                 {
@@ -344,6 +374,16 @@ public class ChangeTrackingBackgroundService : BackgroundService
                         _logger.LogInformation($"[{environment.Name}] Cancellation requested, stopping current cycle");
                         break;
                     }
+
+                    if (paused.Contains(PauseService.ObjectScope(environment.Name, trackingObject.Name)))
+                    {
+                        if (pausedObjects.Add(trackingObject.Name))
+                            _logger.LogWarning($"[{environment.Name}] {trackingObject.Name} is paused; skipping it until it is resumed");
+                        continue;
+                    }
+
+                    if (pausedObjects.Remove(trackingObject.Name))
+                        _logger.LogInformation($"[{environment.Name}] {trackingObject.Name} resumed");
 
                     try
                     {
@@ -400,32 +440,21 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         stoppingToken.ThrowIfCancellationRequested();
 
+        var dialect = SqlDialect.Parse(environment.Provider);
         var retryPolicy = _retryPolicies.For(environment);
         await retryPolicy.ExecuteAsync(async _ =>
         {
-            // Modify connection string to handle large text
-            var builder = new SqlConnectionStringBuilder(connectionString);
+            using var conn = await dialect.OpenAsync(connectionString, stoppingToken);
 
-            builder.ApplicationName = "Trignis";
-
-            if (!builder.ConnectionString.Contains("Packet Size"))
-            {
-                builder.PacketSize = 32768;  // Increase packet size for large data
-                builder.ConnectTimeout = 30; // Set connection timeout
-            }
-            
-            using var conn = new SqlConnection(builder.ConnectionString);
-            await conn.OpenAsync(stoppingToken);
-            
-            // Set TEXTSIZE to unlimited for this session
-            using (var setCommand = new SqlCommand("SET TEXTSIZE 2147483647; SET ANSI_WARNINGS OFF;", conn))
-            {
-                await setCommand.ExecuteNonQueryAsync(stoppingToken);
-            }
-            
             var lastVersion = await GetLastProcessedVersionAsync(environment.Name, trackingObject.Name);
 
-            int fromVersion;
+            long fromVersion;
+
+            // Seeding means "start from now": report the watermark, send no history.
+            // The server tells us on platforms that track it; elsewhere the procedure does,
+            // which is why the payload carries the mode.
+            var seeding = false;
+
             if (lastVersion == 0)
             {
                 if (string.Equals(trackingObject.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase))
@@ -433,13 +462,20 @@ public class ChangeTrackingBackgroundService : BackgroundService
                     fromVersion = 0;
                     _logger.LogInformation($"[{environment.Name}] Performing initial full sync for {trackingObject.Name}");
                 }
-                else
+                else if (dialect.CurrentVersionSql is not null)
                 {
-                    using var versionCommand = new SqlCommand("SELECT CHANGE_TRACKING_CURRENT_VERSION()", conn);
-                    lastVersion = Convert.ToInt32(await versionCommand.ExecuteScalarAsync(stoppingToken));
+                    using var versionCommand = conn.CreateCommand();
+                    versionCommand.CommandText = dialect.CurrentVersionSql;
+                    lastVersion = Convert.ToInt64(await versionCommand.ExecuteScalarAsync(stoppingToken));
                     await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, lastVersion);
                     fromVersion = lastVersion;
                     _logger.LogInformation($"[{environment.Name}] Initialized last processed version for {trackingObject.Name} to {lastVersion}");
+                }
+                else
+                {
+                    fromVersion = 0;
+                    seeding = true;
+                    _logger.LogInformation($"[{environment.Name}] Seeding last processed version for {trackingObject.Name} from the procedure");
                 }
             }
             else
@@ -447,14 +483,14 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 fromVersion = lastVersion;
             }
 
-            var payload = new { fromVersion = fromVersion };
+            var payload = new { fromVersion, mode = seeding ? "seed" : "sync" };
             var json = JsonSerializer.Serialize(payload);
 
             stoppingToken.ThrowIfCancellationRequested();
 
             string result;
 
-            var sql = $@"SET NOCOUNT ON; EXEC {trackingObject.StoredProcedureName} @Json = @JsonParam;";
+            var sql = string.Format(dialect.CallProcedure, trackingObject.StoredProcedureName);
 
             // Local helper to read potentially large NVARCHAR result from first column
             async Task<string> ReadClobAsync(System.Data.Common.DbDataReader reader, CancellationToken ct)
@@ -478,8 +514,14 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 return sb.ToString();
             }
 
-            using var spCommand = new SqlCommand(sql, conn) { CommandTimeout = 300 };
-            spCommand.Parameters.AddWithValue("@JsonParam", json);
+            using var spCommand = conn.CreateCommand();
+            spCommand.CommandText = sql;
+            spCommand.CommandTimeout = 300;
+
+            var jsonParam = spCommand.CreateParameter();
+            jsonParam.ParameterName = SqlDialect.JsonParameter;
+            jsonParam.Value = json;
+            spCommand.Parameters.Add(jsonParam);
 
             using (var reader = await spCommand.ExecuteReaderAsync(stoppingToken))
             {
@@ -522,11 +564,24 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
                 var metadata = doc.RootElement.GetProperty("Metadata");
                 var sync = metadata.GetProperty("Sync");
-                var version = sync.GetProperty("Version").GetInt32();
+                var version = sync.GetProperty("Version").GetInt64();
 
                 var maxVersion = version;
 
-                if (doc.RootElement.TryGetProperty("Data", out var data))
+                if (seeding)
+                {
+                    // A procedure that honours mode: "seed" returns no rows. One that ignores it
+                    // returns history, which incremental mode exists to avoid — so drop it here
+                    // rather than flooding every destination on the first cycle.
+                    if (doc.RootElement.TryGetProperty("Data", out var seeded)
+                        && seeded.ValueKind == JsonValueKind.Array && seeded.GetArrayLength() > 0)
+                    {
+                        _logger.LogWarning(
+                            $"[{environment.Name}] {trackingObject.Name} returned {seeded.GetArrayLength()} rows during an incremental seed; discarding them. " +
+                            $"Have the procedure return no rows when mode is \"seed\", or set InitialSyncMode to \"Full\".");
+                    }
+                }
+                else if (doc.RootElement.TryGetProperty("Data", out var data))
                 {
                     if (data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
                     {
@@ -535,7 +590,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                         stoppingToken.ThrowIfCancellationRequested();
 
                         maxVersion = data.EnumerateArray()
-                            .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt32() : (int?)null)
+                            .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt64() : (long?)null)
                             .Where(v => v.HasValue).Select(v => v!.Value)
                             .DefaultIfEmpty(version).Max();
 
@@ -554,7 +609,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         }, stoppingToken);
     }
 
-    private async Task<int> GetLastProcessedVersionAsync(string environmentName, string objectName)
+    private async Task<long> GetLastProcessedVersionAsync(string environmentName, string objectName)
     {
         using var conn = new SqliteConnection(_stateConnectionString);
         await conn.OpenAsync();
@@ -568,10 +623,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
         command.Parameters.AddWithValue("@environmentName", environmentName);
         command.Parameters.AddWithValue("@objectName", objectName);
         var result = await command.ExecuteScalarAsync();
-        return result is long version ? (int)version : 0;
+        return result is long version ? version : 0L;
     }
 
-    private async Task SetLastProcessedVersionAsync(string environmentName, string objectName, int version)
+    private async Task SetLastProcessedVersionAsync(string environmentName, string objectName, long version)
     {
         using var conn = new SqliteConnection(_stateConnectionString);
         await conn.OpenAsync();

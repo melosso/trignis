@@ -1,18 +1,18 @@
-using Trignis.MicrosoftSQL.Services;
+using Trignis.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using System.IO;
 using Serilog;
 using Serilog.Sinks.EventLog;
-using Trignis.MicrosoftSQL.Helpers;
+using Trignis.Helpers;
 using System;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
 using System.Linq;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text;
@@ -119,6 +119,9 @@ try
     builder.Services.AddSingleton<ConnectionHealthCheckService>();
     builder.Services.AddHostedService<ConnectionHealthCheckService>();
     builder.Services.AddSingleton<DeadLetterService>();
+    builder.Services.AddSingleton<PauseService>();
+    builder.Services.AddSingleton<DeadLetterReplayer>();
+    builder.Services.AddHostedService<DeadLetterReplayService>();
     builder.Services.AddSingleton<RetryPolicies>();
     builder.Services.AddSingleton<ExportService>();
     builder.Services.AddSingleton<HealthCheckService>();
@@ -319,9 +322,7 @@ try
             }
 
             var provided = body.TryGetProperty("apiKey", out var kp) ? kp.GetString() ?? "" : "";
-            var provHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(provided));
-            var expHash  = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(adminApiKey));
-            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(provHash, expHash))
+            if (!PassphraseMatches(provided, adminApiKey))
             {
                 webUiAuth.RecordFailedAttempt(clientIp);
                 return Results.Json(new { error = "Invalid API key" }, statusCode: 401);
@@ -365,6 +366,38 @@ try
                 : Results.Json(new { error = "Missing or invalid CSRF token" }, statusCode: 403);
         }
 
+        static bool PassphraseMatches(string provided, string expected)
+        {
+            var provHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(provided));
+            var expHash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(expected));
+            return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(provHash, expHash);
+        }
+
+        // Step-up gate for actions that require the admin passphrase.
+        IResult? RejectIfPassphraseInvalid(HttpContext context, JsonElement body)
+        {
+            // Nothing to step up from: with auth off the whole UI is already open.
+            if (!authEnabled)
+                return null;
+
+            var clientIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+            if (webUiAuth.CheckAccess(clientIp) is { } blockReason)
+                return Results.Json(new { error = blockReason }, statusCode: 429);
+
+            var provided = body.TryGetProperty("passphrase", out var p) ? p.GetString() ?? "" : "";
+
+            if (!PassphraseMatches(provided, adminApiKey))
+            {
+                webUiAuth.RecordFailedAttempt(clientIp);
+                Log.Warning("Rejected a pause request from {Ip}: wrong passphrase", clientIp);
+                return Results.Json(new { error = "Incorrect passphrase" }, statusCode: 401);
+            }
+
+            webUiAuth.ClearFailedAttempts(clientIp);
+            return null;
+        }
+
         // Clearing the row makes the next cycle re-initialise the object per its InitialSyncMode.
         // Without this the only recovery from a bad sync is stopping the service and editing state.db.
         app.MapPost("/ui/api/state/{environmentName}/{objectName}/reset", async (HttpContext context, string environmentName, string objectName) =>
@@ -401,7 +434,7 @@ try
         // Resend a dead letter to its environment's destinations. The row is only removed once
         // every destination succeeds, so a partial failure stays queued for another attempt.
         app.MapPost("/ui/api/deadletters/{id:long}/replay", async (
-            HttpContext context, long id, DeadLetterService deadLetters, ExportService exportService) =>
+            HttpContext context, long id, DeadLetterService deadLetters, DeadLetterReplayer replayer) =>
         {
             if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
 
@@ -409,36 +442,29 @@ try
             if (record == null)
                 return Results.NotFound(new { error = "Dead letter not found" });
 
-            if (record.EnvironmentName == null)
-                return Results.Json(new { error = "This dead letter predates environment tracking and cannot be replayed" }, statusCode: 409);
-
-            var environment = envConfigService.Environments
-                .FirstOrDefault(e => e.Name.Equals(record.EnvironmentName, StringComparison.OrdinalIgnoreCase));
-            if (environment == null)
-                return Results.Json(new { error = $"Environment '{record.EnvironmentName}' is no longer configured" }, statusCode: 409);
-
-            var trackingObject = environment.ChangeTracking.TrackingObjects
-                .FirstOrDefault(t => t.Name.Equals(record.ObjectName, StringComparison.OrdinalIgnoreCase));
-            if (trackingObject == null)
-                return Results.Json(new { error = $"Tracking object '{record.ObjectName}' is no longer configured" }, statusCode: 409);
-
             try
             {
-                using var document = JsonDocument.Parse(record.Data);
-                var failures = await exportService.ExportAsync(environment, trackingObject, document.RootElement, context.RequestAborted);
+                var result = await replayer.ReplayAsync(record, context.RequestAborted);
 
-                if (failures.Count > 0)
+                switch (result.Outcome)
                 {
-                    return Results.Json(new
-                    {
-                        error = "Replay failed; the dead letter was kept",
-                        failures = failures.Select(f => new { target = f.Target, message = f.Error.Message })
-                    }, statusCode: 502);
-                }
+                    case DeadLetterReplayer.Outcome.Replayed:
+                        Log.Information("Dead letter {Id} replayed from the web UI and removed", id);
+                        return Results.Ok(new { ok = true });
 
-                await deadLetters.DeleteAsync(id, context.RequestAborted);
-                Log.Information("Dead letter {Id} replayed from the web UI and removed", id);
-                return Results.Ok(new { ok = true });
+                    case DeadLetterReplayer.Outcome.Unroutable:
+                        return Results.Json(new { error = result.Reason }, statusCode: 409);
+
+                    default:
+                        // A human asking for a replay is a signal the downstream problem was
+                        // addressed, so put the row back in the automatic rotation either way.
+                        await deadLetters.ResetAttemptsAsync(id, context.RequestAborted);
+                        return Results.Json(new
+                        {
+                            error = "Replay failed; the dead letter was kept",
+                            failures = result.Failures.Select(f => new { target = f.Target, message = f.Error.Message })
+                        }, statusCode: 502);
+                }
             }
             catch (Exception ex)
             {
@@ -468,6 +494,63 @@ try
             var deleted = await deadLetters.PurgeAsync(search, objectFilter, context.RequestAborted);
             return Results.Ok(new { ok = true, deleted });
         });
+
+        // Pausing stops changes being read and exported, but the source database keeps recording
+        // them, so this is a "hold", not an "off". Guarded by the admin passphrase because the
+        // failure mode is silent: nothing errors, data simply stops moving.
+        app.MapPost("/ui/api/pause", async (HttpContext context, PauseService pauseService) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var body = await context.Request.ReadFromJsonAsync<JsonElement>(context.RequestAborted);
+            if (RejectIfPassphraseInvalid(context, body) is { } denied) return denied;
+
+            if (ResolveScope(body) is not { } resolved)
+                return Results.BadRequest(new { error = "Specify an environment, and an object when pausing a single tracking object" });
+
+            var reason = body.TryGetProperty("reason", out var r) ? r.GetString() : null;
+            var by = context.Connection.RemoteIpAddress?.ToString();
+
+            await pauseService.PauseAsync(resolved.Scope, reason, by, context.RequestAborted);
+            Log.Warning("Paused {Label} from the web UI ({Reason})", resolved.Label, reason ?? "no reason given");
+
+            return Results.Ok(new { ok = true, scope = resolved.Scope, label = resolved.Label });
+        });
+
+        // Resuming is the safe direction, so it needs no passphrase. Making operators re-authenticate
+        // to restore service is how an incident gets longer.
+        app.MapPost("/ui/api/resume", async (HttpContext context, PauseService pauseService) =>
+        {
+            if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+
+            var body = await context.Request.ReadFromJsonAsync<JsonElement>(context.RequestAborted);
+
+            if (ResolveScope(body) is not { } resolved)
+                return Results.BadRequest(new { error = "Specify an environment, and an object when resuming a single tracking object" });
+
+            var resumed = await pauseService.ResumeAsync(resolved.Scope, context.RequestAborted);
+            if (resumed)
+                Log.Information("Resumed {Label} from the web UI", resolved.Label);
+
+            return Results.Ok(new { ok = true, resumed, scope = resolved.Scope, label = resolved.Label });
+        });
+
+        app.MapGet("/ui/api/pauses", async (PauseService pauseService, HttpContext context) =>
+            Results.Json(await pauseService.ListAsync(context.RequestAborted)));
+
+        // Shared by pause and resume so the two can never disagree on what a scope string means.
+        static (string Scope, string Label)? ResolveScope(JsonElement body)
+        {
+            var environment = body.TryGetProperty("environment", out var e) ? e.GetString() : null;
+            if (string.IsNullOrWhiteSpace(environment))
+                return null;
+
+            var objectName = body.TryGetProperty("object", out var o) ? o.GetString() : null;
+
+            return string.IsNullOrWhiteSpace(objectName)
+                ? (PauseService.EnvironmentScope(environment), $"environment '{environment}'")
+                : (PauseService.ObjectScope(environment, objectName), $"'{objectName}' in '{environment}'");
+        }
 
         app.MapGet("/ui", () => Results.Redirect("/ui/dashboard"));
 
@@ -502,15 +585,21 @@ try
                 environment_count = envConfigService.Environments.Count,
                 tracking_object_count = envConfigService.Environments.Sum(e => e.ChangeTracking.TrackingObjects.Length),
                 endpoint_count = envConfigService.Environments.Sum(e => e.ChangeTracking.ApiEndpoints.Length),
+                // Lets the pause dialog know whether to ask for the passphrase; says nothing secret.
+                auth_enabled = authEnabled,
                 dead_letters = new { total = dlTotal, last_24h = dlLast24h, last_hour = dlLastHour }
             });
         });
 
-        app.MapGet("/ui/api/environments", () =>
+        app.MapGet("/ui/api/environments", async (PauseService pauseService, HttpContext context) =>
         {
+            var paused = await pauseService.GetPausedScopesAsync(context.RequestAborted);
+
             var result = envConfigService.Environments.Select(env => new
             {
                 name = env.Name,
+                provider = env.Provider,
+                paused = paused.Contains(PauseService.EnvironmentScope(env.Name)),
                 connection_string_keys = env.ConnectionStrings.Keys.ToArray(),
                 settings = new
                 {
@@ -527,7 +616,8 @@ try
                     database = t.Database,
                     table_name = t.TableName,
                     stored_procedure_name = t.StoredProcedureName,
-                    initial_sync_mode = t.InitialSyncMode
+                    initial_sync_mode = t.InitialSyncMode,
+                    paused = paused.Contains(PauseService.ObjectScope(env.Name, t.Name))
                 }),
                 api_endpoints = env.ChangeTracking.ApiEndpoints.Select(e => new
                 {
@@ -853,7 +943,7 @@ try
                             object_name = objName,
                             stored_procedure_name = spLookup.TryGetValue(envName, out var sps)
                                 && sps.TryGetValue(objName, out var sp) ? sp : null,
-                            last_version = reader.GetInt32(2),
+                            last_version = reader.GetInt64(2),
                             last_updated = reader.GetDateTime(3).ToString("yyyy-MM-ddTHH:mm:ssZ")
                         });
                     }

@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Trignis.MicrosoftSQL.Helpers;
+using Trignis.Helpers;
 using Trignis.Tests.Helpers;
 using Xunit;
 

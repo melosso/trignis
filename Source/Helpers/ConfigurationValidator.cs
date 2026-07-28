@@ -3,9 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Serilog;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Data;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 /// <summary>
 /// Validates configuration to catch issues early at startup
@@ -116,6 +117,11 @@ public static class ConfigurationValidator
     private static void ValidateEnvironment(EnvironmentConfig env, GlobalSettings globalSettings, List<string> errors, List<string> warnings)
     {
         var envName = env.Name;
+
+        if (!SqlDialect.TryParse(env.Provider, out _))
+        {
+            errors.Add($"Environment '{envName}': unknown Provider '{env.Provider}'. Valid values: {SqlDialect.Supported}");
+        }
 
         // Validate tracking objects
         if (env.ChangeTracking.TrackingObjects.Length == 0)

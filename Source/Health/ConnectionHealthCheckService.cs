@@ -6,14 +6,14 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 using RabbitMQ.Client;
 using Azure.Messaging.ServiceBus;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using System.Linq;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 /// <summary>
 /// Proactively checks message queue and database connectivity
@@ -78,18 +78,19 @@ public class ConnectionHealthCheckService : BackgroundService
 
         var environments = _envConfigService.Environments;
 
-        // Check SQL Server connections (one per unique connection string key per environment)
+        // Check database connections (one per unique connection string key per environment)
         var sqlChecks = environments
             .SelectMany(e => e.ConnectionStrings.Select(cs => (
                 Key: $"sql:{e.Name}/{cs.Key}",
-                ConnectionString: cs.Value)))
+                ConnectionString: cs.Value,
+                Provider: e.Provider)))
             .ToArray();
 
-        foreach (var (key, connStr) in sqlChecks)
+        foreach (var (key, connStr, provider) in sqlChecks)
         {
             try
             {
-                var isHealthy = await CheckSqlHealthAsync(connStr, ct);
+                var isHealthy = await CheckSqlHealthAsync(provider, connStr, ct);
                 UpdateHealth(key, isHealthy);
             }
             catch (OperationCanceledException)
@@ -159,12 +160,11 @@ public class ConnectionHealthCheckService : BackgroundService
             });
     }
 
-    private static async Task<bool> CheckSqlHealthAsync(string connectionString, CancellationToken ct)
+    private static async Task<bool> CheckSqlHealthAsync(string provider, string connectionString, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(5));
-        using var conn = new Microsoft.Data.SqlClient.SqlConnection(connectionString);
-        await conn.OpenAsync(cts.Token);
+        using var conn = await Trignis.Data.SqlDialect.Parse(provider).OpenAsync(connectionString, cts.Token);
         return conn.State == System.Data.ConnectionState.Open;
     }
 

@@ -5,7 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Http;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 /// <summary>
 /// Beacon-style page rendering: _shell.html + views/{page}.html + _footer.html composed into one

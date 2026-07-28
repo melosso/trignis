@@ -4,10 +4,10 @@ using Microsoft.Extensions.FileProviders;
 using System;
 using System.IO;
 using System.Text.Json.Nodes;
-using Trignis.MicrosoftSQL.Services;
+using Trignis.Services;
 using Serilog;
 
-namespace Trignis.MicrosoftSQL.Helpers
+namespace Trignis.Helpers
 {
     public class ConfigurationProvider : JsonConfigurationProvider
     {

@@ -5,8 +5,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging.Abstractions;
-using Trignis.MicrosoftSQL.Models;
-using Trignis.MicrosoftSQL.Services;
+using Trignis.Models;
+using Trignis.Services;
 using Xunit;
 
 namespace Trignis.Tests.Services;

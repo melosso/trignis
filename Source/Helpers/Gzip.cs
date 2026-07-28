@@ -2,7 +2,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 internal static class Gzip
 {

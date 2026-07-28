@@ -5,8 +5,8 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Trignis.MicrosoftSQL.Models;
-using Trignis.MicrosoftSQL.Services;
+using Trignis.Models;
+using Trignis.Services;
 using Xunit;
 
 namespace Trignis.Tests.Services;
@@ -18,14 +18,11 @@ namespace Trignis.Tests.Services;
 /// DeadLetterService hard-codes "Data Source=sinkhole.db" (relative path).
 /// To isolate each test:
 ///   - A unique temp directory is created per test instance.
-///   - Environment.CurrentDirectory is set to that directory in InitializeAsync
-///     (not the constructor) so it takes effect just-in-time, after xUnit has
+///   - Environment.CurrentDirectory is set to that directory in InitializeAsync (not the constructor) so it takes effect just-in-time, after xUnit has
 ///     finished constructing all instances for the collection.
-///   - SqliteConnection.ClearAllPools() is called in DisposeAsync so pooled
-///     handles do not bleed across tests.
+///   - SqliteConnection.ClearAllPools() is called in DisposeAsync so pooled handles do not bleed across tests.
 ///
-/// [Collection("SqliteTests")] ensures these tests run sequentially and never
-/// race against each other on Environment.CurrentDirectory.
+/// [Collection("SqliteTests")] ensures these tests run sequentially and never race against each other on Environment.CurrentDirectory.
 /// </summary>
 [Collection("SqliteTests")]
 public sealed class DeadLetterServiceTests : IAsyncLifetime
