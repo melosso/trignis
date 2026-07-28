@@ -12,7 +12,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Tests for DeadLetterService — schema initialisation, record persistence,
+/// Tests for DeadLetterService: schema initialisation, record persistence,
 /// deduplication, and purge logic.
 ///
 /// DeadLetterService hard-codes "Data Source=sinkhole.db" (relative path).

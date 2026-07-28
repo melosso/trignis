@@ -241,7 +241,7 @@ try
         }
     }
 
-    // Auth middleware — registered before static files so .html paths are also protected
+    // Auth middleware: registered before static files so .html paths are also protected
     if (authEnabled)
     {
         app.Use(async (context, next) =>
@@ -288,7 +288,7 @@ try
             });
         }
 
-        // ── Trignis UI ───────────────────────────────────────────────────────────
+        // Trignis UI
         if (webHostEnabled)
         {
         // Auth routes
@@ -722,7 +722,7 @@ try
                 }
             }
 
-            // Newest first — sort by timestamp string (ISO-like format is lexicographically comparable)
+            // Newest first, sort by timestamp string (ISO-like format is lexicographically comparable)
             allEntries.Sort((a, b) => string.CompareOrdinal(b.Timestamp, a.Timestamp));
 
             var filtered = string.IsNullOrEmpty(level) || level.Equals("ALL", StringComparison.OrdinalIgnoreCase)
@@ -744,7 +744,7 @@ try
             });
         });
 
-        // ── End Trignis UI ───────────────────────────────────────────────────────
+        // End Trignis UI //
         }
         else
         {

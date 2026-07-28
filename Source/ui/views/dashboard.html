@@ -18,19 +18,19 @@
     <div class="stat-grid">
       <div class="stat-card">
         <div class="stat-label">Environments</div>
-        <div class="stat-value" id="statEnvs">—</div>
+        <div class="stat-value" id="statEnvs">-</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Tracking Objects</div>
-        <div class="stat-value" id="statObjects">—</div>
+        <div class="stat-value" id="statObjects">-</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Endpoints</div>
-        <div class="stat-value" id="statEndpoints">—</div>
+        <div class="stat-value" id="statEndpoints">-</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Dead Letters</div>
-        <div class="stat-value" id="statDl">—</div>
+        <div class="stat-value" id="statDl">-</div>
         <div class="stat-sub" id="statDlSub"></div>
       </div>
     </div>
@@ -39,14 +39,14 @@
       <div class="card">
         <div class="card-header">
           <span class="card-title">Service Health</span>
-          <span class="badge badge-muted" id="healthBadge">—</span>
+          <span class="badge badge-muted" id="healthBadge">-</span>
         </div>
         <div class="card-body">
           <div class="kv-grid" id="healthGrid">
-            <span class="kv-key">Status</span><span class="kv-val" id="healthStatus">—</span>
-            <span class="kv-key">Uptime</span><span class="kv-val" id="healthUptime">—</span>
-            <span class="kv-key">Version</span><span class="kv-val" id="healthVersion">—</span>
-            <span class="kv-key">Database</span><span class="kv-val" id="healthDb">—</span>
+            <span class="kv-key">Status</span><span class="kv-val" id="healthStatus">-</span>
+            <span class="kv-key">Uptime</span><span class="kv-val" id="healthUptime">-</span>
+            <span class="kv-key">Version</span><span class="kv-val" id="healthVersion">-</span>
+            <span class="kv-key">Database</span><span class="kv-val" id="healthDb">-</span>
           </div>
         </div>
       </div>
@@ -99,10 +99,10 @@ async function load() {
 async function loadOverview() {
   try {
     const d = await fetch('/ui/api/overview').then(r => r.json());
-    document.getElementById('statEnvs').textContent = d.environment_count ?? '—';
-    document.getElementById('statObjects').textContent = d.tracking_object_count ?? '—';
-    document.getElementById('statEndpoints').textContent = d.endpoint_count ?? '—';
-    document.getElementById('statDl').textContent = d.dead_letters?.total ?? '—';
+    document.getElementById('statEnvs').textContent = d.environment_count ?? '-';
+    document.getElementById('statObjects').textContent = d.tracking_object_count ?? '-';
+    document.getElementById('statEndpoints').textContent = d.endpoint_count ?? '-';
+    document.getElementById('statDl').textContent = d.dead_letters?.total ?? '-';
     if (d.dead_letters) {
       document.getElementById('statDlSub').textContent =
         `${d.dead_letters.last_24h ?? 0} last 24h · ${d.dead_letters.last_hour ?? 0} last hour`;
@@ -116,10 +116,10 @@ async function loadOverview() {
 async function loadHealth() {
   try {
     const d = await fetch('/health').then(r => r.json());
-    document.getElementById('healthStatus').textContent = d.status ?? '—';
-    document.getElementById('healthUptime').textContent = d.uptime ?? '—';
-    document.getElementById('healthVersion').textContent = (d.version ?? '').split('+')[0] || '—';
-    document.getElementById('healthDb').textContent = d.checks?.database?.status ?? '—';
+    document.getElementById('healthStatus').textContent = d.status ?? '-';
+    document.getElementById('healthUptime').textContent = d.uptime ?? '-';
+    document.getElementById('healthVersion').textContent = (d.version ?? '').split('+')[0] || '-';
+    document.getElementById('healthDb').textContent = d.checks?.database?.status ?? '-';
     const ok = d.status === 'healthy';
     const badge = document.getElementById('healthBadge');
     badge.textContent = d.status ?? 'unknown';
@@ -152,7 +152,7 @@ async function loadConnections() {
 }
 
 function reltime(iso) {
-  if (!iso) return '—';
+  if (!iso) return '-';
   const s = (Date.now() - new Date(iso)) / 1000;
   if (s < 60)    return 'just now';
   if (s < 3600)  return `${Math.floor(s / 60)}m ago`;
@@ -178,7 +178,7 @@ async function loadSyncState() {
       </tr>`;
       const objRows = objs.map(obj => `<tr>
         <td>${esc(obj.object_name)}</td>
-        <td class="col-mono">${obj.last_version ?? '—'}</td>
+        <td class="col-mono">${obj.last_version ?? '-'}</td>
         <td class="col-mono" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
         <td style="text-align:right">
           <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem"
@@ -201,7 +201,7 @@ async function resetSync(envName, objectName) {
   const confirmed = confirm(
     `Reset sync state for "${objectName}" in ${envName}?\n\n` +
     `The stored version is cleared. On the next cycle the object re-initialises using its ` +
-    `InitialSyncMode — "Full" replays every row, which can be a large export.`);
+    `InitialSyncMode. "Full" replays every row, which can be a large export.`);
   if (!confirmed) return;
 
   try {

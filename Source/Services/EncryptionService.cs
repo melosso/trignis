@@ -61,7 +61,7 @@ namespace Trignis.MicrosoftSQL.Services
                 return envKey;
             }
 
-            // .env is not read here — Program.cs loads it into the process environment first
+            // .env is not read here. Program.cs loads it into the process environment first
 
             // Priority 3: Fallback to hardcoded key (with warning)
             Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +

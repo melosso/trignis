@@ -42,7 +42,7 @@ public class HealthCheckService
     {
         var now = DateTime.UtcNow;
 
-        // Fast path — no lock
+        // Fast path, no lock
         if (IsFresh(_cache, now)) return _cache!.Json;
 
         // Use semaphore to prevent multiple simultaneous health checks

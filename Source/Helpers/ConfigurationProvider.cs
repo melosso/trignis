@@ -85,7 +85,7 @@ namespace Trignis.MicrosoftSQL.Helpers
 
         /// <summary>
         /// Returns the decrypted value, or null when it was not encrypted to begin with.
-        /// A decryption failure is fatal — a half-readable config is worse than no start-up.
+        /// A decryption failure is fatal: a half-readable config is worse than no start-up.
         /// </summary>
         private string? DecryptIfEncrypted(string label, string value)
         {

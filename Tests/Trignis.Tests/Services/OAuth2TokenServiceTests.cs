@@ -12,7 +12,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Tests for OAuth2TokenService — validation, caching, HTTP integration, and error handling.
+/// Tests for OAuth2TokenService: validation, caching, HTTP integration, and error handling.
 /// Uses a stub HttpMessageHandler so no real token endpoint is required.
 /// </summary>
 public class OAuth2TokenServiceTests

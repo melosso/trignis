@@ -1,0 +1,90 @@
+{
+  "title": "Trignis",
+  "description": "Change tracking for SQL Server: export changes to files, APIs and message queues",
+  "lang": "en",
+  "brand": "Trignis",
+  "favicon": "✨",
+  "lastUpdated": true,
+  "footer": "© {year} Melosso.com · Licensed under [EUPL 1.2](https://github.com/melosso/trignis/blob/main/LICENSE). Built with [Bark](https://github.com/melosso/bark/).",
+  "editLink": {
+    "pattern": "https://github.com/melosso/trignis/edit/main/Documentation/docs/:path",
+    "text": "Edit this page on GitHub"
+  },
+  "head": [],
+  "topNav": [
+    { "text": "Home", "link": "/" },
+    { "text": "Guide", "link": "/guide/" },
+    { "text": "Reference", "link": "/reference/" },
+    {
+      "text": "More",
+      "items": [
+        {
+          "text": "Download",
+          "link": "https://github.com/melosso/trignis/releases/"
+        }
+      ]
+    }
+      
+  ],
+  "sidebar": {
+    "/guide/": [
+      {
+        "title": "Getting started",
+        "collapsed": false,
+        "items": [
+          { "title": "What is Trignis?", "path": "guide/" },
+          { "title": "Install", "path": "guide/install" },
+          { "title": "Track your first table", "path": "guide/first-table" }
+        ]
+      },
+      {
+        "title": "Exporting",
+        "collapsed": false,
+        "items": [
+          { "title": "Files", "path": "guide/export-files" },
+          { "title": "HTTP endpoints", "path": "guide/export-http" },
+          { "title": "Message queues", "path": "guide/export-queues" }
+        ]
+      },
+      {
+        "title": "Running it",
+        "collapsed": false,
+        "items": [
+          { "title": "Deployment", "path": "guide/deployment" },
+          { "title": "Dashboard", "path": "guide/dashboard" },
+          { "title": "Dead letters", "path": "guide/dead-letters" }
+        ]
+      },
+      {
+        "items": [
+          { "title": "Examples", "path": "guide/examples" },
+          { "title": "Reference", "path": "reference/" }
+        ]
+      }
+    ],
+    "/reference/": [
+      {
+        "title": "Configuration",
+        "collapsed": false,
+        "items": [
+          { "title": "Overview", "path": "reference/" },
+          { "title": "Environment files", "path": "reference/environment" },
+          { "title": "Global settings", "path": "reference/global-settings" },
+          { "title": "Authentication", "path": "reference/authentication" }
+        ]
+      },
+      {
+        "title": "Contracts",
+        "collapsed": false,
+        "items": [
+          { "title": "Stored procedure", "path": "reference/stored-procedure" },
+          { "title": "Health endpoints", "path": "reference/health" }
+        ]
+      },
+      { "title": "Guide", "path": "guide/" }
+    ]
+  },
+  "socialLinks": [
+    { "icon": "github", "url": "https://github.com/melosso/trignis", "title": "GitHub" }
+  ]
+}

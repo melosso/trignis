@@ -18,7 +18,7 @@ namespace Trignis.MicrosoftSQL.Services;
 public sealed record ExportFailure(string Target, Exception Error);
 
 /// <summary>
-/// Sends a change payload to every configured destination — file, message queue and HTTP.
+/// Sends a change payload to every configured destination: file, message queue and HTTP.
 /// Failures are returned rather than dead-lettered here so the caller decides what they mean:
 /// the polling loop records a dead letter, a replay reports the failure back to the operator.
 /// </summary>
@@ -312,7 +312,7 @@ public sealed class ExportService
         }
 
         // Measured on what actually goes over the wire. Not an HttpRequestException, so the
-        // retry policy skips it — a retry cannot make the body smaller — and the caller
+        // retry policy skips it (a retry cannot make the body smaller) and the caller
         // dead-letters the batch instead.
         if (payloadBytes > _globalSettings.MaxPayloadSizeBytes)
         {

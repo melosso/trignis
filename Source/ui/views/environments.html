@@ -25,7 +25,7 @@ function esc(s) {
 }
 
 function fmt(v, suffix = '') {
-  return v != null ? esc(String(v)) + suffix : '<span class="muted">—</span>';
+  return v != null ? esc(String(v)) + suffix : '<span class="muted">-</span>';
 }
 
 function renderEnv(env, idx) {
@@ -45,8 +45,8 @@ function renderEnv(env, idx) {
     ? objects.map(o => `<tr>
         <td>${esc(o.name)}</td>
         <td class="col-mono">${esc(o.table_name)}</td>
-        <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">—</span>'}</td>
-        <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '—')}</td>
+        <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">-</span>'}</td>
+        <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '-')}</td>
         <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
       </tr>`).join('')
     : '<tr><td colspan="5" class="empty-state">No tracking objects</td></tr>';
@@ -57,7 +57,7 @@ function renderEnv(env, idx) {
         const target = e.mq_type ? '' : esc(e.url ?? '');
         const auth = e.auth_type ? `<span class="badge badge-muted">${esc(e.auth_type)}</span>` : '';
         return `<tr>
-          <td>${e.key ? `<span class="badge badge-muted">${esc(e.key)}</span>` : '<span class="muted">—</span>'}</td>
+          <td>${e.key ? `<span class="badge badge-muted">${esc(e.key)}</span>` : '<span class="muted">-</span>'}</td>
           <td><span class="badge badge-info">${esc(type)}</span></td>
           <td class="col-mono truncate" style="max-width:200px" title="${esc(e.url ?? '')}">${target}</td>
           <td>${auth}</td>

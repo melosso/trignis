@@ -3,7 +3,6 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
-
 # Ignore all 'exports' folders anywhere in the repo
 **/exports/
 
@@ -26,9 +25,15 @@
 
 # Mono auto generated files
 mono_crash.*
+
+# Markdown is ignored by default; exclude them here:
 *.md
 !README.md
 !CONTRIBUTING.md
+!Documentation/**/*.md
+!Examples/**/*.md
+!.github/**/*.md
+
 .*/
 !.github/
 

@@ -10,7 +10,7 @@ using Xunit;
 namespace Trignis.Tests;
 
 /// <summary>
-/// Tests for MessageQueueService — covers dispatch logic, required-field guards,
+/// Tests for MessageQueueService: covers dispatch logic, required-field guards,
 /// and message size validation for all supported queue types.
 ///
 /// These tests verify behaviour that does NOT require a live broker: all guards

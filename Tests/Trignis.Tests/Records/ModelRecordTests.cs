@@ -34,7 +34,7 @@ public class ModelRecordTests
         Assert.True(s.EnablePayloadBatching);
     }
 
-    /// <summary>Null means "inherit the global value" — see ChangeTrackingBackgroundService.</summary>
+    /// <summary>Null means "inherit the global value". See ChangeTrackingBackgroundService.</summary>
     [Fact]
     public void EnvironmentChangeTracking_OverridesDefaultToNull()
     {

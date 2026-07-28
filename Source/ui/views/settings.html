@@ -80,32 +80,32 @@ async function load() {
     const log = d.logging ?? {};
 
     document.getElementById('globalSettingsBody').innerHTML = [
-      settingItem('Polling Interval', g.PollingIntervalSeconds != null ? `${g.PollingIntervalSeconds}s` : '—'),
+      settingItem('Polling Interval', g.PollingIntervalSeconds != null ? `${g.PollingIntervalSeconds}s` : '-'),
       boolItem('Export to File', g.ExportToFile),
       boolItem('Export to API', g.ExportToApi),
-      settingItem('Retry Count', g.RetryCount ?? '—'),
-      settingItem('Retry Delay', g.RetryDelaySeconds != null ? `${g.RetryDelaySeconds}s` : '—'),
+      settingItem('Retry Count', g.RetryCount ?? '-'),
+      settingItem('Retry Delay', g.RetryDelaySeconds != null ? `${g.RetryDelaySeconds}s` : '-'),
       boolItem('Payload Batching', g.EnablePayloadBatching),
-      settingItem('Max Records / Batch', g.MaxRecordsPerBatch ?? '—'),
-      settingItem('Max Payload Size', g.MaxPayloadSizeBytes != null ? `${Math.round(g.MaxPayloadSizeBytes / 1024 / 1024)}MB` : '—'),
+      settingItem('Max Records / Batch', g.MaxRecordsPerBatch ?? '-'),
+      settingItem('Max Payload Size', g.MaxPayloadSizeBytes != null ? `${Math.round(g.MaxPayloadSizeBytes / 1024 / 1024)}MB` : '-'),
     ].join('');
 
     document.getElementById('serverBody').innerHTML = [
-      settingItem('Host', srv.host ?? '—'),
-      settingItem('Port', srv.port ?? '—'),
-      settingItem('Cache Duration', srv.cache_duration_seconds != null ? `${srv.cache_duration_seconds}s` : '—'),
+      settingItem('Host', srv.host ?? '-'),
+      settingItem('Port', srv.port ?? '-'),
+      settingItem('Cache Duration', srv.cache_duration_seconds != null ? `${srv.cache_duration_seconds}s` : '-'),
     ].join('');
 
     document.getElementById('dlqBody').innerHTML = [
-      settingItem('Retention', g.DeadletterRetentionDays != null ? `${g.DeadletterRetentionDays} days` : '—'),
+      settingItem('Retention', g.DeadletterRetentionDays != null ? `${g.DeadletterRetentionDays} days` : '-'),
       boolItem('Monitor', g.DeadLetterMonitorEnabled),
-      settingItem('Threshold', g.DeadLetterThreshold ?? '—'),
-      settingItem('Check Interval', g.DeadLetterCheckIntervalMinutes != null ? `${g.DeadLetterCheckIntervalMinutes}min` : '—'),
+      settingItem('Threshold', g.DeadLetterThreshold ?? '-'),
+      settingItem('Check Interval', g.DeadLetterCheckIntervalMinutes != null ? `${g.DeadLetterCheckIntervalMinutes}min` : '-'),
     ].join('');
 
     document.getElementById('loggingBody').innerHTML = [
-      settingItem('Minimum Level', log.min_level ?? '—'),
-      settingItem('Sinks', (log.sinks ?? []).join(', ') || '—'),
+      settingItem('Minimum Level', log.min_level ?? '-'),
+      settingItem('Sinks', (log.sinks ?? []).join(', ') || '-'),
     ].join('');
 
   } catch(e) {

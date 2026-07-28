@@ -10,7 +10,7 @@ namespace Trignis.MicrosoftSQL.Helpers;
 /// <summary>
 /// Beacon-style page rendering: _shell.html + views/{page}.html + _footer.html composed into one
 /// document. Templates live outside wwwroot, so the static file middleware can never hand out a
-/// raw fragment, and only names present in <see cref="Titles"/> resolve to a file — no request
+/// raw fragment, and only names present in <see cref="Titles"/> resolve to a file, so no request
 /// value reaches the filesystem.
 /// </summary>
 internal static partial class WebUiPages

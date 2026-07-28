@@ -50,7 +50,7 @@ public class DeadLetterService
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         // Replay needs to know which environment to resend to. Older rows folded the environment
-        // into SourceKey/TrackingObjectName, where an underscore in a name makes it unrecoverable —
+        // into SourceKey/TrackingObjectName, where an underscore in a name makes it unrecoverable,
         // those stay null and are not replayable.
         var columnExists = conn.CreateCommand();
         columnExists.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DeadLetters') WHERE name = 'EnvironmentName'";

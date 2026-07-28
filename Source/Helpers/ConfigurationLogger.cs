@@ -88,7 +88,7 @@ public static class ConfigurationLogger
                 if (env.ConnectionStrings.ContainsKey(obj.Database))
                 {
                     var syncMode = string.Equals(obj.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase) ? "Full" : "Incremental";
-                    Log.Information($"│  {envVertical}  │  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) — DB: {obj.Database}, SP: {obj.StoredProcedureName}, Mode: {syncMode}");
+                    Log.Information($"│  {envVertical}  │  {objPrefix} ✓ '{obj.Name}' ({obj.TableName}) · DB: {obj.Database}, SP: {obj.StoredProcedureName}, Mode: {syncMode}");
                 }
                 else
                 {

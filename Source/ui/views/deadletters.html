@@ -131,7 +131,7 @@ async function load(page = 1) {
       <td><span class="badge badge-muted">${esc(row.tracking_object_name)}</span></td>
       <td class="col-mono">${esc(row.database_name)}</td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:hsl(var(--destructive));font-size:0.8rem">${esc(row.error_message)}</td>
-      <td class="col-mono">${esc(row.timestamp ?? '—')}</td>
+      <td class="col-mono">${esc(row.timestamp ?? '-')}</td>
     </tr>`).join('');
   } catch(e) {
     body.innerHTML = `<tr><td colspan="5" class="empty-state">Error: ${esc(e.message)}</td></tr>`;
@@ -163,7 +163,7 @@ function openDrawer(row) {
     </div>
     <div class="drawer-field">
       <label>Timestamp</label>
-      <div class="drawer-field-value col-mono">${esc(row.timestamp ?? '—')}</div>
+      <div class="drawer-field-value col-mono">${esc(row.timestamp ?? '-')}</div>
     </div>
     <div class="drawer-field">
       <label>Error</label>

@@ -6,7 +6,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Tests for EncryptionService — round-trip encryption, IsEncrypted detection,
+/// Tests for EncryptionService: round-trip encryption, IsEncrypted detection,
 /// and error handling for invalid input.
 ///
 /// Each test instance gets its own isolated temp directory.
@@ -97,7 +97,7 @@ public sealed class EncryptionServiceTests : IDisposable
     [InlineData("a")]
     [InlineData("unicode: \u00e9\u00e0\u00fc")]
     [InlineData("connection string with spaces and symbols: @#$%")]
-    [InlineData("very long value: " + "x")]  // short — full long strings handled in next test
+    [InlineData("very long value: " + "x")]  // short, full long strings handled in next test
     public void Encrypt_Decrypt_RoundTrip_Various(string plaintext)
     {
         var decrypted = _svc.Decrypt(_svc.Encrypt(plaintext));
@@ -131,7 +131,7 @@ public sealed class EncryptionServiceTests : IDisposable
     [Fact]
     public void Decrypt_ThrowsFormatException_ForPartialPwencHeader()
     {
-        // "PWENC:" prefix exists but content section is missing — service throws FormatException
+        // "PWENC:" prefix exists but content section is missing, so service throws FormatException
         Assert.Throws<FormatException>(() =>
             _svc.Decrypt("PWENC:"));
     }

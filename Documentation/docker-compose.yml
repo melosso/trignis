@@ -1,0 +1,8 @@
+services:
+  trignis_docs:
+    image: ghcr.io/melosso/bark:latest
+    container_name: trignis_docs
+    volumes:
+      - ./docs:/app/docs
+    ports:
+      - "5993:8080"
