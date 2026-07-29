@@ -35,8 +35,18 @@ public class ChangeTrackingBackgroundService : BackgroundService
     private readonly EnvironmentConfigService _configService;
     private readonly PauseService _pauseService;
     private volatile CancellationTokenSource? _globalStoppingSource;
-    private readonly Dictionary<string, (CancellationTokenSource Cts, Task Task)> _envTasks = new();
-    private readonly object _envTasksLock = new();
+
+    // Copy of the global token so reload paths never touch a disposed source
+    private CancellationToken _globalStoppingToken;
+
+    private readonly Dictionary<string, EnvTask> _envTasks = new();
+
+    // Serializes every _envTasks mutation including the awaits inside start and stop
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+
+    private sealed record EnvTask(CancellationTokenSource Cts, Task Task);
+
+    private static readonly TimeSpan EnvTaskStopTimeout = TimeSpan.FromSeconds(5);
 
     public ChangeTrackingBackgroundService(
         ILogger<ChangeTrackingBackgroundService> logger,
@@ -196,6 +206,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     {
         _logger.LogDebug("Application is running in ExecuteAsync");
         _globalStoppingSource = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+        _globalStoppingToken = _globalStoppingSource.Token;
 
         try
         {
@@ -203,11 +214,19 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
             await _deadLetterService.PurgeOldDeadLettersAsync(stoppingToken);
 
-            // Start a task per environment and subscribe to hot-reload changes
-            foreach (var env in _configService.Environments)
-                StartEnvironmentTask(env, stoppingToken);
+            // Subscribe inside the gate so no reload lands mid startup
+            await _lifecycleGate.WaitAsync(stoppingToken).ConfigureAwait(false);
+            try
+            {
+                foreach (var env in _configService.Environments)
+                    await StartEnvironmentTaskAsync(env, stoppingToken).ConfigureAwait(false);
 
-            _configService.ConfigurationChanged += OnConfigurationChanged;
+                _configService.ConfigurationChanged += OnConfigurationChanged;
+            }
+            finally
+            {
+                _lifecycleGate.Release();
+            }
 
             // Wait until shutdown is requested
             await Task.Delay(Timeout.Infinite, stoppingToken);
@@ -225,107 +244,84 @@ public class ChangeTrackingBackgroundService : BackgroundService
         {
             _configService.ConfigurationChanged -= OnConfigurationChanged;
 
-            // Cancel and await all per-environment tasks
-            List<Task> runningTasks;
-            List<CancellationTokenSource> sources;
-            lock (_envTasksLock)
-            {
-                sources = [.. _envTasks.Values.Select(x => x.Cts)];
-                runningTasks = [.. _envTasks.Values.Select(x => x.Task)];
-                _envTasks.Clear();
-            }
-            foreach (var cts in sources) cts.Cancel();
+            // Cancel first so a queued reload sees a cancelled token and starts nothing
+            _globalStoppingSource?.Cancel();
+
+            await _lifecycleGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                await Task.WhenAll(runningTasks);
+                foreach (var entry in _envTasks.Values) entry.Cts.Cancel();
+                foreach (var name in _envTasks.Keys.ToList())
+                    await StopEnvironmentTaskAsync(name).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            finally
             {
-                // Shutdown must continue to the Dispose loop whatever the environments threw
-                _logger.LogDebug(ex, "Environment task(s) faulted while shutting down");
+                _lifecycleGate.Release();
             }
-            foreach (var cts in sources) cts.Dispose();
         }
 
         _logger.LogDebug("Background service execution completed");
     }
 
-    private void OnConfigurationChanged(EnvironmentChangeEvent e)
-    {
-        foreach (var env in e.Removed)
-            StopEnvironmentTask(env.Name);
-        foreach (var env in e.Updated)
-            _ = SafeRestartAsync(env);
-        foreach (var env in e.Added)
-            StartEnvironmentTask(env, _globalStoppingSource?.Token ?? CancellationToken.None);
+    private void OnConfigurationChanged(EnvironmentChangeEvent e) => _ = ApplyConfigurationChangeAsync(e);
 
-        async Task SafeRestartAsync(EnvironmentConfig env)
+    // Rapid file saves queue on the gate instead of racing
+    private async Task ApplyConfigurationChangeAsync(EnvironmentChangeEvent e)
+    {
+        await _lifecycleGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            try
-            {
-                await RestartEnvironmentTaskAsync(env).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException ex)
-            {
-                _logger.LogDebug(ex, "Restart of {Env} abandoned because the service is shutting down", env.Name);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to restart environment task for {Env}", env.Name);
-            }
+            foreach (var env in e.Removed)
+                await StopEnvironmentTaskAsync(env.Name).ConfigureAwait(false);
+            foreach (var env in e.Updated.Concat(e.Added))
+                await StartEnvironmentTaskAsync(env, _globalStoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Configuration reload abandoned because the service is shutting down");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to apply a configuration change");
+        }
+        finally
+        {
+            _lifecycleGate.Release();
         }
     }
 
-    private void StartEnvironmentTask(EnvironmentConfig env, CancellationToken stoppingToken)
+    // Caller holds _lifecycleGate
+    private async Task StartEnvironmentTaskAsync(EnvironmentConfig env, CancellationToken stoppingToken)
     {
+        await StopEnvironmentTaskAsync(env.Name).ConfigureAwait(false);
+
+        if (stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Not starting environment '{Env}' because the service is stopping", env.Name);
+            return;
+        }
+
         var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        var task = ProcessEnvironmentAsync(env, cts.Token);
-        lock (_envTasksLock)
-        {
-            _envTasks[env.Name] = (cts, task);
-        }
+        _envTasks[env.Name] = new EnvTask(cts, ProcessEnvironmentAsync(env, cts.Token));
     }
 
-    private void StopEnvironmentTask(string envName)
+    // Caller holds _lifecycleGate
+    private async Task StopEnvironmentTaskAsync(string envName)
     {
-        lock (_envTasksLock)
-        {
-            if (_envTasks.TryGetValue(envName, out var entry))
-            {
-                entry.Cts.Cancel();
-                _envTasks.Remove(envName);
-            }
-        }
-    }
+        if (!_envTasks.Remove(envName, out var entry)) return;
 
-    private async Task RestartEnvironmentTaskAsync(EnvironmentConfig env)
-    {
-        Task? oldTask = null;
-        lock (_envTasksLock)
+        entry.Cts.Cancel();
+        try
         {
-            if (_envTasks.TryGetValue(env.Name, out var entry))
-            {
-                entry.Cts.Cancel();
-                oldTask = entry.Task;
-                _envTasks.Remove(env.Name);
-            }
+            await entry.Task.WaitAsync(EnvTaskStopTimeout).ConfigureAwait(false);
+            entry.Cts.Dispose();
         }
-        if (oldTask != null)
+        catch (Exception ex)
         {
-            try
-            {
-                await oldTask.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (Exception ex)
-            {
-                // A slow or faulted old task must not block the reloaded one from starting
-                _logger.LogDebug(ex, "Previous task for {Env} did not stop cleanly within 5s", env.Name);
-            }
+            // Abandoned task still holds the token so dispose only once it finishes
+            _logger.LogDebug(ex, "Task for {Env} did not stop cleanly within {Timeout}", envName, EnvTaskStopTimeout);
+            _ = entry.Task.ContinueWith(_ => entry.Cts.Dispose(), TaskScheduler.Default);
         }
-
-        var stoppingToken = _globalStoppingSource?.Token ?? CancellationToken.None;
-        if (!stoppingToken.IsCancellationRequested)
-            StartEnvironmentTask(env, stoppingToken);
     }
 
     private async Task ProcessEnvironmentAsync(EnvironmentConfig environment, CancellationToken stoppingToken)
@@ -659,6 +655,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     {
         _logger.LogDebug("Disposing Background service resources");
         _globalStoppingSource?.Dispose();
+        _lifecycleGate.Dispose();
         base.Dispose();
     }
 }
