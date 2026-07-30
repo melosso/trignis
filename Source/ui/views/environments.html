@@ -18,6 +18,43 @@
   </div>
 </main>
 
+<div class="drawer-backdrop" id="pauseBackdrop" onclick="closePause()"></div>
+<div id="pauseDialog" role="dialog" aria-modal="true" aria-labelledby="pauseTitle" style="display:none;position:fixed;z-index:101;top:50%;left:50%;transform:translate(-50%,-50%);width:520px;max-width:92vw;background:hsl(var(--background));border:1px solid hsl(var(--border));border-radius:var(--radius,6px);box-shadow:0 10px 40px rgba(0,0,0,0.25)">
+  <div class="card-header">
+    <div class="card-title" id="pauseTitle">Pause change tracking</div>
+  </div>
+  <div class="card-body">
+    <p style="font-size:0.875rem;margin:0 0 0.75rem">
+      This stops Trignis reading and exporting changes for <strong id="pauseTarget"></strong>.
+      It does not stop the source database recording them.
+    </p>
+
+    <ul style="font-size:0.8125rem;margin:0 0 1rem 1.1rem;padding:0;color:hsl(var(--muted-foreground))">
+      <li>Downstream systems stop receiving data. But beware, <strong>nothing will report an error.</strong></li>
+      <li>The processed version stops advancing, so the backlog grows for as long as this lasts.</li>
+      <li>On SQL Server, a pause longer than <code>CHANGE_RETENTION</code> ages the backlog out and forces a full resync.</li>
+      <li>On PostgreSQL, the outbox table keeps growing and cannot be trimmed past the stored version.</li>
+      <li>The pause survives restarts and config reloads. It only ends when someone resumes it here.</li>
+    </ul>
+
+    <label class="settings-item-label" for="pauseReason" style="display:block;margin-bottom:0.25rem">Reason (optional)</label>
+    <input id="pauseReason" type="text" placeholder="Migrating the warehouse" style="width:100%;margin-bottom:0.75rem" />
+
+    <div id="pausePassphraseRow">
+      <label class="settings-item-label" for="pausePassphrase" style="display:block;margin-bottom:0.25rem">Enter your authentication key</label>
+      <input id="pausePassphrase" type="password" autocomplete="current-password" style="width:100%" />
+    </div>
+
+    <div class="auth-error" id="pauseError" style="display:none;margin-top:0.75rem"></div>
+
+    <div class="flex items-center gap-2" style="margin-top:1.25rem">
+      <span class="muted" style="font-size:0.75rem"><kbd>Esc</kbd> to cancel</span>
+      <button class="btn btn-ghost ml-auto" onclick="closePause()">Cancel</button>
+      <button class="btn btn-primary" id="pauseConfirm" onclick="confirmPause()">Pause</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function esc(s) {
   if (s == null) return '';
@@ -43,13 +80,18 @@ function renderEnv(env, idx) {
 
   const objectRows = objects.length
     ? objects.map(o => `<tr>
-        <td>${esc(o.name)}</td>
+        <td>${esc(o.name)}${o.paused ? ' <span class="badge badge-warning">Paused</span>' : ''}</td>
         <td class="col-mono">${esc(o.table_name)}</td>
         <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">-</span>'}</td>
         <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '-')}</td>
         <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
+        <td style="text-align:right">${
+          o.paused
+            ? `<button class="btn btn-outline btn-icon" title="Resume this object" onclick="resumeScope('${esc(env.name)}','${esc(o.name)}')">Resume</button>`
+            : `<button class="btn btn-ghost btn-icon" title="Pause this object" onclick="askPause('${esc(env.name)}','${esc(o.name)}')">Pause</button>`
+        }</td>
       </tr>`).join('')
-    : '<tr><td colspan="5" class="empty-state">No tracking objects</td></tr>';
+    : '<tr><td colspan="6" class="empty-state">No tracking objects</td></tr>';
 
   const endpointRows = endpoints.length
     ? endpoints.map(e => {
@@ -69,11 +111,26 @@ function renderEnv(env, idx) {
     <button class="accordion-trigger" onclick="toggleAccordion(${idx})">
       <span class="accordion-trigger-left">
         <span class="badge badge-muted">${esc(env.name)}</span>
+        ${env.paused ? '<span class="badge badge-warning">Paused</span>' : ''}
+        ${env.provider && env.provider !== 'mssql' ? `<span class="pill">${esc(env.provider)}</span>` : ''}
         <span style="font-size:0.8rem;font-weight:400;color:hsl(var(--muted-foreground))">${objects.length} objects · ${endpoints.length} endpoints</span>
       </span>
       <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
     </button>
     <div class="accordion-body">
+
+      <div class="accordion-section">
+        <div class="accordion-section-title">Status</div>
+        <div class="flex items-center gap-2" style="flex-wrap:wrap">
+          ${env.paused
+            ? `<span class="badge badge-warning">Paused</span>
+               <span class="muted" style="font-size:0.8rem">Changes are accumulating in the source database and nothing is being exported.</span>
+               <button class="btn btn-primary ml-auto" onclick="resumeScope('${esc(env.name)}', null)">Resume environment</button>`
+            : `<span class="badge badge-success">Running</span>
+               <span class="muted" style="font-size:0.8rem">Polling every ${fmt(s.polling_interval_seconds ?? null, 's')} and exporting normally.</span>
+               <button class="btn btn-outline ml-auto" onclick="askPause('${esc(env.name)}', null)">Pause environment</button>`}
+        </div>
+      </div>
 
       <div class="accordion-section">
         <div class="accordion-section-title">Connection Strings</div>
@@ -92,7 +149,7 @@ function renderEnv(env, idx) {
         <div class="table-wrapper" style="border:none;border-radius:0">
           <div class="scroll-area" style="max-height:260px">
             <table>
-              <thead><tr><th>Name</th><th>Table</th><th>Database</th><th>Stored Procedure</th><th>Sync Mode</th></tr></thead>
+              <thead><tr><th>Name</th><th>Table</th><th>Database</th><th>Stored Procedure</th><th>Sync Mode</th><th></th></tr></thead>
               <tbody>${objectRows}</tbody>
             </table>
           </div>
@@ -118,6 +175,99 @@ function renderEnv(env, idx) {
 function toggleAccordion(idx) {
   const el = document.getElementById(`acc-${idx}`);
   el.classList.toggle('open');
+}
+
+let authEnabled = true;
+fetch('/ui/api/overview').then(r => r.json())
+  .then(d => {
+    authEnabled = d.auth_enabled !== false;
+    // With no passphrase configured there is nothing to step up to, so do not ask for one.
+    document.getElementById('pausePassphraseRow').style.display = authEnabled ? '' : 'none';
+  })
+  .catch(() => {});
+
+let pauseTargetScope = null;
+let pauseOpener = null;
+
+function askPause(environment, objectName) {
+  pauseOpener = document.activeElement;
+  pauseTargetScope = { environment, object: objectName };
+  document.getElementById('pauseTarget').textContent =
+    objectName ? `${objectName} in ${environment}` : `the whole ${environment} environment`;
+  document.getElementById('pauseReason').value = '';
+  document.getElementById('pausePassphrase').value = '';
+  document.getElementById('pauseError').style.display = 'none';
+  document.getElementById('pauseBackdrop').classList.add('open');
+  document.getElementById('pauseDialog').style.display = 'block';
+  (authEnabled ? document.getElementById('pausePassphrase') : document.getElementById('pauseReason')).focus();
+}
+
+function closePause() {
+  if (!pauseTargetScope) return;
+  pauseTargetScope = null;
+  document.getElementById('pauseBackdrop').classList.remove('open');
+  document.getElementById('pauseDialog').style.display = 'none';
+  // Send focus back to whatever opened the dialog, so keyboard users do not land at the top.
+  pauseOpener?.focus();
+  pauseOpener = null;
+}
+
+// Only while the dialog is open: an unguarded handler would swallow Escape for the whole page.
+document.addEventListener('keydown', e => {
+  if (!pauseTargetScope) return;
+
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closePause();
+    return;
+  }
+
+  // Enter confirms from either field, but never from the Cancel button.
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+    e.preventDefault();
+    confirmPause();
+  }
+});
+
+async function confirmPause() {
+  if (!pauseTargetScope) return;
+
+  const btn = document.getElementById('pauseConfirm');
+  const err = document.getElementById('pauseError');
+  btn.disabled = true;
+
+  try {
+    const res = await postJson('/ui/api/pause', {
+      ...pauseTargetScope,
+      reason: document.getElementById('pauseReason').value || null,
+      passphrase: document.getElementById('pausePassphrase').value
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      err.textContent = body.error ?? `Failed with status ${res.status}`;
+      err.style.display = 'block';
+      return;
+    }
+
+    closePause();
+    await load();
+  } catch (e) {
+    err.textContent = e.message;
+    err.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resumeScope(environment, objectName) {
+  const res = await postJson('/ui/api/resume', { environment, object: objectName });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.error ?? `Failed to resume (status ${res.status})`);
+    return;
+  }
+  await load();
 }
 
 async function load() {

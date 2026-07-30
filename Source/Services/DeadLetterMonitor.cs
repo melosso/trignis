@@ -5,9 +5,9 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 /// <summary>
 /// Monitors the dead letter queue and alerts when thresholds are exceeded

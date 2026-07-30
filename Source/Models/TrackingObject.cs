@@ -1,4 +1,4 @@
-namespace Trignis.MicrosoftSQL.Models;
+namespace Trignis.Models;
 
 public record class TrackingObject
 {

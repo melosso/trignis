@@ -1,4 +1,4 @@
-using Trignis.MicrosoftSQL.Services;
+using Trignis.Services;
 using Xunit;
 
 namespace Trignis.Tests.Services;

@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using System.Text.Json.Nodes;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 /// <summary>
 /// Rewrites string properties of a JSON object in place. Encryption and decryption walk the same path, so this is a single implementation.

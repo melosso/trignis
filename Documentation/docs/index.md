@@ -4,7 +4,7 @@ layout: home
 hero:
   name: "Trignis"
   text:
-  tagline: Turn SQL Server table updates into instant notifications and event streams.
+  tagline: Turn database table updates into notifications and event streams.
   actions:
     - theme: brand
       text: Get Started

@@ -7,6 +7,8 @@ description: From an empty install to changes landing on disk
 
 End to end with one table, exporting to files. Swapping the destination later is a config change.
 
+This walkthrough uses SQL Server change tracking, the most common setup. For PostgreSQL, the [contract reference](/reference/stored-procedure#postgresql) has the equivalent outbox table, trigger and function; steps 2 to 4 below are identical once `"Provider": "postgres"` is set.
+
 ## 1. Write the stored procedure
 
 Trignis asks your procedure for changes since a version, and it answers in JSON. Nothing is generated for you. You choose the columns.
@@ -18,15 +20,15 @@ CREATE OR ALTER PROCEDURE web.get_itemssync
     @json NVARCHAR(MAX)
 AS
 BEGIN
-    DECLARE @fromVersion INT = JSON_VALUE(@json, '$.fromVersion');
+    DECLARE @fromVersion BIGINT = JSON_VALUE(@json, '$.fromVersion');
 
     SET XACT_ABORT ON;
     SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
 
     BEGIN TRAN;
         DECLARE @reason INT;
-        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
-        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
+        DECLARE @curVer BIGINT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer BIGINT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
 
         IF (@fromVersion = 0)
             SET @reason = 0;                    -- first sync
@@ -86,6 +88,7 @@ Create `environments/production.json`:
 
 ```json
 {
+  "Provider": "mssql",
   "ConnectionStrings": {
     "PrimaryDatabase": "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;"
   },

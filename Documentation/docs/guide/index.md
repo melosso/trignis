@@ -1,22 +1,37 @@
 ---
 title: What is Trignis?
-description: Change tracking for SQL Server, exported to files, APIs and queues
+description: Change tracking for SQL Server and PostgreSQL, exported to files, APIs and queues
 ---
 
 # What is Trignis?
 
-Trignis watches your SQL Server tables and tells something else when they change. You point it at a database, say which objects to track and where changes should go, and it keeps sending them.
+Trignis is a change capture utility for SQL Server and PostgreSQL. After pointing it to a database, selecting target objects, and defining a destination, it continuously pushes updates downstream.
 
-It exists for the plumbing between systems: keeping a downstream copy in step, feeding an integration, building an audit trail.
+<div class="tip custom-block">
+
+The documentation assumes that you have knowledge of database administration and the trade-offs that change data capture brings to the table.
+
+</div>
+
+It handles data integration tasks, for example (but not limited to) syncing replica databases, feeding external services, and recording audit histories.
 
 ## How it works
 
-1. A **stored procedure you write** reads SQL Server's change tracking and returns the changes as JSON.
+1. A **procedure you write** reads whatever tracks changes in your database and returns them as JSON.
 2. Trignis calls it on a timer, once per tracked object.
 3. Whatever comes back is exported to every destination configured for that environment.
 4. The last processed version is stored, so the next poll only asks for what came after it.
 
-The stored procedure is the important part of that list. Trignis does not generate SQL against your tables. You decide which columns leave the database and in what shape. See the [stored procedure contract](/reference/stored-procedure).
+The procedure is the important part of that list. Trignis does not generate SQL against your tables. You decide which columns leave the database and in what shape. See the [stored procedure contract](/reference/stored-procedure).
+
+That is also why the database matters less than it looks. Trignis never calls `CHANGETABLE` itself, so the mechanism is your choice: SQL Server change tracking, a PostgreSQL outbox table, or an existing version column on a table with no change tracking at all. Step 1 is the only part that differs per platform.
+
+## Supported databases
+
+| Database | Provider | Usual mechanism |
+|---|---|---|
+| Microsoft SQL Server | `mssql` (default) | Change tracking, or an existing `rowversion` |
+| PostgreSQL 13+ | `postgres` | Outbox table with a trigger, or a sequence column |
 
 ## Why polling, not triggers
 

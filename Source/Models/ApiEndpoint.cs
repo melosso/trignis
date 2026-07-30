@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace Trignis.MicrosoftSQL.Models;
+namespace Trignis.Models;
 
 public record class ApiEndpoint
 {

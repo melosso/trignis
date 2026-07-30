@@ -5,9 +5,11 @@ description: Endpoint credentials and web UI access
 
 # Authentication
 
+There are two separate things called authentication in Trignis, and it helps to keep them apart. The first is how Trignis proves itself to the HTTP endpoints you send changes to. The second is how you prove yourself to the dashboard. This page covers both, along with how the credentials for either are kept safe on disk.
+
 ## Endpoint authentication
 
-Set `Auth` on an HTTP endpoint. Four types are supported.
+Adding an `Auth` block to an HTTP endpoint tells Trignis how to authenticate when it posts your changes. Four types are available, and you can use a different one per endpoint.
 
 ### Bearer
 
@@ -15,7 +17,7 @@ Set `Auth` on an HTTP endpoint. Four types are supported.
 { "Auth": { "Type": "Bearer", "Token": "your-token" } }
 ```
 
-Sends `Authorization: Bearer <token>`.
+This sends `Authorization: Bearer <token>` with each request, which suits a static token issued by the receiving service.
 
 ### Basic
 
@@ -23,7 +25,7 @@ Sends `Authorization: Bearer <token>`.
 { "Auth": { "Type": "Basic", "Username": "user", "Password": "secret" } }
 ```
 
-Base64 encodes the pair into `Authorization: Basic`.
+The pair is base64 encoded into an `Authorization: Basic` header for you, so you can store the username and password as they are.
 
 ### ApiKey
 
@@ -37,7 +39,7 @@ Base64 encodes the pair into `Authorization: Basic`.
 }
 ```
 
-`HeaderName` defaults to `X-API-Key`.
+If the receiving service expects a different header, `HeaderName` lets you name it. Left out, it defaults to `X-API-Key`.
 
 ### OAuth2ClientCredentials
 
@@ -54,40 +56,44 @@ Base64 encodes the pair into `Authorization: Basic`.
 }
 ```
 
-Trignis requests a token with `grant_type=client_credentials` and caches it per endpoint and client id. Lifetime comes from `TokenExpirationSeconds` if set, otherwise the server's `expires_in`, otherwise one hour. Tokens are refreshed a minute before expiry so one cannot lapse mid request.
+This is the option to reach for when the receiving side sits behind a proper identity provider. Trignis requests a token using `grant_type=client_credentials` and caches it per endpoint and client id, so a busy polling interval does not mean a token request every cycle.
 
-Concurrent exports needing the same fresh token wait on a single request rather than stampeding the token endpoint.
+Lifetime is worked out in the order you would expect: `TokenExpirationSeconds` if you set it, otherwise whatever the server reports in `expires_in`, and one hour as a last resort. Refreshes happen a minute ahead of expiry, which keeps a token from lapsing partway through a request.
+
+If several exports need the same fresh token at once, they wait on a single request rather than all calling the token endpoint together. Identity providers tend to appreciate that.
 
 ## Encryption at rest
 
-Sensitive values are encrypted the first time Trignis reads an environment file, and the file is rewritten in place. Encrypted values are prefixed `PWENC:`.
+You can write secrets into an environment file as plain text, which is by far the easiest way to get started. The first time Trignis reads the file it encrypts those values and rewrites the file in place, leaving a `PWENC:` prefix so you can see at a glance what has been handled.
 
-Encrypted automatically:
+These fields are picked up automatically:
 
 - Every value under `ConnectionStrings`
 - `Auth`: `Token`, `Password`, `ApiKey`, `ClientSecret`, `ClientId`
 - `MessageQueue`: `Password`, `ConnectionString`, `SecretAccessKey`, `AccessKeyId`
 
-Encryption is hybrid: a per-value AES-256 key wrapped with a 2048-bit RSA key. The RSA private key lives in `.core/`, itself encrypted with `TRIGNIS_ENCRYPTION_KEY`.
+The scheme is hybrid: each value gets its own AES-256 key, which is then wrapped with a 2048-bit RSA key. That RSA private key lives in `.core/`, encrypted in turn with your `TRIGNIS_ENCRYPTION_KEY`. The practical upshot is that a copy of an environment file, on its own, gives nothing away.
 
 ::: danger
-Losing `TRIGNIS_ENCRYPTION_KEY` or `.core/` makes existing configuration unreadable. Trignis refuses to start rather than continuing with unreadable secrets. Recovery means deleting `.core/`, letting Trignis regenerate, and re-entering every secret as plaintext.
+Losing `TRIGNIS_ENCRYPTION_KEY` or the `.core/` folder makes your existing configuration unreadable, and Trignis will refuse to start rather than carry on with secrets it cannot decrypt. Recovery means deleting `.core/`, letting Trignis regenerate it, and entering every secret again as plain text. Please back both up alongside your other credentials.
 :::
 
-Values already prefixed `PWENC:` are left alone, so writing a new plaintext secret into a file that already has encrypted ones works fine.
+Day to day this stays out of your way. Values already carrying a `PWENC:` prefix are left untouched, so you can drop a new plaintext secret into a file full of encrypted ones and it will be picked up on the next read.
 
-## Web UI access
+## Dashboard access
 
-`Trignis:AdminApiKey` is the credential. Sign-in exchanges it for a session cookie valid for 24 hours, signed with ASP.NET Core Data Protection. Keys persist under `.core/dp-keys`, so sessions survive a restart.
+Signing in to the dashboard uses `Trignis:AdminApiKey`. Trignis exchanges it for a session cookie good for 24 hours, signed with ASP.NET Core Data Protection. The signing keys are kept under `.core/dp-keys`, which is why your session survives a service restart rather than logging everyone out on every deploy.
 
-Protections on the sign-in route:
+The same key is asked for a second time before you [pause an environment](/guide/dashboard#pausing-change-tracking), since that is the one action whose failure mode is silence.
 
-- **Lockout.** 10 failed attempts from one IP locks it for 30 minutes. A correct key is refused while locked.
-- **CSRF.** Sign-in needs a one-time token from `/ui/api/auth/csrf`, consumed on use.
-- **Double submit.** Every mutating call must echo the session CSRF cookie in `X-CSRF-Token`.
+A few protections sit on the sign-in route:
 
-Cookies are `HttpOnly` (except the CSRF cookie, which page JavaScript must read) and `SameSite=Lax`. The `Secure` flag follows the request scheme unless `WebHost:SecureCookies` overrides it.
+- **Lockout.** Ten failed attempts from one address lock it out for 30 minutes, and a correct key is refused while the lockout stands.
+- **CSRF.** Signing in needs a one-time token from `/ui/api/auth/csrf`, which is consumed as it is used.
+- **Double submit.** Mutating calls echo the session CSRF cookie back in an `X-CSRF-Token` header, so a request forged from another site cannot succeed.
+
+Cookies are `HttpOnly`, with the single exception of the CSRF cookie, which page JavaScript reads by design. All of them are `SameSite=Lax`. The `Secure` flag follows the scheme of the request unless `WebHost:SecureCookies` says otherwise, which is the setting you want behind a TLS-terminating proxy.
 
 ::: warning
-The admin key is a single shared credential with no user accounts and no audit trail of who did what. Treat the dashboard as an operator tool on a trusted network, put TLS in front of it, and set `WebHost:Host` to `localhost` if only local access is needed.
+Worth being clear about a limitation here: the admin key is a single shared credential. There are no user accounts, and no audit trail of who did what. The dashboard is best treated as an operator tool on a trusted network, with TLS in front of it. Where only local access is needed, setting `WebHost:Host` to `localhost` and reaching it over an SSH tunnel is a tidy answer.
 :::

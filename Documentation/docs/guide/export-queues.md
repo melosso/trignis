@@ -5,7 +5,9 @@ description: RabbitMQ, Azure Service Bus, AWS SQS, Event Hubs and Kafka
 
 # Export to message queues
 
-A queue endpoint is an entry in the same `ApiEndpoints` list, with `MessageQueueType` set instead of `Url`.
+If your downstream systems already speak a queue, you can send changes there instead of (or alongside) an HTTP endpoint. The nice part is that there is nothing new to learn structurally: a queue endpoint is just another entry in the same `ApiEndpoints` list you already use, with `MessageQueueType` set where you would otherwise put a `Url`.
+
+Five brokers are supported today, and you can mix them freely within one environment:
 
 | `MessageQueueType` | Target |
 |---|---|
@@ -17,7 +19,7 @@ A queue endpoint is an entry in the same `ApiEndpoints` list, with `MessageQueue
 
 ## RabbitMQ
 
-Publish straight to a queue:
+The simplest arrangement publishes straight to a named queue:
 
 ```json
 {
@@ -34,7 +36,7 @@ Publish straight to a queue:
 }
 ```
 
-Or route through an exchange:
+If your topology is built around exchanges instead, you can route through one of those:
 
 ```json
 {
@@ -51,9 +53,9 @@ Or route through an exchange:
 }
 ```
 
-Set one or the other. If both are present the exchange wins and Trignis warns at startup.
+It is best to set one or the other. Should both end up present, the exchange takes precedence and Trignis will point this out in the startup log rather than leave you guessing.
 
-Connections are pooled per host/port/vhost and reused across cycles.
+Connections are pooled per host, port and virtual host, then reused across cycles, so a short polling interval does not mean a new connection every time.
 
 ## Azure Service Bus
 
@@ -68,7 +70,7 @@ Connections are pooled per host/port/vhost and reused across cycles.
 }
 ```
 
-Use `TopicName` instead for topics. If both are set, `QueueName` wins.
+Publishing to a topic works the same way: swap `QueueName` for `TopicName`. If both happen to be set, `QueueName` is the one that gets used.
 
 ## AWS SQS
 
@@ -85,7 +87,9 @@ Use `TopicName` instead for topics. If both are set, `QueueName` wins.
 }
 ```
 
-Omit both credentials to use the default AWS credential chain: instance roles, environment, profile. Supply both or neither; one alone is a configuration error.
+Leaving out `AccessKeyId` and `SecretAccessKey` entirely is often the better choice, since Trignis then falls back to the default AWS credential chain and picks up instance roles, environment variables or a named profile. That keeps long-lived keys out of your configuration.
+
+Whichever route you take, please supply both credentials or neither. Just one on its own is treated as a configuration error, because it almost always means something was half-edited.
 
 ## Azure Event Hubs
 
@@ -117,11 +121,13 @@ Omit both credentials to use the default AWS credential chain: instance roles, e
 }
 ```
 
-Omit `Username`/`Password` for plaintext. `SaslMechanism` accepts `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`. Producers are cached per broker/topic. Works with Confluent Cloud and self-hosted brokers.
+For a plaintext broker you can simply omit `Username` and `Password`. When you do authenticate, `SaslMechanism` accepts `PLAIN`, `SCRAM-SHA-256` and `SCRAM-SHA-512`.
+
+Producers are cached per broker and topic. Both Confluent Cloud and self-hosted brokers work without any special handling.
 
 ## Size limits
 
-Each platform has its own ceiling, enforced before sending:
+Every broker has its own idea of how large a message may be, and Trignis checks against that ceiling before attempting a send rather than letting the broker reject it:
 
 | Platform | Limit |
 |---|---|
@@ -131,12 +137,14 @@ Each platform has its own ceiling, enforced before sending:
 | Azure Event Hubs | 1 MB |
 | Kafka | 1 MB (broker default) |
 
-For Service Bus and SQS, an oversized message is gzipped and base64-encoded first, with `Compressed` set in the message properties. Still too large after that and the export fails to a dead letter.
+Service Bus and SQS have the tightest limits of the group, so an oversized message destined for either is gzipped and base64-encoded first, with `Compressed` set in the message properties for your consumer to check. If it is still too large after that, the export becomes a [dead letter](/guide/dead-letters) rather than being silently dropped.
 
 ::: tip
-Note that queue exports are not batched the way HTTP exports are. If a full sync will exceed the limit, use an HTTP endpoint or narrow what the stored procedure returns.
+Worth knowing: queue exports are not batched the way HTTP exports are. If you expect a full sync to exceed the limit, an HTTP endpoint handles that comfortably, and narrowing what your procedure returns is usually an improvement in its own right.
 :::
 
 ## Circuit breaker
 
-After 3 consecutive failures an endpoint opens its circuit for one minute, and calls fail immediately instead of waiting on timeouts. It closes again on the next success. Each endpoint has its own breaker, so one broken queue does not stall the others.
+When a broker goes away, waiting on connection timeouts every cycle slows everything down for no benefit. So after three consecutive failures an endpoint opens its circuit for a minute and fails fast instead, closing again on the first success.
+
+Each endpoint carries its own breaker. One unreachable queue therefore holds up only itself, and your other destinations carry on as normal.

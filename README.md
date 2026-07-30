@@ -4,7 +4,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
 [![Latest Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
 
-Trignis watches your SQL Server tables and tells something else when they change. Point it at a database, say which objects to track and where changes should go, and it keeps sending them to a file, an HTTP endpoint, or a message queue.
+Trignis watches your database tables and tells something else when they change. Point it at SQL Server or PostgreSQL, say which objects to track and where changes should go, and it keeps sending them to a file, an HTTP endpoint, or a message queue.
 
 Useful for data synchronization, audit trails, ETL processes, and application integration scenarios where you need to track and propagate database changes reliably.
 
@@ -15,10 +15,10 @@ Trignis polls on a timer rather than firing on every write. That is intential. I
 ## Requirements
 
 - [.NET 10+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
-- Microsoft SQL Server with change tracking enabled
+- Microsoft SQL Server, or PostgreSQL 13+
 
 > [!CAUTION]
-> Change tracking accumulates side-table data that has to be cleaned up, and SQL Server 2025 changed how that cleanup behaves. Read [Risks](#risks) before enabling it on a production database.
+> Whichever mechanism you pick accumulates data that has to be cleaned up: SQL Server change tracking has side tables, a PostgreSQL outbox has its own table. Read [Risks](#risks) before enabling either on a production database.
 
 ## Getting started
 
@@ -73,16 +73,18 @@ Changes are read through a stored procedure you write, which keeps the shape of 
 
 ## Risks
 
-Change tracking is not free. Expect roughly 5–10% slower writes on tracked tables, since every change is recorded. The side tables grow and need regular cleanup.
+Capturing changes is never free, and the bill differs per database.
 
-SQL Server 2025 (17.x) and later switched to an adaptive shallow cleanup for large side tables, which behaves differently from the deep cleanup in earlier versions. `sp_flush_CT_internal_table_on_demand` still has to be run manually. Trignis does not do it for you. See [About Change Tracking](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-tracking-sql-server?view=sql-server-ver17) and [KB3173157](https://support.microsoft.com/en-us/topic/kb3173157-adds-a-stored-procedure-for-the-manual-cleanup-of-the-change-tracking-side-table-in-sql-server-2fe76677-8687-acc0-12a9-78f3709fc621).
+**SQL Server change tracking.** Expect roughly 5–10% slower writes on tracked tables, since every change is recorded. The side tables grow and need regular cleanup. SQL Server 2025 (17.x) and later switched to an adaptive shallow cleanup for large side tables, which behaves differently from the deep cleanup in earlier versions. `sp_flush_CT_internal_table_on_demand` still has to be run manually. Trignis does not do it for you. See [About Change Tracking](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-tracking-sql-server?view=sql-server-ver17) and [KB3173157](https://support.microsoft.com/en-us/topic/kb3173157-adds-a-stored-procedure-for-the-manual-cleanup-of-the-change-tracking-side-table-in-sql-server-2fe76677-8687-acc0-12a9-78f3709fc621). Compatibility with older SQL Server versions is not guaranteed.
 
-Failed exports go to a dead letter store (`sinkhole.db`) rather than being retried forever. They are not resent automatically. Replay them from the dashboard once the downstream problem is fixed.
+**PostgreSQL outbox tables.** A row trigger runs inside every write, so the cost lands on the writing transaction. The outbox grows until you trim it, and Trignis cannot trim it for you — it does not know which consumer is furthest behind. Trim below the watermark shown on the dashboard, never above it. Long-running transactions hold the visibility horizon back, so changes arrive late and in bursts rather than being lost.
 
-Compatibility with older SQL Server versions is not guaranteed.
+Neither is mandatory. Any column that only increases and is assigned no earlier than commit will do, on either platform.
+
+Failed exports go to a dead letter store (`sinkhole.db`) rather than being retried forever. Trignis retries them on a widening backoff, five times by default, then leaves them for you to replay or discard from the dashboard.
 
 > [!TIP]
-> Brent Ozar's [Performance Tuning SQL Server Change Tracking](https://www.brentozar.com/archive/2014/06/performance-tuning-sql-server-change-tracking/) is worth reading before committing to this.
+> Brent Ozar's [Performance Tuning SQL Server Change Tracking](https://www.brentozar.com/archive/2014/06/performance-tuning-sql-server-change-tracking/) is worth reading before committing to the SQL Server route.
 
 ## Lore
 

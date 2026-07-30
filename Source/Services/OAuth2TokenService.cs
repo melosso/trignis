@@ -7,9 +7,9 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class OAuth2TokenService
 {

@@ -6,10 +6,10 @@ using System.Linq;
 using System.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Trignis.MicrosoftSQL.Helpers;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Helpers;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class EnvironmentChangeEvent
 {
@@ -23,14 +23,16 @@ public class EnvironmentConfigService : IDisposable
     private readonly ILogger<EnvironmentConfigService> _logger;
     private readonly EncryptionService _encryptionService;
 
-    private ImmutableList<EnvironmentConfig> _environments = ImmutableList<EnvironmentConfig>.Empty;
+    private volatile ImmutableList<EnvironmentConfig> _environments = ImmutableList<EnvironmentConfig>.Empty;
     private readonly object _lock = new();
 
-    private string _envDir = "environments";
-    private string? _selectedEnvironment;
+    // Written by Initialize and read on watcher threads
+    private volatile string _envDir = "environments";
+    private volatile string? _selectedEnvironment;
 
     private FileSystemWatcher? _watcher;
     private readonly Dictionary<string, Timer> _debounceTimers = [];
+    private bool _disposed;
 
     public IReadOnlyList<EnvironmentConfig> Environments => _environments;
     public event Action<EnvironmentChangeEvent>? ConfigurationChanged;
@@ -72,6 +74,7 @@ public class EnvironmentConfigService : IDisposable
     {
         lock (_debounceTimers)
         {
+            if (_disposed) return;
             if (_debounceTimers.TryGetValue(e.FullPath, out var existing)) existing.Dispose();
             _debounceTimers[e.FullPath] = new Timer(_ => HandleFileChange(e.FullPath), null, 500, Timeout.Infinite);
         }
@@ -103,11 +106,12 @@ public class EnvironmentConfigService : IDisposable
 
     private void HandleFileChange(string fullPath)
     {
-        // Dispose on removal, or every file change leaks a timer for the process lifetime.
-        // Disposing a one-shot Timer from inside its own callback is supported.
+        // Dispose on removal or every file change leaks a timer for the process lifetime
         lock (_debounceTimers)
         {
             if (_debounceTimers.Remove(fullPath, out var fired)) fired.Dispose();
+            // A callback already in flight must not fire events after disposal
+            if (_disposed) return;
         }
 
         var newEnv = LoadFile(fullPath);
@@ -179,6 +183,7 @@ public class EnvironmentConfigService : IDisposable
             var envConfig = new EnvironmentConfig
             {
                 Name = name,
+                Provider = cfg.GetValue<string?>("Provider") ?? "mssql",
                 ConnectionStrings = connectionStrings,
                 ChangeTracking = new EnvironmentChangeTracking
                 {
@@ -207,6 +212,7 @@ public class EnvironmentConfigService : IDisposable
         _watcher?.Dispose();
         lock (_debounceTimers)
         {
+            _disposed = true;
             foreach (var t in _debounceTimers.Values) t.Dispose();
             _debounceTimers.Clear();
         }

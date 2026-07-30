@@ -9,18 +9,17 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Trignis.MicrosoftSQL.Helpers;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Helpers;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 /// <summary>Which target failed, and why. One entry per export destination.</summary>
 public sealed record ExportFailure(string Target, Exception Error);
 
 /// <summary>
-/// Sends a change payload to every configured destination: file, message queue and HTTP.
-/// Failures are returned rather than dead-lettered here so the caller decides what they mean:
-/// the polling loop records a dead letter, a replay reports the failure back to the operator.
+/// Broadcasts the change payload to all configured destinations.  
+/// Failures are returned to the caller for context-specific handling.
 /// </summary>
 public sealed class ExportService
 {

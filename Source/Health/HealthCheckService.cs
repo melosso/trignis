@@ -5,12 +5,12 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Data.SqlClient;
+using Trignis.Data;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class HealthCheckService
 {
@@ -109,11 +109,11 @@ public class HealthCheckService
 
         foreach (var dbName in uniqueDatabases)
         {
-            var connString = environments
-                .SelectMany(e => e.ConnectionStrings)
-                .FirstOrDefault(cs => cs.Key == dbName).Value;
+            var match = environments
+                .SelectMany(e => e.ConnectionStrings.Select(cs => (Env: e, cs.Key, cs.Value)))
+                .FirstOrDefault(x => x.Key == dbName);
 
-            if (string.IsNullOrEmpty(connString))
+            if (match.Env is null || string.IsNullOrEmpty(match.Value))
             {
                 failCount++;
                 continue;
@@ -123,8 +123,8 @@ public class HealthCheckService
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 cts.CancelAfter(TimeSpan.FromSeconds(5));
-                using var conn = new SqlConnection(connString);
-                await conn.OpenAsync(cts.Token).ConfigureAwait(false);
+                using var conn = await SqlDialect.Parse(match.Env.Provider)
+                    .OpenAsync(match.Value, cts.Token).ConfigureAwait(false);
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 cmd.CommandTimeout = 5;

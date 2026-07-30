@@ -2,14 +2,14 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
-using Microsoft.Data.SqlClient;
+using System.Data.Common;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 /// <summary>
 /// Shared retry policies for the source read and the export write.
@@ -38,7 +38,7 @@ public sealed class RetryPolicies
         return _cache.GetOrAdd($"{environment.Name}:{retryCount}:{retryDelay.TotalSeconds}", _ => Policy
             .Handle<HttpRequestException>()
             .Or<IOException>()
-            .Or<SqlException>()
+            .Or<DbException>()
             .WaitAndRetryAsync(retryCount, _ => retryDelay, (exception, timeSpan, attempt, _) =>
                 _logger.LogWarning($"[{environment.Name}] Retry {attempt} of {retryCount} after {timeSpan.TotalSeconds}s due to {exception.Message}")));
     }

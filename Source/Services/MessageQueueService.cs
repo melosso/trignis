@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 using RabbitMQ.Client;
 using Azure.Messaging.ServiceBus;
 using Azure.Messaging.EventHubs;
@@ -15,10 +15,10 @@ using Polly;
 using Polly.CircuitBreaker;
 using System.Collections.Concurrent;
 using System.Threading;
-using Trignis.MicrosoftSQL.Helpers;
+using Trignis.Helpers;
 using System.Collections.Generic;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class MessageQueueService : IAsyncDisposable
 {

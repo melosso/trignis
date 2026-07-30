@@ -1,15 +1,28 @@
 using Microsoft.Extensions.Configuration;
 using Serilog;
-using Microsoft.Data.SqlClient;
+using System.Data.Common;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Data;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Helpers;
+namespace Trignis.Helpers;
 
 public static class ConfigurationLogger
 {
+    /// <summary>
+    /// First of <paramref name="keys"/> present in the connection string, since the key naming
+    /// differs per provider (SQL Server "Server", PostgreSQL "Host", both accept "Data Source").
+    /// </summary>
+    private static string Lookup(DbConnectionStringBuilder builder, params string[] keys)
+    {
+        foreach (var key in keys)
+            if (builder.TryGetValue(key, out var value) && value is string s && !string.IsNullOrWhiteSpace(s))
+                return s;
+        return "N/A";
+    }
+
     public static void LogConfigurationStatus(IConfiguration configuration, IReadOnlyList<EnvironmentConfig> environments, GlobalSettings globalSettings)
     {
         var version = typeof(ConfigurationLogger).Assembly.GetName().Version?.ToString() ?? "0.0.0";
@@ -58,6 +71,7 @@ public static class ConfigurationLogger
             Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "Enabled" : "Disabled")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
             
             // Connection Strings
+            Log.Information($"│  {envVertical}  ├─ Provider: {(SqlDialect.TryParse(env.Provider, out var dialect) ? dialect.Name : $"{env.Provider} (unknown)")}");
             Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
             var connIndex = 0;
             foreach (var conn in env.ConnectionStrings)
@@ -68,8 +82,8 @@ public static class ConfigurationLogger
                 
                 try
                 {
-                    var builder = new SqlConnectionStringBuilder(conn.Value);
-                    Log.Information($"│  {envVertical}  │  {connPrefix} {conn.Key}: {builder.DataSource}/{builder.InitialCatalog ?? "N/A"}");
+                    var builder = new DbConnectionStringBuilder { ConnectionString = conn.Value };
+                    Log.Information($"│  {envVertical}  │  {connPrefix} {conn.Key}: {Lookup(builder, "server", "data source", "host")}/{Lookup(builder, "database", "initial catalog")}");
                 }
                 catch (Exception ex)
                 {

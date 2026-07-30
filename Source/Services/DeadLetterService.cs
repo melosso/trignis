@@ -9,9 +9,9 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Trignis.MicrosoftSQL.Models;
+using Trignis.Models;
 
-namespace Trignis.MicrosoftSQL.Services;
+namespace Trignis.Services;
 
 public class DeadLetterService
 {
@@ -62,7 +62,29 @@ public class DeadLetterService
             _logger.LogInformation("Added EnvironmentName to the dead letter table; existing rows cannot be replayed");
         }
 
+        // Automatic replay state. Existing rows start at zero attempts and are due immediately,
+        // so upgrading picks up whatever is already queued.
+        await AddColumnIfMissingAsync(conn, "Attempts", "INTEGER NOT NULL DEFAULT 0", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(conn, "NextAttempt", "DATETIME", cancellationToken).ConfigureAwait(false);
+
+        var index = conn.CreateCommand();
+        index.CommandText = "CREATE INDEX IF NOT EXISTS idx_next_attempt ON DeadLetters(NextAttempt)";
+        await index.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
         _logger.LogDebug("Dead letter database initialized");
+    }
+
+    private static async Task AddColumnIfMissingAsync(SqliteConnection conn, string name, string definition, CancellationToken cancellationToken)
+    {
+        var exists = conn.CreateCommand();
+        exists.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DeadLetters') WHERE name = @name";
+        exists.Parameters.AddWithValue("@name", name);
+        if (Convert.ToInt64(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) > 0)
+            return;
+
+        var add = conn.CreateCommand();
+        add.CommandText = $"ALTER TABLE DeadLetters ADD COLUMN {name} {definition}";
+        await add.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default)
@@ -139,7 +161,7 @@ public class DeadLetterService
     }
 
     /// <summary>Everything replay needs. Null EnvironmentName means the row predates the column.</summary>
-    public sealed record DeadLetterRecord(long Id, string? EnvironmentName, string ObjectName, string DatabaseName, string Data);
+    public sealed record DeadLetterRecord(long Id, string? EnvironmentName, string ObjectName, string DatabaseName, string Data, int Attempts);
 
     public async Task<DeadLetterRecord?> GetAsync(long id, CancellationToken cancellationToken = default)
     {
@@ -147,13 +169,19 @@ public class DeadLetterService
         await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         var command = conn.CreateCommand();
-        command.CommandText = "SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data FROM DeadLetters WHERE Id = @id";
+        command.CommandText = "SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts FROM DeadLetters WHERE Id = @id";
         command.Parameters.AddWithValue("@id", id);
 
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
 
+        return ReadRecord(reader);
+    }
+
+    /// <summary>Expects the column order of the SELECT in <see cref="GetAsync"/>.</summary>
+    private static DeadLetterRecord ReadRecord(SqliteDataReader reader)
+    {
         var environmentName = reader.IsDBNull(1) ? null : reader.GetString(1);
         var trackingObjectName = reader.GetString(2);
 
@@ -163,7 +191,69 @@ public class DeadLetterService
             ? trackingObjectName[(environmentName.Length + 1)..]
             : trackingObjectName;
 
-        return new DeadLetterRecord(reader.GetInt64(0), environmentName, objectName, reader.GetString(3), reader.GetString(4));
+        return new DeadLetterRecord(reader.GetInt64(0), environmentName, objectName, reader.GetString(3), reader.GetString(4), reader.GetInt32(5));
+    }
+
+    /// <summary>
+    /// Rows whose backoff has elapsed and that have attempts left, oldest first.
+    /// A row that exhausts <paramref name="maxAttempts"/> stops being returned and waits
+    /// for a human to replay or discard it from the dashboard.
+    /// </summary>
+    public async Task<IReadOnlyList<DeadLetterRecord>> GetDueForReplayAsync(int maxAttempts, int limit, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = @"
+            SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts
+            FROM DeadLetters
+            WHERE Attempts < @maxAttempts
+              AND (NextAttempt IS NULL OR NextAttempt <= @now)
+              AND EnvironmentName IS NOT NULL
+            ORDER BY Timestamp
+            LIMIT @limit
+        ";
+        command.Parameters.AddWithValue("@maxAttempts", maxAttempts);
+        command.Parameters.AddWithValue("@now", DateTime.UtcNow);
+        command.Parameters.AddWithValue("@limit", limit);
+
+        var records = new List<DeadLetterRecord>();
+        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            records.Add(ReadRecord(reader));
+
+        return records;
+    }
+
+    /// <summary>Records a failed replay: one more attempt, a later due time, and the newest error.</summary>
+    public async Task RecordReplayFailureAsync(long id, string error, DateTime nextAttempt, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = @"
+            UPDATE DeadLetters
+            SET Attempts = Attempts + 1, NextAttempt = @nextAttempt, ErrorMessage = @error
+            WHERE Id = @id
+        ";
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@error", error);
+        command.Parameters.AddWithValue("@nextAttempt", nextAttempt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Puts a row back in the automatic rotation, used when a manual replay fails.</summary>
+    public async Task ResetAttemptsAsync(long id, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = "UPDATE DeadLetters SET Attempts = 0, NextAttempt = NULL WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", id);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<bool> DeleteAsync(long id, CancellationToken cancellationToken = default)

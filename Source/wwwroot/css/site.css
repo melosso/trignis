@@ -426,7 +426,16 @@ select:focus { border-color: hsl(var(--primary)); }
     display: none;
 }
 
-.drawer-backdrop.open { display: block; }
+.drawer-backdrop.open {
+    display: block;
+    /* Pushes the page behind out of focus so a destructive dialog reads as modal. */
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .drawer-backdrop.open { backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
 
 .drawer {
     position: fixed;
@@ -930,7 +939,7 @@ a { color: inherit; text-decoration: none; }
 .muted { color: hsl(var(--muted-foreground)); }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-input[type="text"], input[type="search"] {
+input[type="text"], input[type="search"], input[type="password"] {
     background: hsl(var(--background));
     border: 1px solid hsl(var(--border));
     color: hsl(var(--foreground));
@@ -943,8 +952,30 @@ input[type="text"], input[type="search"] {
     transition: border-color 0.15s;
 }
 
-input[type="text"]:focus, input[type="search"]:focus {
+input[type="text"]:focus, input[type="search"]:focus, input[type="password"]:focus {
     border-color: hsl(var(--primary) / 0.6);
+}
+
+/* The login box styles its own password field and wins on specificity, so it is unaffected. */
+input[type="password"] {
+    letter-spacing: 0.08em;
+    font-family: var(--mono-font);
+}
+
+input[type="password"]:placeholder-shown {
+    letter-spacing: normal;
+    font-family: inherit;
+}
+
+kbd {
+    font-family: var(--mono-font);
+    font-size: 0.9em;
+    padding: 0.05rem 0.3rem;
+    border: 1px solid hsl(var(--border));
+    border-bottom-width: 2px;
+    border-radius: 0.25rem;
+    background: hsl(var(--muted));
+    color: hsl(var(--foreground));
 }
 
 input::placeholder { color: hsl(var(--muted-foreground)); }
