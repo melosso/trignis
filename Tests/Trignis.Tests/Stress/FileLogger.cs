@@ -4,7 +4,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Trignis.Tests.Stress;
 
-// TEMPORARY debug sink for the stress harness, enabled by TRIGNIS_STRESS_LOG
 internal sealed class FileLogger<T> : ILogger<T>
 {
     private static readonly object Gate = new();

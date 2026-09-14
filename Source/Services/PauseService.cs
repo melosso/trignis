@@ -76,7 +76,7 @@ public sealed class PauseService
         await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         var command = conn.CreateCommand();
-        command.CommandText = "SELECT Scope, Reason, PausedBy, PausedAt FROM Pauses ORDER BY PausedAt DESC";
+        command.CommandText = "SELECT Scope, Reason, PausedBy, PausedAt FROM Pauses ORDER BY PausedAt DESC, rowid DESC";
 
         var records = new List<PauseRecord>();
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

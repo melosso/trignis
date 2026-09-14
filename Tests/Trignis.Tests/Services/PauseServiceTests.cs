@@ -39,7 +39,7 @@ public sealed class PauseServiceTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         SqliteConnection.ClearAllPools();
-        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
+        Directory.Delete(_tempDir, recursive: true);
         return Task.CompletedTask;
     }
 
@@ -171,7 +171,6 @@ public sealed class PauseServiceTests : IAsyncLifetime
     public async Task ListAsync_returns_the_newest_pause_first()
     {
         await _svc.PauseAsync(PauseService.EnvironmentScope("first"), null, null);
-        await Task.Delay(1100); // CURRENT_TIMESTAMP has one-second resolution
         await _svc.PauseAsync(PauseService.EnvironmentScope("second"), null, null);
 
         var records = await _svc.ListAsync();

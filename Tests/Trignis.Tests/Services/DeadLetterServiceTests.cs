@@ -48,7 +48,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         SqliteConnection.ClearAllPools(); // release pooled handles before deleting the file
         if (_savedWorkingDir != null)
             Environment.CurrentDirectory = _savedWorkingDir;
-        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
+        Directory.Delete(_tempDir, recursive: true);
         return Task.CompletedTask;
     }
 
