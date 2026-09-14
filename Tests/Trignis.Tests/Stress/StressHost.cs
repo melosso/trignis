@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -17,7 +18,6 @@ using Trignis.Services;
 
 namespace Trignis.Tests.Stress;
 
-// TEMPORARY harness for the concurrency stress tests
 // Runs a real ChangeTrackingBackgroundService over a throwaway working directory
 internal sealed class StressHost : IAsyncDisposable
 {
@@ -100,27 +100,27 @@ internal sealed class StressHost : IAsyncDisposable
         _execute = Service.ExecuteTask;
     }
 
-    // Reads the private lifecycle dictionary so a test can assert one live task per environment
-    public IReadOnlyDictionary<string, Task> LiveTasks()
+    // Snapshots the private lifecycle dictionary under the service's own gate so a reload in flight is never observed half-applied
+    public async Task<IReadOnlyDictionary<string, Task>> LiveTasksAsync()
     {
-        var field = typeof(ChangeTrackingBackgroundService)
-            .GetField("_envTasks", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var raw = (IDictionary)field.GetValue(Service)!;
-
-        var result = new Dictionary<string, Task>();
-        foreach (DictionaryEntry entry in raw)
+        var gate = (SemaphoreSlim)Field("_lifecycleGate").GetValue(Service)!;
+        await gate.WaitAsync();
+        try
         {
-            var value = entry.Value!;
-            var type = value.GetType();
-
-            // Record exposes a Task property, the older ValueTuple exposes an Item2 field
-            var task = (Task)(type.GetProperty("Task")?.GetValue(value)
-                              ?? type.GetField("Item2")!.GetValue(value)!);
-
-            result[(string)entry.Key] = task;
+            var raw = (IDictionary)Field("_envTasks").GetValue(Service)!;
+            var result = new Dictionary<string, Task>();
+            foreach (DictionaryEntry entry in raw)
+                result[(string)entry.Key] = (Task)entry.Value!.GetType().GetProperty("Task")!.GetValue(entry.Value)!;
+            return result;
         }
-        return result;
+        finally
+        {
+            gate.Release();
+        }
     }
+
+    private static FieldInfo Field(string name) =>
+        typeof(ChangeTrackingBackgroundService).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!;
 
     // Raises the hot-reload event the watcher would raise, without waiting on the 500ms debounce
     public void RaiseConfigurationChanged(EnvironmentChangeEvent e)
@@ -167,21 +167,23 @@ internal sealed class StressHost : IAsyncDisposable
         File.WriteAllText(EnvFile(name), json);
     }
 
+    public async Task StopAsync()
+    {
+        await _stop.CancelAsync();
+        if (_execute is not null) await _execute.WaitAsync(TimeSpan.FromSeconds(30));
+    }
+
     public async ValueTask DisposeAsync()
     {
-        try
-        {
-            await _stop.CancelAsync();
-            if (_execute is not null) await _execute.WaitAsync(TimeSpan.FromSeconds(30));
-        }
-        catch { /* shutdown is best effort in a stress harness */ }
+        await StopAsync();
 
         ConfigService.Dispose();
         Service.Dispose();
         _stop.Dispose();
 
         Environment.CurrentDirectory = _originalCwd;
-        try { Directory.Delete(Root, recursive: true); } catch { /* best effort */ }
+        SqliteConnection.ClearAllPools();
+        Directory.Delete(Root, recursive: true);
     }
 
     private sealed class StubHttpClientFactory : IHttpClientFactory

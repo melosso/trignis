@@ -27,7 +27,7 @@ public sealed class EncryptionServiceTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); } catch { /* best-effort */ }
+        Directory.Delete(_tempDir, recursive: true);
     }
 
     // IsEncrypted
@@ -165,7 +165,7 @@ public sealed class EncryptionServiceTests : IDisposable
         }
         finally
         {
-            try { Directory.Delete(tempDir2, recursive: true); } catch { /* best-effort */ }
+            Directory.Delete(tempDir2, recursive: true);
         }
     }
 }

@@ -1,135 +1,109 @@
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
+using Trignis.Services;
 using Xunit;
 
 namespace Trignis.Tests.Stress;
 
-// TEMPORARY stress tests for the environment task lifecycle
-// No container needed: environments carry no tracking objects so the poller only idles
 [Collection("SqliteTests")]
 public sealed class LifecycleStressTests
 {
     private const int EnvCount = 4;
     private const string Unused = "Server=127.0.0.1,1;Database=none;User ID=sa;Password=none;Encrypt=False;Connect Timeout=1";
+    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
 
     [Fact]
     public async Task ReloadStorm_LeavesExactlyOneLiveTaskPerEnvironment()
     {
-        await using var host = new StressHost();
-        for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
+        await using var host = await StartAsync();
 
-        await host.StartAsync();
-        await WaitUntil(() => host.LiveTasks().Count == EnvCount, TimeSpan.FromSeconds(30));
-
-        // Rewrite every file at once so all debounce timers fire together
         for (var round = 0; round < 12; round++)
         {
-            for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
-            await Task.Delay(600);
+            var before = await host.LiveTasksAsync();
+            WriteAll(host);
+            await WaitUntil(async () => AllReplaced(await host.LiveTasksAsync(), before));
         }
-
-        await Task.Delay(2000);
-
-        var live = host.LiveTasks();
-        Assert.Equal(EnvCount, live.Count);
-        Assert.All(live.Values, task => Assert.False(task.IsCompleted, "a registered environment task had already finished"));
     }
 
     [Fact]
     public async Task ConcurrentReloadsOfOneEnvironment_LeaveOneLiveTask()
     {
-        await using var host = new StressHost();
-        for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
+        await using var host = await StartAsync();
+        var before = await host.LiveTasksAsync();
+        var e0 = host.Config("e0");
 
-        await host.StartAsync();
-        await WaitUntil(() => host.LiveTasks().Count == EnvCount, TimeSpan.FromSeconds(30));
+        await Task.WhenAll(Enumerable.Range(0, 24).Select(_ => Task.Run(() =>
+            host.RaiseConfigurationChanged(new EnvironmentChangeEvent { Updated = [e0] }))));
 
-        // A watcher burst delivers these back to back; nothing spaces them out
-        var reloads = Enumerable.Range(0, 24).Select(_ => Task.Run(() =>
-            host.RaiseConfigurationChanged(new Trignis.Services.EnvironmentChangeEvent
-            {
-                Updated = [host.Config("e0")]
-            })));
-
-        await Task.WhenAll(reloads);
-        await Task.Delay(8000);
-
-        var live = host.LiveTasks();
-        Assert.Equal(EnvCount, live.Count);
-        Assert.All(live.Values, task => Assert.False(task.IsCompleted));
+        await WaitUntil(async () =>
+        {
+            var live = await host.LiveTasksAsync();
+            return AllLive(live) && !ReferenceEquals(live["e0"], before["e0"]);
+        });
     }
 
     [Fact]
     public async Task DeleteAndRecreateStorm_NeverLeavesAStaleEntry()
     {
-        await using var host = new StressHost();
-        for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
-
-        await host.StartAsync();
-        await WaitUntil(() => host.LiveTasks().Count == EnvCount, TimeSpan.FromSeconds(30));
+        await using var host = await StartAsync();
 
         for (var round = 0; round < 8; round++)
         {
             File.Delete(host.EnvFile("e0"));
-            await Task.Delay(150);
+            await WaitUntil(async () => !(await host.LiveTasksAsync()).ContainsKey("e0"));
+
             host.WriteEnv("e0", Unused, storedProcedure: null);
-            await Task.Delay(700);
+            await WaitUntil(async () => AllLive(await host.LiveTasksAsync()));
         }
-
-        await Task.Delay(2000);
-
-        var live = host.LiveTasks();
-        Assert.Equal(EnvCount, live.Count);
-        Assert.Contains("e0", live.Keys);
-        Assert.All(live.Values, task => Assert.False(task.IsCompleted));
     }
 
     [Fact]
     public async Task Shutdown_DuringReloadStorm_CompletesAndDrainsEveryTask()
     {
-        var host = new StressHost();
-        for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
+        var host = await StartAsync();
+        var all = Enumerable.Range(0, EnvCount).Select(i => host.Config($"e{i}")).ToList();
 
-        await host.StartAsync();
-        await WaitUntil(() => host.LiveTasks().Count == EnvCount, TimeSpan.FromSeconds(30));
+        await Task.WhenAll(Enumerable.Range(0, 200).Select(_ => Task.Run(() =>
+            host.RaiseConfigurationChanged(new EnvironmentChangeEvent { Updated = all }))));
 
-        // Keep rewriting while the host is torn down underneath the reload path
-        var churn = Task.Run(async () =>
-        {
-            for (var round = 0; round < 20; round++)
-            {
-                for (var i = 0; i < EnvCount; i++)
-                {
-                    try { host.WriteEnv($"e{i}", Unused, storedProcedure: null); }
-                    catch (DirectoryNotFoundException) { return; }
-                }
-                await Task.Delay(120);
-            }
-        });
+        await host.StopAsync();
 
-        await Task.Delay(700);
-
-        var sw = Stopwatch.StartNew();
+        Assert.Empty(await host.LiveTasksAsync());
         await host.DisposeAsync();
-        sw.Stop();
-
-        await churn;
-
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(30), $"shutdown took {sw.Elapsed}");
-        Assert.Empty(host.LiveTasks());
     }
 
-    private static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)
+    private static async Task<StressHost> StartAsync()
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var host = new StressHost();
+        WriteAll(host);
+        await host.StartAsync();
+        await WaitUntil(async () => AllLive(await host.LiveTasksAsync()));
+        return host;
+    }
+
+    private static void WriteAll(StressHost host)
+    {
+        for (var i = 0; i < EnvCount; i++) host.WriteEnv($"e{i}", Unused, storedProcedure: null);
+    }
+
+    private static bool AllLive(IReadOnlyDictionary<string, Task> live) =>
+        live.Count == EnvCount && live.Values.All(task => !task.IsCompleted);
+
+    private static bool AllReplaced(IReadOnlyDictionary<string, Task> live, IReadOnlyDictionary<string, Task> before) =>
+        AllLive(live) && live.All(kv => !ReferenceEquals(kv.Value, before[kv.Key]));
+
+    private static async Task WaitUntil(Func<Task<bool>> condition)
+    {
+        using var timeout = new CancellationTokenSource(Deadline);
+        using var tick = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
+        while (!await condition())
         {
-            if (condition()) return;
-            await Task.Delay(100);
+            if (timeout.IsCancellationRequested) Assert.Fail($"condition not met within {Deadline}");
+            await tick.WaitForNextTickAsync();
         }
-        Assert.Fail($"condition not met within {timeout}");
     }
 }
