@@ -27,6 +27,24 @@ jobs:
           10.0.x
     - name: Install dotnet-project-licenses tool
       run: dotnet tool install -g dotnet-project-licenses
+    - name: Write release notes
+      run: |
+        TAG="${{ github.event.inputs.tag_name }}"
+        PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        {
+          echo "### Changes in \`$TAG\`:"
+          echo
+          echo "**Fixes**"
+          echo
+          git log --no-merges --format='* [x] %s' ${PREV:+$PREV..}HEAD
+          echo
+          echo "As usual, make sure to check out our [documentation](https://melosso.github.io/trignis/) first, it'll guide you through the basics of the application. Make sure to pin your container version to the right tag to prevent unwanted updates."
+          if [ -n "$PREV" ]; then
+            echo
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREV...$TAG"
+          fi
+        } > release-notes.md
+        cat release-notes.md
     - name: Create and push tag
       run: |
         git config user.name "github-actions[bot]"
@@ -228,7 +246,7 @@ jobs:
         name: ${{ github.event.inputs.tag_name }}
         draft: false
         prerelease: false
-        generate_release_notes: true
+        body_path: release-notes.md
         files: |
           ${{ github.event.inputs.tag_name }}-Deployment-Windows.zip
           ${{ github.event.inputs.tag_name }}-Deployment-Linux.zip
