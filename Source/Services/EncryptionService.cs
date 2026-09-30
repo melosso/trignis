@@ -16,10 +16,10 @@ namespace Trignis.Services
         private const string PrivateKeyFileName = "recovery.baklz4";
         private readonly string _certsPath;
         private string _currentPublicKeyPem = string.Empty;
-        
+
         // Fallback key - only used if no environment variable is set
         private const string _fallbackKey = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
-        
+
         private readonly string _encryptionKey;
 
         public EncryptionService(string rootPath)
@@ -39,7 +39,7 @@ namespace Trignis.Services
 
             // Load encryption key from environment variable or .env file
             _encryptionKey = LoadEncryptionKey();
-            
+
             InitializeKeyPair();
         }
 
@@ -66,7 +66,7 @@ namespace Trignis.Services
             // Priority 3: Fallback to hardcoded key (with warning)
             Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +
                         "For production, set TRIGNIS_ENCRYPTION_KEY environment variable or create .env file.");
-            
+
             return _fallbackKey;
         }
 

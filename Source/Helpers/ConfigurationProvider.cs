@@ -19,69 +19,69 @@ namespace Trignis.Helpers
             _encryptionService = encryptionService;
         }
 
-    public override void Load()
-    {
-        var fileProvider = Source.FileProvider ?? new PhysicalFileProvider(Directory.GetCurrentDirectory());
-        var path = Source.Path ?? throw new InvalidOperationException("Path is required");
-        var fileInfo = fileProvider.GetFileInfo(path);
-        if (!fileInfo.Exists)
+        public override void Load()
         {
-            if (!Source.Optional)
+            var fileProvider = Source.FileProvider ?? new PhysicalFileProvider(Directory.GetCurrentDirectory());
+            var path = Source.Path ?? throw new InvalidOperationException("Path is required");
+            var fileInfo = fileProvider.GetFileInfo(path);
+            if (!fileInfo.Exists)
             {
-                throw new FileNotFoundException($"The configuration file '{path}' was not found and is not optional.");
-            }
-            return;
-        }
-
-        using var stream = fileInfo.CreateReadStream();
-        using var reader = new StreamReader(stream);
-        var content = reader.ReadToEnd();
-
-        // Parse JSON
-        var jsonNode = JsonNode.Parse(content);
-        if (jsonNode is JsonObject jsonObject)
-        {
-            // Decrypt ConnectionStrings
-            DecryptJsonSection(jsonObject, "ConnectionStrings");
-            
-            if (jsonObject.TryGetPropertyValue("ChangeTracking", out var changeTrackingNode) && changeTrackingNode is JsonObject ctObject)
-            {
-                // Decrypt legacy ApiAuth
-                DecryptJsonSection(ctObject, "ApiAuth");
-                
-                // Decrypt ApiEndpoints
-                if (ctObject.TryGetPropertyValue("ApiEndpoints", out var ApiEndpointsNode) && ApiEndpointsNode is JsonArray aeArray)
+                if (!Source.Optional)
                 {
-                    foreach (var endpoint in aeArray)
-                    {
-                        if (endpoint is JsonObject epObj)
-                        {
-                            // Decrypt Auth section
-                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
-                            {
-                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps,
-                                    (key, value) => DecryptIfEncrypted($"ApiEndpoints.Auth.{key}", value));
-                            }
+                    throw new FileNotFoundException($"The configuration file '{path}' was not found and is not optional.");
+                }
+                return;
+            }
 
-                            // Decrypt MessageQueue section
-                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
+            using var stream = fileInfo.CreateReadStream();
+            using var reader = new StreamReader(stream);
+            var content = reader.ReadToEnd();
+
+            // Parse JSON
+            var jsonNode = JsonNode.Parse(content);
+            if (jsonNode is JsonObject jsonObject)
+            {
+                // Decrypt ConnectionStrings
+                DecryptJsonSection(jsonObject, "ConnectionStrings");
+
+                if (jsonObject.TryGetPropertyValue("ChangeTracking", out var changeTrackingNode) && changeTrackingNode is JsonObject ctObject)
+                {
+                    // Decrypt legacy ApiAuth
+                    DecryptJsonSection(ctObject, "ApiAuth");
+
+                    // Decrypt ApiEndpoints
+                    if (ctObject.TryGetPropertyValue("ApiEndpoints", out var ApiEndpointsNode) && ApiEndpointsNode is JsonArray aeArray)
+                    {
+                        foreach (var endpoint in aeArray)
+                        {
+                            if (endpoint is JsonObject epObj)
                             {
-                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps,
-                                    (key, value) => DecryptIfEncrypted($"ApiEndpoints.MessageQueue.{key}", value));
+                                // Decrypt Auth section
+                                if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                                {
+                                    JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps,
+                                        (key, value) => DecryptIfEncrypted($"ApiEndpoints.Auth.{key}", value));
+                                }
+
+                                // Decrypt MessageQueue section
+                                if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
+                                {
+                                    JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps,
+                                        (key, value) => DecryptIfEncrypted($"ApiEndpoints.MessageQueue.{key}", value));
+                                }
                             }
                         }
                     }
                 }
+
+                // Serialize back
+                content = jsonObject.ToJsonString();
             }
 
-            // Serialize back
-            content = jsonObject.ToJsonString();
+            // Load from modified content
+            using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
+            Load(memoryStream);
         }
-
-        // Load from modified content
-        using var memoryStream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(content));
-        Load(memoryStream);
-    }
 
         /// <summary>
         /// Returns the decrypted value, or null when it was not encrypted to begin with.

@@ -157,8 +157,8 @@ public static class ConfigurationValidator
                 }
 
                 // Validate InitialSyncMode
-                if (!string.IsNullOrEmpty(obj.InitialSyncMode) && 
-                    !obj.InitialSyncMode.Equals("Full", StringComparison.OrdinalIgnoreCase) && 
+                if (!string.IsNullOrEmpty(obj.InitialSyncMode) &&
+                    !obj.InitialSyncMode.Equals("Full", StringComparison.OrdinalIgnoreCase) &&
                     !obj.InitialSyncMode.Equals("Incremental", StringComparison.OrdinalIgnoreCase))
                 {
                     warnings.Add($"Environment '{envName}': Tracking object '{obj.Name}' has invalid InitialSyncMode '{obj.InitialSyncMode}'. Valid values: 'Full', 'Incremental'");

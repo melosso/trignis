@@ -48,7 +48,7 @@ public class MessageQueueService : IAsyncDisposable
         var messageBody = JsonSerializer.Serialize(data);
         var messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
 
-        _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)", 
+        _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)",
             endpoint.MessageQueueType, correlationId, messageSizeBytes);
 
         // Get or create circuit breaker for this endpoint
@@ -97,12 +97,12 @@ public class MessageQueueService : IAsyncDisposable
                 }
             }, cancellationToken);
 
-            _logger.LogDebug("Message sent successfully (CorrelationId: {CorrelationId}, Queue: {QueueType})", 
+            _logger.LogDebug("Message sent successfully (CorrelationId: {CorrelationId}, Queue: {QueueType})",
                 correlationId, endpoint.MessageQueueType);
         }
         catch (BrokenCircuitException ex)
         {
-            _logger.LogError(ex, "Circuit breaker open for endpoint '{EndpointKey}' (CorrelationId: {CorrelationId})", 
+            _logger.LogError(ex, "Circuit breaker open for endpoint '{EndpointKey}' (CorrelationId: {CorrelationId})",
                 endpoint.Key, correlationId);
             throw new InvalidOperationException($"Message queue service is temporarily unavailable: {ex.Message}", ex);
         }
@@ -118,7 +118,7 @@ public class MessageQueueService : IAsyncDisposable
                     durationOfBreak: TimeSpan.FromMinutes(1),
                     onBreak: (exception, duration) =>
                     {
-                        _logger.LogWarning("Circuit breaker opened for '{Key}' for {Duration}s due to: {Error}", 
+                        _logger.LogWarning("Circuit breaker opened for '{Key}' for {Duration}s due to: {Error}",
                             key, duration.TotalSeconds, exception.Message);
                     },
                     onReset: () =>
@@ -199,7 +199,7 @@ public class MessageQueueService : IAsyncDisposable
                     body: body,
                     cancellationToken: cancellationToken);
 
-                _logger.LogDebug("Published to RabbitMQ exchange '{Exchange}' with key '{Key}' (CorrelationId: {CorrelationId})", 
+                _logger.LogDebug("Published to RabbitMQ exchange '{Exchange}' with key '{Key}' (CorrelationId: {CorrelationId})",
                     config.Exchange, config.RoutingKey ?? "", correlationId);
             }
             else if (!string.IsNullOrEmpty(config.QueueName))
@@ -220,7 +220,7 @@ public class MessageQueueService : IAsyncDisposable
                     body: body,
                     cancellationToken: cancellationToken);
 
-                _logger.LogDebug("Published to RabbitMQ queue '{Queue}' (CorrelationId: {CorrelationId})", 
+                _logger.LogDebug("Published to RabbitMQ queue '{Queue}' (CorrelationId: {CorrelationId})",
                     config.QueueName, correlationId);
             }
             else
@@ -235,9 +235,9 @@ public class MessageQueueService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send to RabbitMQ (Host: {Host}, CorrelationId: {CorrelationId})", 
+            _logger.LogError(ex, "Failed to send to RabbitMQ (Host: {Host}, CorrelationId: {CorrelationId})",
                 config.HostName, correlationId);
-            
+
             _rabbitConnections.TryRemove(connectionKey, out _);
             throw new InvalidOperationException($"RabbitMQ publish failed: {ex.Message}", ex);
         }
@@ -353,7 +353,7 @@ public class MessageQueueService : IAsyncDisposable
             }
 
             sender = client.CreateSender(queueOrTopic);
-            
+
             var busMessage = new ServiceBusMessage(message)
             {
                 ContentType = isCompressed ? "application/json+gzip" : "application/json",
@@ -490,7 +490,7 @@ public class MessageQueueService : IAsyncDisposable
             };
 
             var response = await client.SendMessageAsync(request, cancellationToken);
-            
+
             if ((int)response.HttpStatusCode < 200 || (int)response.HttpStatusCode >= 300)
             {
                 throw new InvalidOperationException($"AWS SQS returned status code: {response.HttpStatusCode}");
@@ -511,7 +511,7 @@ public class MessageQueueService : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to send to AWS SQS (Queue: {QueueUrl}, CorrelationId: {CorrelationId})", 
+            _logger.LogError(ex, "Failed to send to AWS SQS (Queue: {QueueUrl}, CorrelationId: {CorrelationId})",
                 config.QueueUrl, correlationId);
             throw new InvalidOperationException($"AWS SQS publish failed: {ex.Message}", ex);
         }

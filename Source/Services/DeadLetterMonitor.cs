@@ -49,7 +49,7 @@ public class DeadLetterQueueMonitor : BackgroundService
             return;
         }
 
-        _logger.LogDebug("Dead letter queue monitor started (Threshold: {Threshold}, Interval: {Interval}min)", 
+        _logger.LogDebug("Dead letter queue monitor started (Threshold: {Threshold}, Interval: {Interval}min)",
             _thresholdCount, _checkIntervalMinutes);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -107,7 +107,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 GROUP BY TrackingObjectName 
                 ORDER BY Count DESC 
                 LIMIT 5";
-            
+
             var breakdown = new System.Collections.Generic.List<(string ObjectName, long Count)>();
             using (var reader = await breakdownCommand.ExecuteReaderAsync())
             {
@@ -144,7 +144,7 @@ public class DeadLetterQueueMonitor : BackgroundService
             }
             else if (totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
             {
-                _logger.LogInformation("Dead letter queue approaching threshold: {Total}/{Threshold} ({Percentage:P0})", 
+                _logger.LogInformation("Dead letter queue approaching threshold: {Total}/{Threshold} ({Percentage:P0})",
                     totalCount, _thresholdCount, (double)totalCount / _thresholdCount);
             }
         }

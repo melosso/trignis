@@ -54,22 +54,22 @@ public static class ConfigurationLogger
             var isLastEnv = envIndex == environments.Count - 1;
             var envPrefix = isLastEnv ? "└─" : "├─";
             var envVertical = isLastEnv ? " " : "│";
-            
+
             var totalObjects = env.ChangeTracking.TrackingObjects.Length;
             var totalEndpoints = env.ChangeTracking.ApiEndpoints.Length;
-            
+
             Log.Information($"│  {envPrefix} Environment: [{env.Name}] ({totalObjects} objects, {totalEndpoints} endpoints)");
-            
+
             // Environment-specific settings
             var pollingInterval = env.ChangeTracking.PollingIntervalSeconds ?? globalSettings.PollingIntervalSeconds;
             var exportToFile = env.ChangeTracking.ExportToFile ?? globalSettings.ExportToFile;
             var exportToApi = env.ChangeTracking.ExportToApi ?? globalSettings.ExportToApi;
-            
+
             Log.Information($"│  {envVertical}  ├─ Settings:");
             Log.Information($"│  {envVertical}  │  ├─ Polling Interval: {pollingInterval}s {(env.ChangeTracking.PollingIntervalSeconds.HasValue ? "*" : "")}");
             Log.Information($"│  {envVertical}  │  ├─ Export to File: {(exportToFile ? "Enabled" : "Disabled")} {(env.ChangeTracking.ExportToFile.HasValue ? "*" : "")}");
             Log.Information($"│  {envVertical}  │  └─ Export to API: {(exportToApi ? "Enabled" : "Disabled")} {(env.ChangeTracking.ExportToApi.HasValue ? "*" : "")}");
-            
+
             // Connection Strings
             Log.Information($"│  {envVertical}  ├─ Provider: {(SqlDialect.TryParse(env.Provider, out var dialect) ? dialect.Name : $"{env.Provider} (unknown)")}");
             Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
@@ -79,7 +79,7 @@ public static class ConfigurationLogger
                 connIndex++;
                 var isLastConn = connIndex == env.ConnectionStrings.Count;
                 var connPrefix = isLastConn ? "└─" : "├─";
-                
+
                 try
                 {
                     var builder = new DbConnectionStringBuilder { ConnectionString = conn.Value };
@@ -90,7 +90,7 @@ public static class ConfigurationLogger
                     Log.Error($"│  {envVertical}  │  {connPrefix} {conn.Key}: Invalid connection - {ex.Message}");
                 }
             }
-            
+
             // Tracking Objects
             Log.Information($"│  {envVertical}  ├─ Tracking Objects: {totalObjects}");
             for (int i = 0; i < env.ChangeTracking.TrackingObjects.Length; i++)
@@ -98,7 +98,7 @@ public static class ConfigurationLogger
                 var obj = env.ChangeTracking.TrackingObjects[i];
                 var isLastObj = i == env.ChangeTracking.TrackingObjects.Length - 1;
                 var objPrefix = isLastObj ? "└─" : "├─";
-                
+
                 if (env.ConnectionStrings.ContainsKey(obj.Database))
                 {
                     var syncMode = string.Equals(obj.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase) ? "Full" : "Incremental";
@@ -109,7 +109,7 @@ public static class ConfigurationLogger
                     Log.Warning($"│  {envVertical}  │  {objPrefix} ✖ '{obj.Name}' ({obj.TableName}): Database '{obj.Database}' connection missing");
                 }
             }
-            
+
             // API Endpoints
             Log.Information($"│  {envVertical}  └─ API Endpoints: {totalEndpoints}");
             for (int i = 0; i < env.ChangeTracking.ApiEndpoints.Length; i++)
@@ -118,9 +118,9 @@ public static class ConfigurationLogger
                 var isLastEndpoint = i == env.ChangeTracking.ApiEndpoints.Length - 1;
                 var epPrefix = isLastEndpoint ? "└─" : "├─";
                 var epVertical = isLastEndpoint ? " " : "│";
-                
-                Log.Information($"│  {envVertical}     {epPrefix} Endpoint '{endpoint.Key ?? $"#{i+1}"}'");
-                
+
+                Log.Information($"│  {envVertical}     {epPrefix} Endpoint '{endpoint.Key ?? $"#{i + 1}"}'");
+
                 // Message Queue endpoint
                 if (!string.IsNullOrEmpty(endpoint.MessageQueueType))
                 {
@@ -156,7 +156,7 @@ public static class ConfigurationLogger
         Log.Information($"├─ Health Endpoint: {(healthEnabled ? $"http://{healthHost}:{healthPort}" : "Disabled")}");
         Log.Information($"└─ Web UI: {(webHostEnabled ? $"http://{healthHost}:{healthPort}/ui" : "Disabled")}");
 
-        
+
         Log.Information("");
     }
 }

@@ -76,18 +76,18 @@ public class ChangeTrackingBackgroundService : BackgroundService
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
         _logger.LogDebug("Initializing databases...");
-        
+
         try
         {
             // Initialize state database
             await InitializeStateDbAsync();
-            
+
             // Initialize dead letter database
             await _deadLetterService.InitializeAsync();
 
             // Pause state lives in the same file as the watermarks
             await _pauseService.InitializeAsync();
-            
+
             _logger.LogDebug("Databases initialized successfully");
         }
         catch (Exception ex)
@@ -95,7 +95,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
             _logger.LogCritical(ex, "Failed to initialize databases during startup");
             throw;
         }
-        
+
         await base.StartAsync(cancellationToken);
     }
 

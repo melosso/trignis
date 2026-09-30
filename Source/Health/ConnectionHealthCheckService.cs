@@ -205,12 +205,12 @@ public class ConnectionHealthCheckService : BackgroundService
 
             connection = await factory.CreateConnectionAsync();
             var isOpen = connection.IsOpen;
-            
+
             if (isOpen)
             {
                 await connection.CloseAsync();
             }
-            
+
             return isOpen;
         }
         catch (Exception ex)
@@ -230,7 +230,7 @@ public class ConnectionHealthCheckService : BackgroundService
         try
         {
             client = new ServiceBusClient(config.ConnectionString);
-            
+
             // Try to create a sender to verify connection
             ServiceBusSender? sender = null;
             try
