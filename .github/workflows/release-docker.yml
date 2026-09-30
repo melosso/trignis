@@ -71,7 +71,7 @@ jobs:
 
       - name: Build and push image
         id: build-image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ env.PROJECT_DIR }}/Dockerfile
