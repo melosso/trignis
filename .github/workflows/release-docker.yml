@@ -44,7 +44,7 @@ jobs:
           dotnet publish ${PROJECT_DIR} -c ${{ env.DOTNET_CONFIGURATION }} -o publish --no-restore
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
