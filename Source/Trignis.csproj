@@ -29,7 +29,7 @@
 
   <ItemGroup>
     <PackageReference Include="MinVer" Version="8.0.0" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
-    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.17" />
+    <PackageReference Include="AWSSDK.SQS" Version="4.0.100.19" />
     <PackageReference Include="Azure.Messaging.EventHubs" Version="5.12.2" />
     <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
     <PackageReference Include="Confluent.Kafka" Version="2.16.0" />
