@@ -1,3 +1,5 @@
+![Trignis](.github/images/banner.webp)
+
 # Trignis
 
 [![License](https://img.shields.io/badge/license-EUPL%201.2-blue)](LICENSE)
