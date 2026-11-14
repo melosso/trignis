@@ -1,54 +1,82 @@
 ![Trignis](.github/images/banner.webp)
 
-# Trignis
-
 [![License](https://img.shields.io/badge/license-EUPL%201.2-blue)](LICENSE)
 [![Last commit](https://img.shields.io/github/last-commit/melosso/trignis)](https://github.com/melosso/trignis/commits/main)
-[![Latest Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
+[![Release](https://img.shields.io/github/v/release/melosso/trignis)](https://github.com/melosso/trignis/releases/latest)
 
-Trignis watches your database tables and tells something else when they change. Point it at SQL Server or PostgreSQL, say which objects to track and where changes should go, and it keeps sending them to a file, an HTTP endpoint, or a message queue.
+Trignis is a lightweight service that exports database table changes.
 
-Useful for data synchronization, audit trails, ETL processes, and application integration scenarios where you need to track and propagate database changes reliably.
+- Documentation: [Github Pages](https://melosso.github.io/trignis/)
+- Deploy: [Install Trignis](#getting-started)
 
-![Screenshot of Trignis](https://github.com/melosso/trignis/blob/main/.github/images/screenshot.png?raw=true)
+Trignis reads changes from SQL Server or PostgreSQL. Trignis sends each change to a file, an HTTP endpoint, or a message queue.
 
-Trignis polls on a timer rather than firing on every write. That is intential. In some cases, the same record may be updated up to 50 times before the final commit. If you're looking for a direct or real-time mechanism, please consider implementing it programmatically through a SDK or using alternative extension methods.
+## What is Trignis?
 
-## Requirements
+Trignis connects a database to the systems that consume its changes. Use cases: data synchronization, audit trails, ETL processes and application integration.
 
-- [.NET 10+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
-- Microsoft SQL Server, or PostgreSQL 13+
+#### **How it works**
+- Polls each tracked object on an interval. The default interval is 30 seconds.
+- Exports the final state of a row once per interval. Intermediate writes are not exported.
+- Reads changes through a stored procedure that you write. The stored procedure defines the payload.
+- Stores failed exports in a dead letter store (`sinkhole.db`). Retries each failed export 5 times by default. The dashboard replays or discards the remaining exports.
 
-> [!CAUTION]
-> Whichever mechanism you pick accumulates data that has to be cleaned up: SQL Server change tracking has side tables, a PostgreSQL outbox has its own table. Read [Risks](#risks) before enabling either on a production database.
+#### **Key features**
 
-## Getting started
+- Databases: **SQL Server** and **PostgreSQL 13+**
+- Destinations: files, HTTP endpoints and message queues
+- Dashboard for environments, tracked objects, dead letters and logs
+- One configuration file per environment, loaded without a restart
+- Encrypted configuration
+- Pause controls per environment and per object
 
-### Docker
+## Getting Started
 
-Configure `environments/` and `appsettings.json`, then start the container. The setup script does both:
+Trignis supports two deployment methods: Docker Compose and Windows Server.
+
+### Docker Compose (Recommended)
+
+The setup script creates `environments/` and `appsettings.json`, then starts the container:
 
 ```bash
 sh -c "$(curl -fsSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/docker-setup.sh)"
 ```
 
-Prefer to do it by hand? Start from the included [docker-compose.yml](docker-compose.yml).
+Manual setup: use the included [docker-compose.yml](docker-compose.yml).
 
-### Windows
+The dashboard is available at **http://localhost:2455**.
 
-Download the [latest release](https://github.com/melosso/trignis/releases) and extract it to your deployment folder.
+### Windows (Server)
 
-Trignis encrypts its own configuration, so it needs a key before first run. On Windows, store it as a machine environment variable:
+Download the latest release from [Releases](https://github.com/melosso/trignis/releases) and extract it to your deployment folder.
+
+1. **Install the .NET 10 Runtime and the ASP.NET Core 10 Runtime.** Trignis requires both. The ASP.NET Core Runtime package does not include the .NET Runtime:
+
+```powershell
+winget install --id Microsoft.DotNet.Runtime.10 -e
+winget install --id Microsoft.DotNet.AspNetCore.10 -e
+```
+
+2. **Store the encryption key** as a machine environment variable:
 
 ```powershell
 $bytes = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes); [Environment]::SetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", [Convert]::ToBase64String($bytes), "Machine")
 ```
 
-In containers, set `TRIGNIS_ENCRYPTION_KEY` the same way. Lose this key and the encrypted configuration cannot be recovered. You would have to delete `.core/` and re-enter every secret.
+3. **Install and start the service:**
 
-### Point it at a database
+```powershell
+sc.exe create "Trignis (Agent)" binPath= "C:\trignis\Trignis.exe" start= auto
+sc.exe start "Trignis (Agent)"
+```
 
-Each file in `environments/` is one self-contained environment, with its own connection strings, tracked objects and destinations:
+4. Open **http://localhost:2455** (dashboard).
+
+Back up the encryption key. A lost key makes the encrypted configuration unrecoverable. Recovery: delete `.core/` and enter every secret again.
+
+## Configure
+
+Each file in `environments/` defines one environment. An environment file contains connection strings, tracked objects and destinations:
 
 ```json
 {
@@ -69,33 +97,42 @@ Each file in `environments/` is one self-contained environment, with its own con
 }
 ```
 
-Drop a file in and Trignis picks it up without a restart. Start the service, then browse to **[http://localhost:2455](http://localhost:2455)** for the dashboard.
+Trignis loads new and changed environment files without a restart. The `Provider` setting selects the database: `mssql` (default) or `postgres`.
 
-Changes are read through a stored procedure you write, which keeps the shape of the payload under your control. That procedure has to return a specific JSON structure. See the Reference for the contract and a working example.
+Each tracked object requires a stored procedure that returns a specific JSON structure. The [stored procedure contract](https://melosso.github.io/trignis/reference/stored-procedure) defines the structure.
+
+The [documentation](https://melosso.github.io/trignis/) describes database preparation, the first tracked table and destination settings.
 
 ## Risks
 
-Capturing changes is never free, and the bill differs per database.
+Change capture adds write cost and stored data on the source database. Read this section before enabling change capture on a production database.
 
-**SQL Server change tracking.** Expect roughly 5–10% slower writes on tracked tables, since every change is recorded. The side tables grow and need regular cleanup. SQL Server 2025 (17.x) and later switched to an adaptive shallow cleanup for large side tables, which behaves differently from the deep cleanup in earlier versions. `sp_flush_CT_internal_table_on_demand` still has to be run manually. Trignis does not do it for you. See [About Change Tracking](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-tracking-sql-server?view=sql-server-ver17) and [KB3173157](https://support.microsoft.com/en-us/topic/kb3173157-adds-a-stored-procedure-for-the-manual-cleanup-of-the-change-tracking-side-table-in-sql-server-2fe76677-8687-acc0-12a9-78f3709fc621). Compatibility with older SQL Server versions is not guaranteed.
+**SQL Server change tracking**
 
-**PostgreSQL outbox tables.** A row trigger runs inside every write, so the cost lands on the writing transaction. The outbox grows until you trim it, and Trignis cannot trim it for you — it does not know which consumer is furthest behind. Trim below the watermark shown on the dashboard, never above it. Long-running transactions hold the visibility horizon back, so changes arrive late and in bursts rather than being lost.
+- Writes on tracked tables are roughly 5–10% slower.
+- Change tracking side tables grow and require regular cleanup.
+- SQL Server 2025 (17.x) and later use an adaptive shallow cleanup for large side tables. Earlier versions use a deep cleanup.
+- `sp_flush_CT_internal_table_on_demand` requires a manual run. Trignis does not run it.
+- Compatibility with older SQL Server versions is not guaranteed.
+- References: [About Change Tracking](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/about-change-tracking-sql-server?view=sql-server-ver17) and [KB3173157](https://support.microsoft.com/en-us/topic/kb3173157-adds-a-stored-procedure-for-the-manual-cleanup-of-the-change-tracking-side-table-in-sql-server-2fe76677-8687-acc0-12a9-78f3709fc621).
 
-Neither is mandatory. Any column that only increases and is assigned no earlier than commit will do, on either platform.
+**PostgreSQL outbox tables**
 
-Failed exports go to a dead letter store (`sinkhole.db`) rather than being retried forever. Trignis retries them on a widening backoff, five times by default, then leaves them for you to replay or discard from the dashboard.
+- A row trigger runs inside every write. The trigger cost is added to the writing transaction.
+- The outbox table grows until you trim it. Trignis does not trim the outbox table.
+- Trim rows below the watermark that the dashboard displays. Do not trim rows above the watermark.
+- Long-running transactions delay changes. Delayed changes arrive in bursts and are not lost.
 
-> [!TIP]
-> Brent Ozar's [Performance Tuning SQL Server Change Tracking](https://www.brentozar.com/archive/2014/06/performance-tuning-sql-server-change-tracking/) is worth reading before committing to the SQL Server route.
+Change tracking and outbox tables are optional. Any column that increases and is assigned at commit or later is a valid watermark on both platforms.
 
-## Lore
+## Preview
 
-> Trignis blends *trigger* with *ignis*; Latin for fire, or spark. A trigger sets automation in motion, ignis is the moment it catches. Trignis meddles in exactly that moment.
+![Screenshot of Trignis](.github/images/screenshot.png)
 
 ## License
 
-Licensed under the **EUPL 1.2**. See the [license](LICENSE) file for details.
+Trignis is licensed under the **EUPL 1.2**. See [LICENSE](LICENSE).
 
 ## Contributing
 
-Contributions are welcome. Please use the issue and pull request templates.
+Submit issues and pull requests with the provided templates.
