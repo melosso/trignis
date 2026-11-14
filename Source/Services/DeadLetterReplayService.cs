@@ -22,6 +22,9 @@ public sealed class DeadLetterReplayService : BackgroundService
     /// <summary>Bounded so one cycle cannot monopolise the destinations the polling loop also uses.</summary>
     private const int BatchSize = 25;
 
+    /// <summary>How soon a row held by a pause is looked at again.</summary>
+    private static readonly TimeSpan PausedRecheck = TimeSpan.FromMinutes(5);
+
     private readonly ILogger<DeadLetterReplayService> _logger;
     private readonly DeadLetterService _deadLetters;
     private readonly DeadLetterReplayer _replayer;
@@ -112,6 +115,15 @@ public sealed class DeadLetterReplayService : BackgroundService
                     await _deadLetters.RecordReplayFailureAsync(
                         record.Id, result.Reason ?? "Unroutable", DateTime.UtcNow.AddYears(1), ct);
                     _logger.LogWarning("Dead letter {Id} cannot be replayed automatically: {Reason}", record.Id, result.Reason);
+                    break;
+
+                case DeadLetterReplayer.Outcome.InProgress:
+                    break;
+
+                case DeadLetterReplayer.Outcome.Paused:
+                    // Not an attempt. Step it aside so held rows do not fill every batch and
+                    // starve the ones that can still be delivered.
+                    await _deadLetters.DeferAsync(record.Id, DateTime.UtcNow + PausedRecheck, ct);
                     break;
 
                 default:

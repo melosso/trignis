@@ -126,19 +126,35 @@ async function load(page = 1) {
       return;
     }
 
-    body.innerHTML = d.data.map(row => `<tr class="clickable" onclick='openDrawer(${JSON.stringify(row)})'>
-      <td class="col-mono">${row.id}</td>
+    // Rows are looked up by id; inlining the row into the attribute let a quote in a payload break out of it
+    rowsById = new Map(d.data.map(row => [Number(row.id), row]));
+
+    body.innerHTML = d.data.map(row => `<tr class="clickable" onclick="openDrawer(${Number(row.id)})">
+      <td class="muted">${row.id}</td>
       <td><span class="badge badge-muted">${esc(row.tracking_object_name)}</span></td>
-      <td class="col-mono">${esc(row.database_name)}</td>
+      <td class="muted">${esc(row.database_name)}</td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:hsl(var(--destructive));font-size:0.8rem">${esc(row.error_message)}</td>
-      <td class="col-mono">${esc(row.timestamp ?? '-')}</td>
+      <td class="muted">${esc(row.timestamp ?? '-')}</td>
     </tr>`).join('');
   } catch(e) {
     body.innerHTML = `<tr><td colspan="5" class="empty-state">Error: ${esc(e.message)}</td></tr>`;
   }
 }
 
-function openDrawer(row) {
+let rowsById = new Map();
+
+// What the automatic replay is going to do with this row, in words
+function retryStatus(row) {
+  const attempts = row.attempts ?? 0;
+  const max = row.max_attempts ?? 0;
+  if (max > 0 && attempts >= max) return `Gave up after ${attempts} attempt(s). Replay it manually once the destination is fixed.`;
+  const next = row.next_attempt ? `, next try at ${row.next_attempt} UTC` : ', due now';
+  return `Attempt ${attempts} of ${max}${next}`;
+}
+
+function openDrawer(id) {
+  const row = rowsById.get(id);
+  if (!row) return;
   const body = document.getElementById('drawerBody');
 
   let prettyPayload = row.data ?? '';
@@ -147,7 +163,7 @@ function openDrawer(row) {
   body.innerHTML = `
     <div class="drawer-field">
       <label>ID</label>
-      <div class="drawer-field-value col-mono">${esc(row.id)}</div>
+      <div class="drawer-field-value">${esc(row.id)}</div>
     </div>
     <div class="drawer-field">
       <label>Object</label>
@@ -155,19 +171,27 @@ function openDrawer(row) {
     </div>
     <div class="drawer-field">
       <label>Database</label>
-      <div class="drawer-field-value col-mono">${esc(row.database_name)}</div>
+      <div class="drawer-field-value">${esc(row.database_name)}</div>
     </div>
     <div class="drawer-field">
       <label>Source Key</label>
-      <div class="drawer-field-value col-mono">${esc(row.source_key)}</div>
+      <div class="drawer-field-value">${esc(row.source_key)}</div>
     </div>
     <div class="drawer-field">
       <label>Timestamp</label>
-      <div class="drawer-field-value col-mono">${esc(row.timestamp ?? '-')}</div>
+      <div class="drawer-field-value">${esc(row.timestamp ?? '-')}</div>
     </div>
     <div class="drawer-field">
       <label>Error</label>
       <div class="drawer-field-value" style="color:hsl(var(--destructive));font-size:0.8125rem">${esc(row.error_message)}</div>
+    </div>
+    <div class="drawer-field">
+      <label>Automatic replay</label>
+      <div class="drawer-field-value" style="font-size:0.8125rem">${esc(retryStatus(row))}</div>
+    </div>
+    <div class="drawer-field">
+      <label>Failed destinations</label>
+      <div class="drawer-field-value" style="font-size:0.8125rem">${esc(row.failed_targets?.join(', ') ?? 'all')}</div>
     </div>
     <div class="drawer-field">
       <label>Data Hash</label>

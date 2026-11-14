@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -67,6 +68,10 @@ public class DeadLetterService
         await AddColumnIfMissingAsync(conn, "Attempts", "INTEGER NOT NULL DEFAULT 0", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(conn, "NextAttempt", "DATETIME", cancellationToken).ConfigureAwait(false);
 
+        // Which destinations refused the payload, as a JSON array. Null on older rows, which
+        // replay to every destination as they always did.
+        await AddColumnIfMissingAsync(conn, "FailedTargets", "TEXT", cancellationToken).ConfigureAwait(false);
+
         var index = conn.CreateCommand();
         index.CommandText = "CREATE INDEX IF NOT EXISTS idx_next_attempt ON DeadLetters(NextAttempt)";
         await index.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -87,7 +92,7 @@ public class DeadLetterService
         await add.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default)
+    public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default, IReadOnlyCollection<string>? failedTargets = null)
     {
         var dataJson = JsonSerializer.Serialize(data);
         var dataHash = ComputeSha256Hash(dataJson);
@@ -105,14 +110,37 @@ public class DeadLetterService
             // Check if this exact message was already saved
             var checkCommand = conn.CreateCommand();
             checkCommand.Transaction = tx;
-            checkCommand.CommandText = "SELECT COUNT(*) FROM DeadLetters WHERE SourceKey = @sourceKey AND DataHash = @dataHash";
+            checkCommand.CommandText = "SELECT Id, FailedTargets FROM DeadLetters WHERE SourceKey = @sourceKey AND DataHash = @dataHash";
             checkCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
             checkCommand.Parameters.AddWithValue("@dataHash", dataHash);
-            var result = await checkCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            var count = (result != null && result != DBNull.Value) ? Convert.ToInt64(result) : 0;
 
-            if (count > 0)
+            long? existingId = null;
+            string? existingTargets = null;
+            using (var existing = await checkCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             {
+                if (await existing.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    existingId = existing.GetInt64(0);
+                    existingTargets = existing.IsDBNull(1) ? null : existing.GetString(1);
+                }
+            }
+
+            if (existingId is { } id)
+            {
+                // Same payload, possibly a different destination this time. A null on the row
+                // already means "every destination", so there is nothing to widen.
+                if (existingTargets != null && failedTargets is { Count: > 0 })
+                {
+                    var merge = conn.CreateCommand();
+                    merge.Transaction = tx;
+                    merge.CommandText = "UPDATE DeadLetters SET FailedTargets = @targets WHERE Id = @id";
+                    merge.Parameters.AddWithValue("@id", id);
+                    merge.Parameters.AddWithValue("@targets",
+                        JsonSerializer.Serialize(ParseTargets(existingTargets)!.Union(failedTargets, StringComparer.Ordinal)));
+                    await merge.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 _logger.LogDebug($"Dead letter already exists for {sourceKey} with hash {dataHash}, skipping duplicate");
                 return;
             }
@@ -121,8 +149,8 @@ public class DeadLetterService
             var insertCommand = conn.CreateCommand();
             insertCommand.Transaction = tx;
             insertCommand.CommandText = @"
-                INSERT INTO DeadLetters (SourceKey, TrackingObjectName, EnvironmentName, DatabaseName, DataHash, Data, ErrorMessage)
-                VALUES (@sourceKey, @trackingObjectName, @environmentName, @databaseName, @dataHash, @data, @errorMessage)
+                INSERT INTO DeadLetters (SourceKey, TrackingObjectName, EnvironmentName, DatabaseName, DataHash, Data, ErrorMessage, FailedTargets)
+                VALUES (@sourceKey, @trackingObjectName, @environmentName, @databaseName, @dataHash, @data, @errorMessage, @failedTargets)
             ";
             insertCommand.Parameters.AddWithValue("@sourceKey", sourceKey);
             insertCommand.Parameters.AddWithValue("@trackingObjectName", trackingObjectName);
@@ -131,6 +159,8 @@ public class DeadLetterService
             insertCommand.Parameters.AddWithValue("@dataHash", dataHash);
             insertCommand.Parameters.AddWithValue("@data", dataJson);
             insertCommand.Parameters.AddWithValue("@errorMessage", exception.Message);
+            insertCommand.Parameters.AddWithValue("@failedTargets",
+                failedTargets is { Count: > 0 } ? JsonSerializer.Serialize(failedTargets) : DBNull.Value);
 
             await insertCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await tx.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -161,7 +191,16 @@ public class DeadLetterService
     }
 
     /// <summary>Everything replay needs. Null EnvironmentName means the row predates the column.</summary>
-    public sealed record DeadLetterRecord(long Id, string? EnvironmentName, string ObjectName, string DatabaseName, string Data, int Attempts);
+    public sealed record DeadLetterRecord(long Id, string? EnvironmentName, string ObjectName, string DatabaseName, string Data, int Attempts,
+        IReadOnlyList<string>? FailedTargets = null);
+
+    /// <summary>Null (replay everywhere) for a missing or unreadable value: resending is safer than dropping.</summary>
+    internal static List<string>? ParseTargets(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return JsonSerializer.Deserialize<List<string>>(json); }
+        catch (JsonException) { return null; }
+    }
 
     public async Task<DeadLetterRecord?> GetAsync(long id, CancellationToken cancellationToken = default)
     {
@@ -169,7 +208,7 @@ public class DeadLetterService
         await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
 
         var command = conn.CreateCommand();
-        command.CommandText = "SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts FROM DeadLetters WHERE Id = @id";
+        command.CommandText = "SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts, FailedTargets FROM DeadLetters WHERE Id = @id";
         command.Parameters.AddWithValue("@id", id);
 
         using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -191,7 +230,8 @@ public class DeadLetterService
             ? trackingObjectName[(environmentName.Length + 1)..]
             : trackingObjectName;
 
-        return new DeadLetterRecord(reader.GetInt64(0), environmentName, objectName, reader.GetString(3), reader.GetString(4), reader.GetInt32(5));
+        return new DeadLetterRecord(reader.GetInt64(0), environmentName, objectName, reader.GetString(3), reader.GetString(4), reader.GetInt32(5),
+            ParseTargets(reader.IsDBNull(6) ? null : reader.GetString(6)));
     }
 
     /// <summary>
@@ -206,7 +246,7 @@ public class DeadLetterService
 
         var command = conn.CreateCommand();
         command.CommandText = @"
-            SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts
+            SELECT Id, EnvironmentName, TrackingObjectName, DatabaseName, Data, Attempts, FailedTargets
             FROM DeadLetters
             WHERE Attempts < @maxAttempts
               AND (NextAttempt IS NULL OR NextAttempt <= @now)
@@ -240,6 +280,32 @@ public class DeadLetterService
         ";
         command.Parameters.AddWithValue("@id", id);
         command.Parameters.AddWithValue("@error", error);
+        command.Parameters.AddWithValue("@nextAttempt", nextAttempt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Narrows a row to the destinations still refusing it, so a retry leaves the healthy ones alone.</summary>
+    public async Task SetFailedTargetsAsync(long id, IEnumerable<string> targets, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = "UPDATE DeadLetters SET FailedTargets = @targets WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", id);
+        command.Parameters.AddWithValue("@targets", JsonSerializer.Serialize(targets));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Postpones a row without spending an attempt, for a replay that was never tried.</summary>
+    public async Task DeferAsync(long id, DateTime nextAttempt, CancellationToken cancellationToken = default)
+    {
+        using var conn = new SqliteConnection(_sinkholeConnectionString);
+        await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var command = conn.CreateCommand();
+        command.CommandText = "UPDATE DeadLetters SET NextAttempt = @nextAttempt WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", id);
         command.Parameters.AddWithValue("@nextAttempt", nextAttempt);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

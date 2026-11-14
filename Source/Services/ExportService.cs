@@ -48,16 +48,42 @@ public sealed class ExportService
         _maxExportDirectorySizeBytes = _globalSettings.FilePathSizeLimit * 1024L * 1024L;
     }
 
+    private const string FileTarget = "FILE";
+
+    // ponytail: endpoints without a Key share the name "unnamed", so a replay narrowed to one of
+    // them resends to all of them. Give endpoints a Key to tell them apart.
+    private static string TargetName(ApiEndpoint endpoint) =>
+        $"{(string.IsNullOrEmpty(endpoint.MessageQueueType) ? "HTTP" : "MQ")}:{endpoint.Key ?? "unnamed"}";
+
+    private bool FileEnabled(EnvironmentConfig environment) =>
+        environment.ChangeTracking.ExportToFile ?? _globalSettings.ExportToFile;
+
+    private ApiEndpoint[] EnabledEndpoints(EnvironmentConfig environment) =>
+        (environment.ChangeTracking.ExportToApi ?? _globalSettings.ExportToApi)
+            ? environment.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()
+            : Array.Empty<ApiEndpoint>();
+
+    /// <summary>Names of the destinations an export for this environment would write to.</summary>
+    public IReadOnlySet<string> ConfiguredTargets(EnvironmentConfig environment)
+    {
+        var targets = new HashSet<string>(EnabledEndpoints(environment).Select(TargetName), StringComparer.Ordinal);
+        if (FileEnabled(environment)) targets.Add(FileTarget);
+        return targets;
+    }
+
+    /// <param name="onlyTargets">Restricts the export to these destinations. Null means all of them.</param>
     public async Task<IReadOnlyList<ExportFailure>> ExportAsync(
-        EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data, CancellationToken stoppingToken)
+        EnvironmentConfig environment, TrackingObject trackingObject, JsonElement data, CancellationToken stoppingToken,
+        IReadOnlyCollection<string>? onlyTargets = null)
     {
         var failures = new List<ExportFailure>();
 
-        var exportToFile = environment.ChangeTracking.ExportToFile ?? _globalSettings.ExportToFile;
-        var exportToApi = environment.ChangeTracking.ExportToApi ?? _globalSettings.ExportToApi;
+        bool Wanted(string target) => onlyTargets == null || onlyTargets.Contains(target);
+
+        var exportToFile = FileEnabled(environment) && Wanted(FileTarget);
         var retryPolicy = _retryPolicies.For(environment);
 
-        var apiEndpoints = exportToApi ? (environment.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>()) : Array.Empty<ApiEndpoint>();
+        var apiEndpoints = EnabledEndpoints(environment).Where(e => Wanted(TargetName(e))).ToArray();
         var totalExports = (exportToFile ? 1 : 0) + apiEndpoints.Length;
         var currentExportIndex = 0;
 
@@ -81,7 +107,7 @@ public sealed class ExportService
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [FILE] Export FAILED: {ex.Message}");
-                failures.Add(new ExportFailure("FILE", ex));
+                failures.Add(new ExportFailure(FileTarget, ex));
             }
         }
 
@@ -92,6 +118,10 @@ public sealed class ExportService
             var isQueue = !string.IsNullOrEmpty(endpoint.MessageQueueType);
 
             stoppingToken.ThrowIfCancellationRequested();
+
+            // Survives a retry, so a failure in batch 3 resumes at batch 3 rather than resending 1 and 2.
+            // ponytail: a dead-lettered payload still replays whole; store the offset if that matters.
+            var batchesSent = 0;
 
             try
             {
@@ -116,10 +146,11 @@ public sealed class ExportService
 
                         _logger.LogDebug($"[{environment.Name}] Batching {recordCount} records into {batches.Count} batches");
 
-                        for (int i = 0; i < batches.Count; i++)
+                        for (int i = batchesSent; i < batches.Count; i++)
                         {
-                            var batchElement = JsonDocument.Parse(JsonSerializer.Serialize(batches[i])).RootElement;
-                            await SendHttpRequestAsync(endpoint, trackingObject, environment, batchElement, i + 1, batches.Count, stoppingToken);
+                            using var batchDocument = JsonDocument.Parse(JsonSerializer.Serialize(batches[i]));
+                            await SendHttpRequestAsync(endpoint, trackingObject, environment, batchDocument.RootElement, i + 1, batches.Count, stoppingToken);
+                            batchesSent = i + 1;
                         }
                     }
                     else
@@ -146,7 +177,7 @@ public sealed class ExportService
             {
                 var exportType = isQueue ? "MQ" : "HTTP";
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [{exportType}] Export FAILED: {ex.Message}");
-                failures.Add(new ExportFailure($"{exportType}:{endpoint.Key ?? "unnamed"}", ex));
+                failures.Add(new ExportFailure(TargetName(endpoint), ex));
             }
         }
 
@@ -219,6 +250,8 @@ public sealed class ExportService
         using var client = _httpClientFactory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(30);
 
+        string? oauthCacheKey = null;
+
         // Add authentication
         if (endpoint.Auth != null)
         {
@@ -249,8 +282,10 @@ public sealed class ExportService
                     }
                     break;
                 case "oauth2clientcredentials":
-                    var cacheKey = $"{endpoint.Key ?? "default"}_{endpoint.Auth.ClientId}";
-                    var token = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, cacheKey, stoppingToken);
+                    // Everything that decides which token comes back, so a reloaded scope or
+                    // token endpoint never reuses a token issued for the old one.
+                    oauthCacheKey = $"{environment.Name}/{endpoint.Key ?? "default"}_{endpoint.Auth.ClientId}_{endpoint.Auth.TokenEndpoint}_{endpoint.Auth.Scope}";
+                    var token = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, oauthCacheKey, stoppingToken);
                     if (!string.IsNullOrEmpty(token))
                     {
                         client.DefaultRequestHeaders.Authorization =
@@ -320,7 +355,11 @@ public sealed class ExportService
                 "Lower MaxRecordsPerBatch, enable EnablePayloadBatching, or raise the limit.");
         }
 
-        var response = await client.PostAsync(apiUrl, content, stoppingToken);
+        using var response = await client.PostAsync(apiUrl, content, stoppingToken);
+
+        // A rejected token is not going to start working; drop it so the retry asks for a new one.
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && oauthCacheKey != null)
+            _oauth2TokenService.Invalidate(oauthCacheKey);
 
         if (!response.IsSuccessStatusCode)
         {

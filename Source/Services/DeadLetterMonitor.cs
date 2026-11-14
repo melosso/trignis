@@ -142,7 +142,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 _logger.LogWarning("Action required: Review dead letters in sinkhole.db and address recurring failures");
                 _lastAlertTime = DateTime.UtcNow;
             }
-            else if (totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
+            else if (totalCount < _thresholdCount && totalCount >= _thresholdCount * 0.75) // Warning at 75% threshold
             {
                 _logger.LogInformation("Dead letter queue approaching threshold: {Total}/{Threshold} ({Percentage:P0})",
                     totalCount, _thresholdCount, (double)totalCount / _thresholdCount);

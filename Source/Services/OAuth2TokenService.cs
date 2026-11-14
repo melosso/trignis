@@ -61,6 +61,9 @@ public class OAuth2TokenService
         finally { sem.Release(); }
     }
 
+    /// <summary>Forgets a cached token the resource server rejected.</summary>
+    public void Invalidate(string cacheKey) => _tokenCache.TryRemove(cacheKey, out _);
+
     private async Task<(string Token, int? ExpiresIn)> RequestAccessTokenAsync(ApiAuth auth, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(auth.TokenEndpoint))
@@ -74,7 +77,7 @@ public class OAuth2TokenService
         }
 
         var client = _httpClientFactory.CreateClient();
-        var request = new HttpRequestMessage(HttpMethod.Post, auth.TokenEndpoint)
+        using var request = new HttpRequestMessage(HttpMethod.Post, auth.TokenEndpoint)
         {
             Content = new FormUrlEncodedContent(new[]
             {
@@ -85,7 +88,7 @@ public class OAuth2TokenService
             })
         };
 
-        var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var tokenResponse = await response.Content.ReadFromJsonAsync<TokenResponse>(cancellationToken: cancellationToken).ConfigureAwait(false);
