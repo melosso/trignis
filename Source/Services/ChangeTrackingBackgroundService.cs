@@ -46,6 +46,10 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
     private sealed record EnvTask(CancellationTokenSource Cts, Task Task);
 
+    // Loops that ignored their stop timeout. A replacement waits for its predecessor here, so
+    // one environment never has two loops exporting at once. Guarded by _lifecycleGate.
+    private readonly Dictionary<string, Task> _draining = new();
+
     private static readonly TimeSpan EnvTaskStopTimeout = TimeSpan.FromSeconds(5);
 
     public ChangeTrackingBackgroundService(
@@ -147,8 +151,8 @@ public class ChangeTrackingBackgroundService : BackgroundService
                     dropCommand.CommandText = "DROP TABLE LastVersions";
                     await dropCommand.ExecuteNonQueryAsync();
 
-                    _logger.LogWarning("Old state database schema dropped. All tracking objects will perform initial sync.");
-                    _logger.LogDebug("Old data backed up to LastVersions_Backup table");
+                    _logger.LogWarning("Old state database schema dropped. All tracking objects will perform initial sync. " +
+                        "The previous watermarks are kept in the LastVersions_Backup table.");
                 }
             }
 
@@ -173,31 +177,13 @@ public class ChangeTrackingBackgroundService : BackgroundService
             ";
             await createCommand.ExecuteNonQueryAsync();
 
-            // If a backup exists, and migration is done successfully, drop it
-            var checkBackupExists = conn.CreateCommand();
-            checkBackupExists.Transaction = tx;
-            checkBackupExists.CommandText = @"
-                SELECT COUNT(*) FROM sqlite_master 
-                WHERE type='table' AND name='LastVersions_Backup'
-            ";
-            var backupExists = (long)(await checkBackupExists.ExecuteScalarAsync() ?? 0L) > 0;
-
-            if (backupExists)
-            {
-                var dropBackup = conn.CreateCommand();
-                dropBackup.Transaction = tx;
-                dropBackup.CommandText = "DROP TABLE LastVersions_Backup";
-                await dropBackup.ExecuteNonQueryAsync();
-                _logger.LogDebug("Backup table 'LastVersions_Backup' removed after successful migration.");
-            }
-
             await tx.CommitAsync();
             _logger.LogDebug("State database initialized with environment support");
         }
         catch (Exception ex)
         {
             await tx.RollbackAsync();
-            _logger.LogError(ex, "Database initialization failed; rolled back changes. Backup (if created) retained.");
+            _logger.LogError(ex, "Database initialization failed; rolled back changes, the state database is untouched.");
             throw;
         }
     }
@@ -302,7 +288,26 @@ public class ChangeTrackingBackgroundService : BackgroundService
         }
 
         var cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-        _envTasks[env.Name] = new EnvTask(cts, ProcessEnvironmentAsync(env, cts.Token));
+        _draining.Remove(env.Name, out var predecessor);
+        _envTasks[env.Name] = new EnvTask(cts, predecessor is null or { IsCompleted: true }
+            ? ProcessEnvironmentAsync(env, cts.Token)
+            : RunAfterAsync(predecessor, env, cts.Token));
+    }
+
+    private async Task RunAfterAsync(Task predecessor, EnvironmentConfig env, CancellationToken stoppingToken)
+    {
+        _logger.LogWarning("[{Env}] Waiting for the previous processing loop to finish before starting the new one", env.Name);
+        try
+        {
+            await predecessor.WaitAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Its failure was its own; ours is only to not overlap with it
+            _logger.LogDebug(ex, "[{Env}] Previous processing loop ended with an error", env.Name);
+        }
+
+        await ProcessEnvironmentAsync(env, stoppingToken).ConfigureAwait(false);
     }
 
     // Caller holds _lifecycleGate
@@ -321,6 +326,9 @@ public class ChangeTrackingBackgroundService : BackgroundService
             // Abandoned task still holds the token so dispose only once it finishes
             _logger.LogDebug(ex, "Task for {Env} did not stop cleanly within {Timeout}", envName, EnvTaskStopTimeout);
             _ = entry.Task.ContinueWith(_ => entry.Cts.Dispose(), TaskScheduler.Default);
+            _draining[envName] = _draining.TryGetValue(envName, out var earlier) && !earlier.IsCompleted
+                ? Task.WhenAll(earlier, entry.Task)
+                : entry.Task;
         }
     }
 
@@ -437,175 +445,185 @@ public class ChangeTrackingBackgroundService : BackgroundService
         stoppingToken.ThrowIfCancellationRequested();
 
         var dialect = SqlDialect.Parse(environment.Provider);
-        var retryPolicy = _retryPolicies.For(environment);
-        await retryPolicy.ExecuteAsync(async _ =>
+
+        // Only the source read is retried. Exporting has its own per-destination retry, and
+        // retrying the bookkeeping from here would send the payload to every destination again.
+        var (result, expectedVersion, seeding) = await _retryPolicies.For(environment).ExecuteAsync(
+            _ => ReadChangesAsync(environment, trackingObject, dialect, connectionString, stoppingToken), stoppingToken);
+
+        _logger.LogDebug($"[{environment.Name}] Retrieved {result.Length} characters from wrapped stored procedure {trackingObject.StoredProcedureName}");
+
+        if (string.IsNullOrEmpty(result))
+            return;
+
+        using var doc = await ParseResultAsync(environment, trackingObject, result);
+
+        var version = doc.RootElement.GetProperty("Metadata").GetProperty("Sync").GetProperty("Version").GetInt64();
+        var maxVersion = version;
+
+        if (seeding)
         {
-            using var conn = await dialect.OpenAsync(connectionString, stoppingToken);
-
-            var lastVersion = await GetLastProcessedVersionAsync(environment.Name, trackingObject.Name);
-
-            long fromVersion;
-
-            // Seeding means "start from now": report the watermark, send no history.
-            // The server tells us on platforms that track it; elsewhere the procedure does,
-            // which is why the payload carries the mode.
-            var seeding = false;
-
-            if (lastVersion == 0)
+            // A procedure that honours mode: "seed" returns no rows. One that ignores it
+            // returns history, which incremental mode exists to avoid — so drop it here
+            // rather than flooding every destination on the first cycle.
+            if (doc.RootElement.TryGetProperty("Data", out var seeded)
+                && seeded.ValueKind == JsonValueKind.Array && seeded.GetArrayLength() > 0)
             {
-                if (string.Equals(trackingObject.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase))
-                {
-                    fromVersion = 0;
-                    _logger.LogInformation($"[{environment.Name}] Performing initial full sync for {trackingObject.Name}");
-                }
-                else if (dialect.CurrentVersionSql is not null)
-                {
-                    using var versionCommand = conn.CreateCommand();
-                    versionCommand.CommandText = dialect.CurrentVersionSql;
-                    lastVersion = Convert.ToInt64(await versionCommand.ExecuteScalarAsync(stoppingToken));
-                    await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, lastVersion);
-                    fromVersion = lastVersion;
-                    _logger.LogInformation($"[{environment.Name}] Initialized last processed version for {trackingObject.Name} to {lastVersion}");
-                }
-                else
-                {
-                    fromVersion = 0;
-                    seeding = true;
-                    _logger.LogInformation($"[{environment.Name}] Seeding last processed version for {trackingObject.Name} from the procedure");
-                }
+                _logger.LogWarning(
+                    $"[{environment.Name}] {trackingObject.Name} returned {seeded.GetArrayLength()} rows during an incremental seed; discarding them. " +
+                    $"Have the procedure return no rows when mode is \"seed\", or set InitialSyncMode to \"Full\".");
             }
-            else
-            {
-                fromVersion = lastVersion;
-            }
-
-            var payload = new { fromVersion, mode = seeding ? "seed" : "sync" };
-            var json = JsonSerializer.Serialize(payload);
+        }
+        else if (doc.RootElement.TryGetProperty("Data", out var data)
+            && data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
+        {
+            _logger.LogInformation($"[{environment.Name}]  ├─ Found {data.GetArrayLength()} changes at version {version}.");
 
             stoppingToken.ThrowIfCancellationRequested();
 
-            string result;
+            maxVersion = data.EnumerateArray()
+                .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt64() : (long?)null)
+                .Where(v => v.HasValue).Select(v => v!.Value)
+                .DefaultIfEmpty(version).Max();
 
-            var sql = string.Format(dialect.CallProcedure, trackingObject.StoredProcedureName);
-
-            // Local helper to read potentially large NVARCHAR result from first column
-            async Task<string> ReadClobAsync(System.Data.Common.DbDataReader reader, CancellationToken ct)
+            // One dead letter per payload, remembering which destinations refused it, so a
+            // replay goes only to those once the downstream problem is fixed.
+            var failures = await _exportService.ExportAsync(environment, trackingObject, data, stoppingToken);
+            if (failures.Count > 0)
             {
-                var sb = new StringBuilder();
+                var error = failures.Count == 1
+                    ? failures[0].Error
+                    : new AggregateException(string.Join("; ", failures.Select(f => $"{f.Target}: {f.Error.Message}")));
 
-                // Read each row in the resultset; SQL Server may return the JSON in 2k chunks, one chunk per row in the first column. Append each non-null chunk.
-                while (await reader.ReadAsync(ct))
-                {
-                    if (await reader.IsDBNullAsync(0, ct))
-                        continue;
-
-                    // Use GetFieldValueAsync<string> to retrieve the text chunk efficiently
-                    var chunk = await reader.GetFieldValueAsync<string>(0, ct);
-                    if (!string.IsNullOrEmpty(chunk))
-                        sb.Append(chunk);
-
-                    ct.ThrowIfCancellationRequested();
-                }
-
-                return sb.ToString();
+                await _deadLetterService.SaveDeadLetterAsync(
+                    environment.Name, trackingObject.Name, trackingObject.Database, data, error, stoppingToken,
+                    failures.Select(f => f.Target).Distinct().ToList());
             }
+        }
 
-            using var spCommand = conn.CreateCommand();
-            spCommand.CommandText = sql;
-            spCommand.CommandTimeout = 300;
-
-            var jsonParam = spCommand.CreateParameter();
-            jsonParam.ParameterName = SqlDialect.JsonParameter;
-            jsonParam.Value = json;
-            spCommand.Parameters.Add(jsonParam);
-
-            using (var reader = await spCommand.ExecuteReaderAsync(stoppingToken))
-            {
-                // Read the result from the first column
-                result = await ReadClobAsync(reader, stoppingToken);
-            }
-
-            _logger.LogDebug($"[{environment.Name}] Retrieved {result.Length} characters from wrapped stored procedure {trackingObject.StoredProcedureName}");
-
-            if (!string.IsNullOrEmpty(result))
-            {
-                _logger.LogDebug($"[{environment.Name}] Attempting to parse JSON ({result.Length} chars)");
-
-                JsonDocument? doc = null;
-                try
-                {
-                    doc = JsonDocument.Parse(result);
-                }
-                catch (JsonException ex)
-                {
-                    _logger.LogError(ex, $"[{environment.Name}] Failed to parse JSON for {trackingObject.Name}. " +
-                        $"Result length: {result.Length} chars. First 200 chars: {result.Substring(0, Math.Min(200, result.Length))}... " +
-                        $"Last 200 chars: ...{(result.Length > 200 ? result.Substring(result.Length - 200) : "")}");
-
-                    // Save the problematic JSON to debug folder for inspection
-                    if (Serilog.Log.IsEnabled(Serilog.Events.LogEventLevel.Debug))
-                    {
-                        var debugDir = "debug";
-                        if (!Directory.Exists(debugDir))
-                        {
-                            Directory.CreateDirectory(debugDir);
-                        }
-
-                        var debugPath = Path.Combine(debugDir, $"debug_{environment.Name}_{trackingObject.Name}_{DateTime.UtcNow:yyyyMMddHHmmss}_partial.json");
-                        await File.WriteAllTextAsync(debugPath, result);
-                        _logger.LogDebug($"[{environment.Name}] Saved partial problematic JSON to: {debugPath}");
-                    }
-                    throw;
-                }
-
-                var metadata = doc.RootElement.GetProperty("Metadata");
-                var sync = metadata.GetProperty("Sync");
-                var version = sync.GetProperty("Version").GetInt64();
-
-                var maxVersion = version;
-
-                if (seeding)
-                {
-                    // A procedure that honours mode: "seed" returns no rows. One that ignores it
-                    // returns history, which incremental mode exists to avoid — so drop it here
-                    // rather than flooding every destination on the first cycle.
-                    if (doc.RootElement.TryGetProperty("Data", out var seeded)
-                        && seeded.ValueKind == JsonValueKind.Array && seeded.GetArrayLength() > 0)
-                    {
-                        _logger.LogWarning(
-                            $"[{environment.Name}] {trackingObject.Name} returned {seeded.GetArrayLength()} rows during an incremental seed; discarding them. " +
-                            $"Have the procedure return no rows when mode is \"seed\", or set InitialSyncMode to \"Full\".");
-                    }
-                }
-                else if (doc.RootElement.TryGetProperty("Data", out var data))
-                {
-                    if (data.ValueKind == JsonValueKind.Array && data.GetArrayLength() > 0)
-                    {
-                        _logger.LogInformation($"[{environment.Name}]  ├─ Found {data.GetArrayLength()} changes at version {version}.");
-
-                        stoppingToken.ThrowIfCancellationRequested();
-
-                        maxVersion = data.EnumerateArray()
-                            .Select(e => e.TryGetProperty("$version", out var v) ? v.GetInt64() : (long?)null)
-                            .Where(v => v.HasValue).Select(v => v!.Value)
-                            .DefaultIfEmpty(version).Max();
-
-                        // Every destination that failed becomes a dead letter, so the payload can
-                        // be replayed once the downstream problem is fixed.
-                        foreach (var failure in await _exportService.ExportAsync(environment, trackingObject, data, stoppingToken))
-                        {
-                            await _deadLetterService.SaveDeadLetterAsync(
-                                environment.Name, trackingObject.Name, trackingObject.Database, data, failure.Error, stoppingToken);
-                        }
-                    }
-                }
-
-                await SetLastProcessedVersionAsync(environment.Name, trackingObject.Name, maxVersion);
-            }
-        }, stoppingToken);
+        if (!await TryAdvanceVersionAsync(environment.Name, trackingObject.Name, expectedVersion, maxVersion))
+        {
+            _logger.LogWarning(
+                $"[{environment.Name}] Sync state for {trackingObject.Name} changed while this cycle ran (reset from the dashboard?); " +
+                "leaving it as it is. The next cycle picks up from the new state.");
+        }
     }
 
-    private async Task<long> GetLastProcessedVersionAsync(string environmentName, string objectName)
+    /// <summary>
+    /// Runs the tracking procedure and returns its raw JSON, the watermark the cycle started
+    /// from (null when the object has never synced), and whether this is an incremental seed.
+    /// </summary>
+    private async Task<(string Result, long? ExpectedVersion, bool Seeding)> ReadChangesAsync(
+        EnvironmentConfig environment, TrackingObject trackingObject, SqlDialect dialect, string connectionString, CancellationToken stoppingToken)
+    {
+        using var conn = await dialect.OpenAsync(connectionString, stoppingToken);
+
+        // Null means "never synced". Zero is a real watermark: a database that has seen no
+        // changes yet reports it, and treating it as "never synced" re-seeded past the first ones.
+        var lastVersion = await GetLastProcessedVersionAsync(environment.Name, trackingObject.Name);
+
+        long fromVersion;
+
+        // Seeding means "start from now": report the watermark, send no history.
+        // The server tells us on platforms that track it; elsewhere the procedure does,
+        // which is why the payload carries the mode.
+        var seeding = false;
+
+        if (lastVersion is { } known)
+        {
+            fromVersion = known;
+        }
+        else if (string.Equals(trackingObject.InitialSyncMode, "Full", StringComparison.OrdinalIgnoreCase))
+        {
+            fromVersion = 0;
+            _logger.LogInformation($"[{environment.Name}] Performing initial full sync for {trackingObject.Name}");
+        }
+        else if (dialect.CurrentVersionSql is not null)
+        {
+            using var versionCommand = conn.CreateCommand();
+            versionCommand.CommandText = dialect.CurrentVersionSql;
+            // NULL when change tracking is off for the database; the procedure reports that itself
+            var current = await versionCommand.ExecuteScalarAsync(stoppingToken);
+            fromVersion = current is null or DBNull ? 0 : Convert.ToInt64(current);
+
+            if (fromVersion == 0)
+            {
+                // Nothing has ever been tracked in this database. Procedures read fromVersion 0 as
+                // "send the whole table", so there is no incremental watermark to hand out yet.
+                // ponytail: changes committed in the same polling interval as the database's very
+                // first tracked change are skipped; use InitialSyncMode "Full" if that matters.
+                _logger.LogDebug($"[{environment.Name}] No changes tracked yet for {trackingObject.Name}; waiting for the first one");
+                return (string.Empty, null, false);
+            }
+
+            if (await TryAdvanceVersionAsync(environment.Name, trackingObject.Name, null, fromVersion))
+                lastVersion = fromVersion;
+            else
+                lastVersion = fromVersion = await GetLastProcessedVersionAsync(environment.Name, trackingObject.Name) ?? fromVersion;
+
+            _logger.LogInformation($"[{environment.Name}] Initialized last processed version for {trackingObject.Name} to {fromVersion}");
+        }
+        else
+        {
+            fromVersion = 0;
+            seeding = true;
+            _logger.LogInformation($"[{environment.Name}] Seeding last processed version for {trackingObject.Name} from the procedure");
+        }
+
+        var json = JsonSerializer.Serialize(new { fromVersion, mode = seeding ? "seed" : "sync" });
+
+        stoppingToken.ThrowIfCancellationRequested();
+
+        using var spCommand = conn.CreateCommand();
+        spCommand.CommandText = string.Format(dialect.CallProcedure, trackingObject.StoredProcedureName);
+        spCommand.CommandTimeout = 300;
+
+        var jsonParam = spCommand.CreateParameter();
+        jsonParam.ParameterName = SqlDialect.JsonParameter;
+        jsonParam.Value = json;
+        spCommand.Parameters.Add(jsonParam);
+
+        // SQL Server may return the JSON in 2k chunks, one per row in the first column
+        var sb = new StringBuilder();
+        using (var reader = await spCommand.ExecuteReaderAsync(stoppingToken))
+        {
+            while (await reader.ReadAsync(stoppingToken))
+            {
+                if (await reader.IsDBNullAsync(0, stoppingToken))
+                    continue;
+
+                sb.Append(await reader.GetFieldValueAsync<string>(0, stoppingToken));
+            }
+        }
+
+        return (sb.ToString(), lastVersion, seeding);
+    }
+
+    private async Task<JsonDocument> ParseResultAsync(EnvironmentConfig environment, TrackingObject trackingObject, string result)
+    {
+        try
+        {
+            return JsonDocument.Parse(result);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, $"[{environment.Name}] Failed to parse JSON for {trackingObject.Name}. " +
+                $"Result length: {result.Length} chars. First 200 chars: {result.Substring(0, Math.Min(200, result.Length))}... " +
+                $"Last 200 chars: ...{(result.Length > 200 ? result.Substring(result.Length - 200) : "")}");
+
+            // Save the problematic JSON to debug folder for inspection
+            if (Serilog.Log.IsEnabled(Serilog.Events.LogEventLevel.Debug))
+            {
+                Directory.CreateDirectory("debug");
+                var debugPath = Path.Combine("debug", $"debug_{Path.GetFileName(environment.Name)}_{Path.GetFileName(trackingObject.Name)}_{DateTime.UtcNow:yyyyMMddHHmmss}_partial.json");
+                await File.WriteAllTextAsync(debugPath, result);
+                _logger.LogDebug($"[{environment.Name}] Saved partial problematic JSON to: {debugPath}");
+            }
+            throw;
+        }
+    }
+
+    private async Task<long?> GetLastProcessedVersionAsync(string environmentName, string objectName)
     {
         using var conn = new SqliteConnection(_stateConnectionString);
         await conn.OpenAsync();
@@ -618,27 +636,31 @@ public class ChangeTrackingBackgroundService : BackgroundService
         ";
         command.Parameters.AddWithValue("@environmentName", environmentName);
         command.Parameters.AddWithValue("@objectName", objectName);
-        var result = await command.ExecuteScalarAsync();
-        return result is long version ? version : 0L;
+        return await command.ExecuteScalarAsync() is long version ? version : null;
     }
 
-    private async Task SetLastProcessedVersionAsync(string environmentName, string objectName, long version)
+    /// <summary>
+    /// Compare-and-swap on the watermark: writes only if the row is still what the cycle read
+    /// (<paramref name="expected"/> null meaning "no row"). False means someone else changed it
+    /// in the meantime, typically a reset from the dashboard, and that change wins.
+    /// </summary>
+    private async Task<bool> TryAdvanceVersionAsync(string environmentName, string objectName, long? expected, long version)
     {
         using var conn = new SqliteConnection(_stateConnectionString);
         await conn.OpenAsync();
         var command = conn.CreateCommand();
-        command.CommandText = @"
-            INSERT INTO LastVersions (EnvironmentName, ObjectName, LastVersion, LastUpdated)
-            VALUES (@environmentName, @objectName, @version, CURRENT_TIMESTAMP)
-            ON CONFLICT(EnvironmentName, ObjectName) 
-            DO UPDATE SET 
-                LastVersion = @version,
-                LastUpdated = CURRENT_TIMESTAMP
-        ";
+        command.CommandText = expected is null
+            ? @"INSERT INTO LastVersions (EnvironmentName, ObjectName, LastVersion, LastUpdated)
+                VALUES (@environmentName, @objectName, @version, CURRENT_TIMESTAMP)
+                ON CONFLICT(EnvironmentName, ObjectName) DO NOTHING"
+            : @"UPDATE LastVersions
+                SET LastVersion = @version, LastUpdated = CURRENT_TIMESTAMP
+                WHERE EnvironmentName = @environmentName AND ObjectName = @objectName AND LastVersion = @expected";
         command.Parameters.AddWithValue("@environmentName", environmentName);
         command.Parameters.AddWithValue("@objectName", objectName);
         command.Parameters.AddWithValue("@version", version);
-        await command.ExecuteNonQueryAsync();
+        if (expected is { } e) command.Parameters.AddWithValue("@expected", e);
+        return await command.ExecuteNonQueryAsync() > 0;
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
