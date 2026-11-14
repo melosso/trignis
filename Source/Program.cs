@@ -228,21 +228,24 @@ try
         .CreateProtector("Trignis.WebUi.Auth")
         .ToTimeLimitedDataProtector();
 
+    // The payload is a random session id, so logout can revoke this one cookie
     string GenerateAuthToken() =>
-        authProtector.Protect("authenticated", TimeSpan.FromHours(AuthTokenExpiryHours));
+        authProtector.Protect(Guid.NewGuid().ToString("N"), TimeSpan.FromHours(AuthTokenExpiryHours));
 
-    bool ValidateAuthToken(string token)
+    string? SessionIdOf(string token)
     {
         try
         {
-            authProtector.Unprotect(token);
-            return true;
+            return authProtector.Unprotect(token);
         }
         catch (System.Security.Cryptography.CryptographicException)
         {
-            return false;
+            return null;
         }
     }
+
+    bool ValidateAuthToken(string token) =>
+        SessionIdOf(token) is { } sessionId && !webUiAuth.IsSessionRevoked(sessionId);
 
     // Auth middleware: registered before static files so .html paths are also protected
     if (authEnabled)
@@ -344,6 +347,9 @@ try
 
             app.MapPost("/ui/api/auth/logout", (HttpContext context) =>
             {
+                if (context.Request.Cookies.TryGetValue(AuthCookieName, out var current) && SessionIdOf(current) is { } sessionId)
+                    webUiAuth.RevokeSession(sessionId, DateTime.UtcNow.AddHours(AuthTokenExpiryHours));
+
                 context.Response.Cookies.Append(AuthCookieName, "",
                     SessionCookie(context, httpOnly: true, DateTimeOffset.UnixEpoch));
                 context.Response.Cookies.Append(CsrfCookieName, "",
@@ -453,6 +459,8 @@ try
                             return Results.Ok(new { ok = true });
 
                         case DeadLetterReplayer.Outcome.Unroutable:
+                        case DeadLetterReplayer.Outcome.Paused:
+                        case DeadLetterReplayer.Outcome.InProgress:
                             return Results.Json(new { error = result.Reason }, statusCode: 409);
 
                         default:
@@ -600,6 +608,8 @@ try
                     name = env.Name,
                     provider = env.Provider,
                     paused = paused.Contains(PauseService.EnvironmentScope(env.Name)),
+                    // Set when the file on disk was rejected and this is the previous version still running
+                    config_error = envConfigService.LoadErrors.GetValueOrDefault(env.Name),
                     connection_string_keys = env.ConnectionStrings.Keys.ToArray(),
                     settings = new
                     {
@@ -707,7 +717,8 @@ try
                     var offset = (page - 1) * pageSize;
                     var dataCmd = conn.CreateCommand();
                     dataCmd.CommandText = $@"
-                    SELECT Id, SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage, Timestamp
+                    SELECT Id, SourceKey, TrackingObjectName, DatabaseName, DataHash, Data, ErrorMessage, Timestamp,
+                           Attempts, NextAttempt, FailedTargets
                     FROM DeadLetters {where}
                     ORDER BY Timestamp DESC
                     LIMIT @pageSize OFFSET @offset";
@@ -729,7 +740,11 @@ try
                             data_hash = reader.GetString(4),
                             data = reader.GetString(5),
                             error_message = reader.GetString(6),
-                            timestamp = reader.IsDBNull(7) ? null : reader.GetString(7)
+                            timestamp = reader.IsDBNull(7) ? null : reader.GetString(7),
+                            attempts = reader.GetInt32(8),
+                            max_attempts = globalSettings.DeadLetterMaxReplayAttempts,
+                            next_attempt = reader.IsDBNull(9) ? null : reader.GetString(9),
+                            failed_targets = DeadLetterService.ParseTargets(reader.IsDBNull(10) ? null : reader.GetString(10))
                         });
                     }
 

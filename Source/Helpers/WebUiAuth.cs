@@ -20,7 +20,12 @@ public sealed class WebUiAuth
     private readonly ConcurrentDictionary<string, DateTime> _csrfTokens = new();
     private long _lastPruneTicks = DateTime.UtcNow.Ticks;
 
-    private readonly record struct Attempt(int Failures, DateTime? LockedUntil);
+    // Enough for every real login form in flight; a flood past this evicts the oldest instead of growing
+    private const int MaxCsrfTokens = 10_000;
+
+    private readonly ConcurrentDictionary<string, DateTime> _revokedSessions = new();
+
+    private readonly record struct Attempt(int Failures, DateTime LastFailure, DateTime? LockedUntil);
 
     /// <summary>Returns a message to show the caller when blocked, or null when allowed.</summary>
     public string? CheckAccess(string clientIp)
@@ -43,16 +48,18 @@ public sealed class WebUiAuth
 
         _failedAttempts.AddOrUpdate(
             clientIp,
-            _ => new Attempt(1, null),
+            _ => new Attempt(1, now, null),
             (_, existing) =>
             {
-                // A lapsed lockout starts the count over rather than locking again immediately.
-                var failures = existing.LockedUntil is { } until && until < now
+                // A lapsed lockout, or failures older than a lockout would have lasted, start the
+                // count over: ten typos spread over a year are not a brute-force attempt.
+                var failures = (existing.LockedUntil is { } until && until < now) || now - existing.LastFailure > LockoutDuration
                     ? 1
                     : existing.Failures + 1;
 
                 return new Attempt(
                     failures,
+                    now,
                     failures >= MaxFailuresBeforeLockout ? now.Add(LockoutDuration) : null);
             });
     }
@@ -62,6 +69,12 @@ public sealed class WebUiAuth
     public string GenerateCsrfToken()
     {
         Prune();
+
+        // The endpoint is unauthenticated, so the store has to be bounded
+        if (_csrfTokens.Count >= MaxCsrfTokens)
+            foreach (var oldest in _csrfTokens.OrderBy(kvp => kvp.Value).Take(MaxCsrfTokens / 10).Select(kvp => kvp.Key).ToList())
+                _csrfTokens.TryRemove(oldest, out _);
+
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         _csrfTokens[token] = DateTime.UtcNow.AddSeconds(CsrfTokenLifetime.TotalSeconds);
         return token;
@@ -96,6 +109,15 @@ public sealed class WebUiAuth
             System.Text.Encoding.UTF8.GetBytes(headerValue),
             System.Text.Encoding.UTF8.GetBytes(cookieValue));
 
+    /// <summary>
+    /// Ends a session on the server, so a copied cookie stops working at logout rather than at expiry.
+    /// ponytail: held in memory, so a restart forgets it and the cookie works again until its
+    /// own 24h expiry. Persist the ids if that window matters.
+    /// </summary>
+    public void RevokeSession(string sessionId, DateTime expiresAt) => _revokedSessions[sessionId] = expiresAt;
+
+    public bool IsSessionRevoked(string sessionId) => _revokedSessions.ContainsKey(sessionId);
+
     public static string NewSessionCsrf() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
 
     private void Prune()
@@ -111,8 +133,11 @@ public sealed class WebUiAuth
         foreach (var token in _csrfTokens.Where(kvp => kvp.Value < now).Select(kvp => kvp.Key).ToList())
             _csrfTokens.TryRemove(token, out _);
 
+        foreach (var session in _revokedSessions.Where(kvp => kvp.Value < now).Select(kvp => kvp.Key).ToList())
+            _revokedSessions.TryRemove(session, out _);
+
         foreach (var ip in _failedAttempts
-                     .Where(kvp => kvp.Value.LockedUntil is { } until && until < now)
+                     .Where(kvp => kvp.Value.LockedUntil is { } until ? until < now : now - kvp.Value.LastFailure > LockoutDuration)
                      .Select(kvp => kvp.Key)
                      .ToList())
             _failedAttempts.TryRemove(ip, out _);
