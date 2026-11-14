@@ -7,10 +7,10 @@ description: Run Trignis with Docker or on Windows
 
 ## Requirements
 
-- [.NET 10+ Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0)
+- [.NET 10 Runtime and ASP.NET Core 10 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/10.0). Trignis requires both on Windows. The ASP.NET Core Runtime package does not include the .NET Runtime.
 - Microsoft SQL Server, or PostgreSQL 13 or newer
 
-## The encryption key
+## Prepare your environment
 
 Trignis encrypts connection strings and credentials in its configuration files. It needs a key before the first run, supplied as `TRIGNIS_ENCRYPTION_KEY`.
 
