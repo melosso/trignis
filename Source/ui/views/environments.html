@@ -81,7 +81,7 @@ function renderEnv(env, idx) {
   const objectRows = objects.length
     ? objects.map(o => `<tr>
         <td>${esc(o.name)}${o.paused ? ' <span class="badge badge-warning">Paused</span>' : ''}</td>
-        <td class="col-mono">${esc(o.table_name)}</td>
+        <td class="muted">${esc(o.table_name)}</td>
         <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">-</span>'}</td>
         <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '-')}</td>
         <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
@@ -112,6 +112,7 @@ function renderEnv(env, idx) {
       <span class="accordion-trigger-left">
         <span class="badge badge-muted">${esc(env.name)}</span>
         ${env.paused ? '<span class="badge badge-warning">Paused</span>' : ''}
+        ${env.config_error ? `<span class="badge badge-warning" title="${esc(env.config_error).replace(/"/g,'&quot;')}">Edit rejected, running previous config</span>` : ''}
         ${env.provider && env.provider !== 'mssql' ? `<span class="pill">${esc(env.provider)}</span>` : ''}
         <span style="font-size:0.8rem;font-weight:400;color:hsl(var(--muted-foreground))">${objects.length} objects · ${endpoints.length} endpoints</span>
       </span>

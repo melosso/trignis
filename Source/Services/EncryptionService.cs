@@ -267,101 +267,65 @@ namespace Trignis.Services
             if (!Directory.Exists(envDir))
                 return;
 
-            var files = Directory.GetFiles(envDir, "*.json", SearchOption.TopDirectoryOnly);
-            foreach (var file in files)
+            foreach (var file in Directory.GetFiles(envDir, "*.json", SearchOption.TopDirectoryOnly))
+                EncryptConfigFile(file);
+        }
+
+        /// <summary>
+        /// Encrypts any plain secrets in one environment file. Returns true when the file was
+        /// rewritten; a file with nothing left to encrypt is not touched, so calling this from
+        /// the file watcher does not trigger itself.
+        /// </summary>
+        public bool EncryptConfigFile(string file)
+        {
+            try
             {
-                try
+                var changed = false;
+                string? Encrypt(string key, string value)
                 {
-                    var content = File.ReadAllText(file);
-                    var jsonNode = JsonNode.Parse(content);
-                    if (jsonNode is JsonObject jsonObject)
+                    var encrypted = EncryptIfPlain(key, value);
+                    changed |= encrypted != null;
+                    return encrypted;
+                }
+
+                if (JsonNode.Parse(File.ReadAllText(file)) is not JsonObject jsonObject)
+                    return false;
+
+                if (jsonObject.TryGetPropertyValue("ConnectionStrings", out var csNode) && csNode is JsonObject csObj)
+                    JsonSecrets.MapProps(csObj, null, Encrypt);
+
+                if (jsonObject.TryGetPropertyValue("ChangeTracking", out var ctNode) && ctNode is JsonObject ctObj)
+                {
+                    // Legacy ApiAuth
+                    if (ctObj.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject aaObj)
+                        JsonSecrets.MapProps(aaObj, null, Encrypt);
+
+                    if (ctObj.TryGetPropertyValue("ApiEndpoints", out var aeNode) && aeNode is JsonArray aeArray)
                     {
-                        bool needsEncrypt = false;
-
-                        // Encrypt ConnectionStrings
-                        if (jsonObject.TryGetPropertyValue("ConnectionStrings", out var csNode) && csNode is JsonObject)
+                        foreach (var endpoint in aeArray)
                         {
-                            needsEncrypt = true;
-                        }
+                            if (endpoint is not JsonObject epObj) continue;
 
-                        JsonNode? ctNode = null;
-                        if (jsonObject.TryGetPropertyValue("ChangeTracking", out ctNode) && ctNode is JsonObject ctObject)
-                        {
-                            // Check ApiAuth (legacy)
-                            if (ctObject.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject)
-                            {
-                                needsEncrypt = true;
-                            }
+                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
+                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps, Encrypt);
 
-                            // Check if ApiEndpoints exist and have Auth or MessageQueue to encrypt
-                            if (ctObject.TryGetPropertyValue("ApiEndpoints", out var aeNode) && aeNode is JsonArray aeArray)
-                            {
-                                foreach (var endpoint in aeArray)
-                                {
-                                    if (endpoint is JsonObject epObj)
-                                    {
-                                        if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject)
-                                        {
-                                            needsEncrypt = true;
-                                        }
-                                        if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject)
-                                        {
-                                            needsEncrypt = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (needsEncrypt)
-                        {
-                            // Encrypt ConnectionStrings
-                            if (jsonObject.TryGetPropertyValue("ConnectionStrings", out csNode) && csNode is JsonObject csObj)
-                            {
-                                JsonSecrets.MapProps(csObj, null, EncryptIfPlain);
-                            }
-
-                            // Encrypt ChangeTracking sections
-                            if (ctNode is JsonObject ctObj)
-                            {
-                                // Encrypt legacy ApiAuth
-                                if (ctObj.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject aaObj)
-                                {
-                                    JsonSecrets.MapProps(aaObj, null, EncryptIfPlain);
-                                }
-
-                                // Encrypt ApiEndpoints
-                                if (ctObj.TryGetPropertyValue("ApiEndpoints", out var innerAeNode) && innerAeNode is JsonArray aeArray)
-                                {
-                                    foreach (var endpoint in aeArray)
-                                    {
-                                        if (endpoint is JsonObject epObj)
-                                        {
-                                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
-                                            {
-                                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps, EncryptIfPlain);
-                                            }
-
-                                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
-                                            {
-                                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps, EncryptIfPlain);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            var options = new JsonSerializerOptions { WriteIndented = true };
-                            var encryptedContent = JsonSerializer.Serialize(jsonObject, options);
-                            File.WriteAllText(file, encryptedContent);
-                            Log.Debug("Encrypted config file: {File}", file);
+                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
+                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps, Encrypt);
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Failed to encrypt config file: {File}", file);
-                }
+
+                if (!changed)
+                    return false;
+
+                File.WriteAllText(file, JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true }));
+                Log.Debug("Encrypted config file: {File}", file);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Failed to encrypt config file: {File}", file);
+                return false;
             }
         }
 

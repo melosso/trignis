@@ -1,11 +1,14 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Trignis.Helpers;
 using Trignis.Models;
 
@@ -22,6 +25,17 @@ public class EnvironmentConfigService : IDisposable
 {
     private readonly ILogger<EnvironmentConfigService> _logger;
     private readonly EncryptionService _encryptionService;
+    private readonly GlobalSettings _globalSettings;
+
+    // What a file held the last time it was applied. An editor saving twice, or our own
+    // encrypt-on-reload rewrite, raises events for content that is already running.
+    private readonly ConcurrentDictionary<string, string> _appliedHashes = new(StringComparer.OrdinalIgnoreCase);
+
+    // Environment name -> why its last edit was refused. The previous version keeps running.
+    private readonly ConcurrentDictionary<string, string> _loadErrors = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Environments whose file on disk was rejected and are running an older version of it.</summary>
+    public IReadOnlyDictionary<string, string> LoadErrors => _loadErrors;
 
     private volatile ImmutableList<EnvironmentConfig> _environments = ImmutableList<EnvironmentConfig>.Empty;
     private readonly object _lock = new();
@@ -39,10 +53,12 @@ public class EnvironmentConfigService : IDisposable
 
     public EnvironmentConfigService(
         ILogger<EnvironmentConfigService> logger,
-        EncryptionService encryptionService)
+        EncryptionService encryptionService,
+        IOptions<GlobalSettings>? globalSettings = null)
     {
         _logger = logger;
         _encryptionService = encryptionService;
+        _globalSettings = globalSettings?.Value ?? new GlobalSettings();
     }
 
     public void Initialize(List<EnvironmentConfig> environments, string envDir, string? selectedEnvironment = null)
@@ -93,6 +109,9 @@ public class EnvironmentConfigService : IDisposable
             _environments = _environments.RemoveAll(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
         }
 
+        _loadErrors.TryRemove(name, out _);
+        _appliedHashes.TryRemove(Path.GetFullPath(Path.Combine(_envDir, name + ".json")), out _);
+
         _logger.LogInformation("Environment '{Name}' removed (file deleted)", name);
         ConfigurationChanged?.Invoke(new EnvironmentChangeEvent { Removed = removed });
     }
@@ -114,13 +133,56 @@ public class EnvironmentConfigService : IDisposable
             if (_disposed) return;
         }
 
-        var newEnv = LoadFile(fullPath);
-        if (newEnv == null) return;
-
         // If a specific environment is selected, only react to that file
+        var name = Path.GetFileNameWithoutExtension(fullPath);
         if (!string.IsNullOrEmpty(_selectedEnvironment) &&
-            !newEnv.Name.Equals(_selectedEnvironment, StringComparison.OrdinalIgnoreCase))
+            !name.Equals(_selectedEnvironment, StringComparison.OrdinalIgnoreCase))
             return;
+
+        // Deleted before the debounce fired. Loading it anyway yields an empty configuration,
+        // which used to come back as a ghost environment with nothing in it.
+        if (!File.Exists(fullPath)) return;
+
+        // Same treatment a file gets at start-up: secrets encrypted, then validated
+        _encryptionService.EncryptConfigFile(fullPath);
+
+        string hash;
+        try
+        {
+            hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(fullPath)));
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning("Environment '{Name}': could not read '{Path}': {Error}", name, fullPath, ex.Message);
+            return;
+        }
+
+        var hashKey = Path.GetFullPath(fullPath);
+        if (_appliedHashes.TryGetValue(hashKey, out var applied) && applied == hash) return;
+
+        var newEnv = LoadFile(fullPath, out var loadError);
+        if (newEnv != null)
+        {
+            try
+            {
+                ConfigurationValidator.ValidateConfiguration([newEnv], _globalSettings, null);
+            }
+            catch (InvalidOperationException ex)
+            {
+                newEnv = null;
+                loadError = ex.Message;
+            }
+        }
+
+        if (newEnv == null)
+        {
+            _loadErrors[name] = loadError ?? "Failed to load";
+            _logger.LogError("Environment '{Name}': the change was rejected and the previous configuration keeps running", name);
+            return;
+        }
+
+        _loadErrors.TryRemove(name, out _);
+        _appliedHashes[hashKey] = hash;
 
         List<EnvironmentConfig> added = [];
         List<EnvironmentConfig> updated = [];
@@ -154,8 +216,11 @@ public class EnvironmentConfigService : IDisposable
         }
     }
 
-    internal EnvironmentConfig? LoadFile(string fullPath)
+    internal EnvironmentConfig? LoadFile(string fullPath) => LoadFile(fullPath, out _);
+
+    internal EnvironmentConfig? LoadFile(string fullPath, out string? error)
     {
+        error = null;
         var name = Path.GetFileNameWithoutExtension(fullPath);
         var relativePath = Path.GetRelativePath(".", fullPath);
 
@@ -203,6 +268,7 @@ public class EnvironmentConfigService : IDisposable
         catch (Exception ex)
         {
             _logger.LogError("Environment '{Name}': failed to load '{Path}': {Error}", name, relativePath, ex.Message);
+            error = ex.Message;
             return null;
         }
     }
