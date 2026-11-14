@@ -33,7 +33,6 @@ public class MessageQueueService : IAsyncDisposable
     private const int AWS_SQS_MAX_SIZE = 256 * 1024; // 256KB
     private const int AZURE_EH_MAX_SIZE = 1 * 1024 * 1024; // 1MB
     private const int KAFKA_DEFAULT_MAX_SIZE = 1 * 1024 * 1024; // 1MB (Kafka server default)
-    private const int COMPRESSION_THRESHOLD = 1024; // Compress messages > 1KB
 
     public MessageQueueService(ILogger<MessageQueueService> logger) => _logger = logger;
 
@@ -51,45 +50,56 @@ public class MessageQueueService : IAsyncDisposable
         _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)",
             endpoint.MessageQueueType, correlationId, messageSizeBytes);
 
-        // Get or create circuit breaker for this endpoint
-        var circuitBreaker = GetCircuitBreaker(endpoint.Key ?? "default");
+        // Size is settled before the breaker: an oversized payload is the payload's fault, and
+        // counting it would open the circuit on a broker that is perfectly healthy.
+        var queueType = endpoint.MessageQueueType?.ToLower();
+        var compressed = false;
+
+        switch (queueType)
+        {
+            case "rabbitmq":
+                ValidateMessageSize(messageSizeBytes, RABBITMQ_MAX_SIZE, "RabbitMQ");
+                break;
+            case "azureservicebus" when messageSizeBytes > AZURE_SB_STANDARD_MAX:
+            case "awssqs" when messageSizeBytes > AWS_SQS_MAX_SIZE:
+                messageBody = CompressMessage(messageBody);
+                messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
+                compressed = true;
+                ValidateMessageSize(messageSizeBytes,
+                    queueType == "awssqs" ? AWS_SQS_MAX_SIZE : AZURE_SB_STANDARD_MAX,
+                    queueType == "awssqs" ? "AWS SQS" : "Azure Service Bus");
+                break;
+            case "azureeventhubs":
+                ValidateMessageSize(messageSizeBytes, AZURE_EH_MAX_SIZE, "Azure Event Hubs");
+                break;
+            case "kafka":
+                ValidateMessageSize(messageSizeBytes, KAFKA_DEFAULT_MAX_SIZE, "Kafka");
+                break;
+        }
+
+        // One breaker per endpoint per environment; a bare key would be shared by every
+        // environment that happens to reuse the name
+        var circuitBreaker = GetCircuitBreaker($"{endpoint.EnvironmentFile}/{endpoint.Key ?? endpoint.MessageQueueTarget()}");
 
         try
         {
             await circuitBreaker.ExecuteAsync(async (ct) =>
             {
-                switch (endpoint.MessageQueueType?.ToLower())
+                switch (queueType)
                 {
                     case "rabbitmq":
-                        ValidateMessageSize(messageSizeBytes, RABBITMQ_MAX_SIZE, "RabbitMQ");
                         await SendToRabbitMQAsync(endpoint.MessageQueue, messageBody, correlationId, ct);
                         break;
                     case "azureservicebus":
-                        // Try compression if message is too large
-                        if (messageSizeBytes > AZURE_SB_STANDARD_MAX)
-                        {
-                            messageBody = CompressMessage(messageBody);
-                            messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
-                            ValidateMessageSize(messageSizeBytes, AZURE_SB_STANDARD_MAX, "Azure Service Bus");
-                        }
-                        await SendToAzureServiceBusAsync(endpoint.MessageQueue, messageBody, correlationId, messageSizeBytes > COMPRESSION_THRESHOLD, ct);
+                        await SendToAzureServiceBusAsync(endpoint.MessageQueue, messageBody, correlationId, compressed, ct);
                         break;
                     case "awssqs":
-                        // Try compression if message is too large
-                        if (messageSizeBytes > AWS_SQS_MAX_SIZE)
-                        {
-                            messageBody = CompressMessage(messageBody);
-                            messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
-                            ValidateMessageSize(messageSizeBytes, AWS_SQS_MAX_SIZE, "AWS SQS");
-                        }
-                        await SendToAwsSqsAsync(endpoint.MessageQueue, messageBody, correlationId, messageSizeBytes > COMPRESSION_THRESHOLD, ct);
+                        await SendToAwsSqsAsync(endpoint.MessageQueue, messageBody, correlationId, compressed, ct);
                         break;
                     case "azureeventhubs":
-                        ValidateMessageSize(messageSizeBytes, AZURE_EH_MAX_SIZE, "Azure Event Hubs");
                         await SendToAzureEventHubsAsync(endpoint.MessageQueue, messageBody, correlationId, ct);
                         break;
                     case "kafka":
-                        ValidateMessageSize(messageSizeBytes, KAFKA_DEFAULT_MAX_SIZE, "Kafka");
                         await SendToKafkaAsync(endpoint.MessageQueue, messageBody, correlationId, ct);
                         break;
                     default:
@@ -163,7 +173,11 @@ public class MessageQueueService : IAsyncDisposable
         IChannel? channel = null;
         try
         {
-            channel = await connection.CreateChannelAsync(cancellationToken: cancellationToken);
+            // With confirmations tracked, BasicPublishAsync completes only once the broker has
+            // taken the message and throws if it is nacked or, being mandatory, returned as unroutable
+            channel = await connection.CreateChannelAsync(
+                new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
+                cancellationToken);
 
             var body = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(message));
             var properties = new BasicProperties
@@ -238,7 +252,8 @@ public class MessageQueueService : IAsyncDisposable
             _logger.LogError(ex, "Failed to send to RabbitMQ (Host: {Host}, CorrelationId: {CorrelationId})",
                 config.HostName, correlationId);
 
-            _rabbitConnections.TryRemove(connectionKey, out _);
+            // The connection stays cached: GetOrCreateConnectionAsync swaps out a closed one, and
+            // dropping an open one here leaked it for good, since it recovers itself.
             throw new InvalidOperationException($"RabbitMQ publish failed: {ex.Message}", ex);
         }
         finally
@@ -580,6 +595,9 @@ public class MessageQueueService : IAsyncDisposable
 
         var producerKey = $"{config.BootstrapServers}:{config.Topic}:{config.Username}";
 
+        // Kept across failures: a producer reconnects by itself and other environment loops may
+        // be mid-send on it, so disposing it on an error only moved the failure to them.
+        // ponytail: GetOrAdd can build two producers in a race and leak the loser; wrap in Lazy if seen.
         var producer = _kafkaProducers.GetOrAdd(producerKey, _ =>
         {
             var producerConfig = new ProducerConfig
@@ -637,8 +655,6 @@ public class MessageQueueService : IAsyncDisposable
         {
             _logger.LogError(ex, "Failed to send to Kafka topic '{Topic}' (CorrelationId: {CorrelationId})",
                 config.Topic, correlationId);
-            _kafkaProducers.TryRemove(producerKey, out _);
-            producer.Dispose();
             throw new InvalidOperationException($"Kafka publish failed: {ex.Error.Reason}", ex);
         }
         catch (OperationCanceledException)
@@ -650,8 +666,6 @@ public class MessageQueueService : IAsyncDisposable
         {
             _logger.LogError(ex, "Failed to send to Kafka topic '{Topic}' (CorrelationId: {CorrelationId})",
                 config.Topic, correlationId);
-            _kafkaProducers.TryRemove(producerKey, out _);
-            producer.Dispose();
             throw new InvalidOperationException($"Kafka publish failed: {ex.Message}", ex);
         }
     }

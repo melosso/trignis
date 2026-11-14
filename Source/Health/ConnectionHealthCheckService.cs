@@ -27,6 +27,10 @@ public class ConnectionHealthCheckService : BackgroundService
 
     private readonly EnvironmentConfigService _envConfigService;
 
+    // ponytail: Kafka and Event Hubs have no probe; add cases to CheckMessageQueueHealthAsync to cover them
+    private static readonly HashSet<string> ProbedQueueTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "rabbitmq", "azureservicebus", "awssqs" };
+
     public ConnectionHealthCheckService(
         ILogger<ConnectionHealthCheckService> logger,
         IOptions<GlobalSettings> globalSettings,
@@ -86,6 +90,8 @@ public class ConnectionHealthCheckService : BackgroundService
                 Provider: e.Provider)))
             .ToArray();
 
+        var seen = new HashSet<string>(sqlChecks.Select(c => c.Key));
+
         foreach (var (key, connStr, provider) in sqlChecks)
         {
             try
@@ -106,14 +112,17 @@ public class ConnectionHealthCheckService : BackgroundService
         }
 
         // Check message queue endpoints
+        // Keyed by environment as well: two environments may reuse an endpoint name.
+        // Types with no probe are left out rather than reported as down.
         var mqEndpoints = environments
-            .SelectMany(e => e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>())
-            .Where(e => !string.IsNullOrEmpty(e.MessageQueueType))
+            .SelectMany(e => (e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>())
+                .Where(ep => ProbedQueueTypes.Contains(ep.MessageQueueType ?? ""))
+                .Select(ep => (Key: $"{ep.MessageQueueType}:{e.Name}/{ep.Key ?? "unnamed"}", Endpoint: ep)))
             .ToArray();
 
-        foreach (var endpoint in mqEndpoints)
+        foreach (var (key, endpoint) in mqEndpoints)
         {
-            var key = $"{endpoint.MessageQueueType}:{endpoint.Key ?? "unnamed"}";
+            seen.Add(key);
             try
             {
                 var isHealthy = await CheckMessageQueueHealthAsync(endpoint);
@@ -126,6 +135,10 @@ public class ConnectionHealthCheckService : BackgroundService
             }
         }
 
+        // Forget connections whose environment or endpoint is gone
+        foreach (var stale in _healthStatus.Keys.Where(k => !seen.Contains(k)).ToList())
+            _healthStatus.TryRemove(stale, out _);
+
         _logger.LogDebug("Connection health checks completed ({Sql} SQL, {Mq} MQ)",
             sqlChecks.Length, mqEndpoints.Length);
     }
@@ -134,7 +147,9 @@ public class ConnectionHealthCheckService : BackgroundService
     {
         _healthStatus.AddOrUpdate(
             key,
-            addValueFactory: _ => new ConnectionHealth { IsHealthy = isHealthy },
+            addValueFactory: _ => isHealthy
+                ? new ConnectionHealth { IsHealthy = true }
+                : new ConnectionHealth { IsHealthy = false, LastFailureTime = DateTime.UtcNow, ConsecutiveFailures = 1 },
             updateValueFactory: (_, previous) =>
             {
                 if (isHealthy && !previous.IsHealthy)
