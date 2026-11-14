@@ -29,6 +29,10 @@ internal sealed class StressHost : IAsyncDisposable
     public string EnvDir { get; }
     public EnvironmentConfigService ConfigService { get; }
     public ChangeTrackingBackgroundService Service { get; }
+    public DeadLetterService DeadLetters { get; }
+    public DeadLetterReplayer Replayer { get; }
+    public PauseService Pauses { get; }
+    public string StateDb => Path.Combine(Root, "state.db");
 
     // Set TRIGNIS_STRESS_LOG to a file path to capture service logs while debugging a stress run
     private static readonly string? LogPath = Environment.GetEnvironmentVariable("TRIGNIS_STRESS_LOG");
@@ -45,6 +49,11 @@ internal sealed class StressHost : IAsyncDisposable
         EnvDir = Path.Combine(Root, "environments");
         Directory.CreateDirectory(EnvDir);
         Environment.CurrentDirectory = AppContext.BaseDirectory;
+
+        // DeadLetterService hard-codes a relative sinkhole.db, which therefore lands here and
+        // would otherwise carry dead letters from one test into the next
+        SqliteConnection.ClearAllPools();
+        File.Delete(Path.Combine(AppContext.BaseDirectory, "sinkhole.db"));
 
         var settings = Options.Create(new GlobalSettings
         {
@@ -64,7 +73,7 @@ internal sealed class StressHost : IAsyncDisposable
         ConfigService = new EnvironmentConfigService(Log<EnvironmentConfigService>(), encryption);
 
         var retries = new RetryPolicies(Log<RetryPolicies>(), settings);
-        var deadLetters = new DeadLetterService(Log<DeadLetterService>(), settings);
+        var deadLetters = DeadLetters = new DeadLetterService(Log<DeadLetterService>(), settings);
         var exports = new ExportService(
             Log<ExportService>(),
             new StubHttpClientFactory(),
@@ -82,8 +91,12 @@ internal sealed class StressHost : IAsyncDisposable
             exports,
             retries,
             ConfigService,
-            new PauseService(config));
+            Pauses = new PauseService(config));
+
+        Replayer = new DeadLetterReplayer(deadLetters, exports, ConfigService, Pauses);
     }
+
+    public void WriteEnvJson(string name, string json) => File.WriteAllText(EnvFile(name), json);
 
     public async Task StartAsync()
     {

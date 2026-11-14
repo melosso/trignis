@@ -1,0 +1,32 @@
+# Throwaway databases for the parity and stress tests. One of each supported platform, so
+# every pipeline scenario runs against both. Local-only credentials; nothing here is a secret.
+#
+#   docker compose -f Tests/parity/docker-compose.yml up -d --wait
+#   Tests/parity/run.sh
+#   docker compose -f Tests/parity/docker-compose.yml down -v
+name: trignis-parity
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Parity_Test_1433!"
+    ports:
+      - "127.0.0.1:14333:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Parity_Test_1433!' -Q 'select 1' -b"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: "parity_test"
+    ports:
+      - "127.0.0.1:54329:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

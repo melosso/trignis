@@ -255,4 +255,49 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         insert.Parameters.AddWithValue("@h", hash);
         await insert.ExecuteNonQueryAsync();
     }
+
+    // Failed destinations
+    [Fact]
+    public async Task SaveDeadLetterAsync_RemembersWhichDestinationsFailed_AndMergesARepeat()
+    {
+        var data = JsonDocument.Parse(@"[{""id"":1}]").RootElement;
+
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("a down"), failedTargets: ["HTTP:a"]);
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("b down"), failedTargets: ["HTTP:b", "HTTP:a"]);
+
+        var record = Assert.Single(await _svc.GetDueForReplayAsync(5, 10));
+        Assert.Equal(["HTTP:a", "HTTP:b"], record.FailedTargets);
+    }
+
+    [Fact]
+    public async Task SaveDeadLetterAsync_WithoutTargets_MeansEveryDestination()
+    {
+        var data = JsonDocument.Parse(@"[{""id"":1}]").RootElement;
+
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("err"));
+        // A later narrower failure must not shrink "everything" down to one destination
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("err"), failedTargets: ["HTTP:a"]);
+
+        Assert.Null(Assert.Single(await _svc.GetDueForReplayAsync(5, 10)).FailedTargets);
+    }
+
+    [Fact]
+    public async Task DeferAsync_PostponesWithoutSpendingAnAttempt()
+    {
+        var data = JsonDocument.Parse(@"[{""id"":1}]").RootElement;
+        await _svc.SaveDeadLetterAsync("TestEnv", "Orders", "SalesDB", data, new Exception("err"));
+        var record = Assert.Single(await _svc.GetDueForReplayAsync(5, 10));
+
+        await _svc.DeferAsync(record.Id, DateTime.UtcNow.AddMinutes(5));
+
+        Assert.Empty(await _svc.GetDueForReplayAsync(5, 10));
+        Assert.Equal(0, (await _svc.GetAsync(record.Id))!.Attempts);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    public void ParseTargets_FallsBackToEveryDestination_OnMissingOrBrokenValue(string? stored) =>
+        Assert.Null(DeadLetterService.ParseTargets(stored));
 }
