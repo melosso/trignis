@@ -87,8 +87,8 @@ function renderEnv(env, idx) {
         <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
         <td style="text-align:right">${
           o.paused
-            ? `<button class="btn btn-outline btn-icon" title="Resume this object" onclick="resumeScope('${esc(env.name)}','${esc(o.name)}')">Resume</button>`
-            : `<button class="btn btn-ghost btn-icon" title="Pause this object" onclick="askPause('${esc(env.name)}','${esc(o.name)}')">Pause</button>`
+            ? `<button class="btn-icon" aria-label="Resume this object" data-tippy-content="Resume this object" onclick="resumeScope('${esc(env.name)}','${esc(o.name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg></button>`
+            : `<button class="btn-icon" aria-label="Pause this object" data-tippy-content="Pause this object" onclick="askPause('${esc(env.name)}','${esc(o.name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg></button>`
         }</td>
       </tr>`).join('')
     : '<tr><td colspan="6" class="empty-state">No tracking objects</td></tr>';

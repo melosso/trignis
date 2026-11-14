@@ -1,4 +1,9 @@
+<script src="/lib/popper/popper.min.js"></script>
+<script src="/lib/tippy/tippy-bundle.umd.min.js"></script>
 <script>
+// One delegated instance: rows are re-rendered with innerHTML, so per-element tooltips would be lost.
+tippy.delegate(document.body, { target: '[data-tippy-content]', arrow: false, delay: [300, 0], offset: [0, 6] });
+
 // Double-submit: echo the session CSRF cookie back in a header. .NET URL-encodes cookie values, so decode to match what the server reads.
 function csrfToken() {
   const entry = document.cookie.split('; ').find(c => c.startsWith('trignis_csrf='));

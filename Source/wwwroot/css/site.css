@@ -1,4 +1,5 @@
 :root {
+    color-scheme: light;
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --muted: 240 4.8% 95.9%;
@@ -13,13 +14,24 @@
     --radius: 0.5rem;
     --sidebar-width: 220px;
     --app-font: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
-    /* Paired mono for versions, hashes, timestamps and payloads. Previously left to
-       whatever each OS shipped, so data columns aligned differently per machine. */
+    /* Paired mono for hashes, code identifiers, URLs, logs and payloads only. */
     --mono-font: "IBM Plex Mono", ui-monospace, "Cascadia Code", "Consolas", monospace;
 }
 
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --border: 240 3.7% 15.9%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+}
+
 @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
         --background: 240 10% 3.9%;
         --foreground: 0 0% 98%;
         --muted: 240 3.7% 15.9%;
@@ -41,6 +53,8 @@ body {
     width: 100vw;
     overflow: hidden;
     font-size: 14px;
+    /* Scales every face to Inter's x-height: equal apparent size across Plex and system fallbacks. */
+    font-size-adjust: ex-height 0.55;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
 }
@@ -58,6 +72,43 @@ aside {
     padding: 1.25rem 0.875rem;
     height: 100%;
     overflow-y: auto;
+    /* Resets the UA popover box: in the desktop layout the sidebar is a plain column. */
+    position: relative;
+    inset: auto;
+    margin: 0;
+    border-width: 0 1px 0 0;
+    background: hsl(var(--background));
+    color: inherit;
+}
+
+.mobile-bar { display: none; }
+
+/* Narrow screens: the sidebar becomes a native popover drawer opened from the top bar. */
+@media (max-width: 768px) {
+    body { flex-direction: column; }
+
+    .mobile-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.375rem 0.5rem;
+        border-bottom: 1px solid hsl(var(--border));
+        flex-shrink: 0;
+    }
+
+    main { min-height: 0; }
+
+    #sidebar:not(:popover-open) { display: none; }
+
+    #sidebar:popover-open {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: min(300px, 85vw);
+        height: 100dvh;
+        box-shadow: 0 10px 30px hsl(0 0% 0% / 0.25);
+    }
+
+    #sidebar::backdrop { background: hsl(0 0% 0% / 0.5); }
 }
 
 .brand {
@@ -93,8 +144,9 @@ aside {
 }
 
 @media (prefers-color-scheme: dark) {
-    .brand-avatar-bg { filter: none; }
+    :root:not([data-theme="light"]) .brand-avatar-bg { filter: none; }
 }
+:root[data-theme="dark"] .brand-avatar-bg { filter: none; }
 
 .brand-avatar-icon {
     position: relative;
@@ -111,10 +163,8 @@ aside {
 .nav-group { margin-bottom: 1.25rem; }
 
 .nav-label {
-    font-size: 0.68rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    font-size: 0.75rem;
+    font-weight: 500;
     color: hsl(var(--muted-foreground));
     padding: 0 0.75rem;
     margin-bottom: 0.375rem;
@@ -358,6 +408,8 @@ th {
 
 td {
     padding: 0.875rem 1rem;
+    /* Keeps version and timestamp columns aligned without a monospace face. */
+    font-variant-numeric: tabular-nums;
     border-bottom: 1px solid hsl(var(--border));
     vertical-align: middle;
 }
@@ -565,7 +617,6 @@ select:focus { border-color: hsl(var(--primary)); }
 .accordion-section-title {
     font-size: 0.7rem;
     font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.05em;
     color: hsl(var(--muted-foreground));
     margin-bottom: 0.75rem;
@@ -587,8 +638,6 @@ select:focus { border-color: hsl(var(--primary)); }
 }
 
 .kv-val {
-    font-family: var(--mono-font);
-    font-size: 0.75rem;
     word-break: break-all;
 }
 
@@ -629,8 +678,7 @@ select:focus { border-color: hsl(var(--primary)); }
 }
 
 .settings-item-value {
-    font-family: var(--mono-font);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     color: hsl(var(--muted-foreground));
     text-align: right;
     flex-shrink: 0;
@@ -907,7 +955,31 @@ select:focus { border-color: hsl(var(--primary)); }
 
 .github-link:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); border-color: hsl(var(--border)); }
 
+.theme-toggle {
+    display: flex;
+    padding: 0.45rem;
+    border-radius: var(--radius);
+    color: hsl(var(--muted-foreground));
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.theme-toggle:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); border-color: hsl(var(--border)); }
+/* Pushes the toggle and the GitHub link to the right of the version. */
+.sidebar-footer-meta .theme-toggle { margin-left: auto; }
+/* Above the full-screen auth overlay. */
+.auth-theme-toggle { position: fixed; top: 1rem; right: 1rem; z-index: 2001; }
+.theme-icon { display: none; }
+/* Icon shows the target theme, matching the aria-label action. */
+.theme-toggle[data-mode="light"] .theme-icon--dark,
+.theme-toggle[data-mode="dark"] .theme-icon--light { display: block; }
+
 /* ── Tooltips ────────────────────────────────────────────── */
+
+/* Tippy (vendored, /lib/tippy) restyled to match .tooltip. */
+.tippy-box { background: hsl(var(--foreground)); color: hsl(var(--background)); font-size: 0.72rem; font-weight: 500; border-radius: var(--radius); }
+.tippy-content { padding: 0.3rem 0.6rem; }
 
 .tooltip-wrapper { position: relative; display: inline-flex; }
 

@@ -178,8 +178,8 @@ async function loadSyncState() {
       </tr>`;
       const objRows = objs.map(obj => `<tr>
         <td>${esc(obj.object_name)}</td>
-        <td class="col-mono">${obj.last_version ?? '-'}</td>
-        <td class="col-mono" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
+        <td class="muted">${obj.last_version ?? '-'}</td>
+        <td class="muted" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
         <td style="text-align:right">
           <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem"
                   onclick="resetSync('${esc(env.name)}', '${esc(obj.object_name)}')"
