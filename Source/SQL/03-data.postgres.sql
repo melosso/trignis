@@ -1,6 +1,5 @@
 /*
-    Sample activity for the PostgreSQL setup, mirroring 03-data.sqlserver.sql.
-    Run 01-change-tracking-setup.postgres.sql and one of the 02 scripts first.
+    Sample activity for the PostgreSQL setup. Run 01-change-tracking-setup.postgres.sql and one 02 script first.
 */
 
 /*

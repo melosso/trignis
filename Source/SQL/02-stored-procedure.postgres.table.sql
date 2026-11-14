@@ -1,9 +1,4 @@
--- The function Trignis calls. Run 01-change-tracking-setup.postgres.sql first.
---
--- Note: this must be a FUNCTION, not a PROCEDURE. A PostgreSQL procedure cannot return a
--- value, and Trignis reads the JSON document from the first column of the first result.
---
--- Trignis invokes it as:  SELECT web.get_training_sessions_sync(@JsonParam::json)
+-- Function that Trignis calls: SELECT web.get_training_sessions_sync(@JsonParam::json). Run 01-change-tracking-setup.postgres.sql first. Must be a FUNCTION: Trignis reads the JSON from the first column of the first result.
 
 CREATE OR REPLACE FUNCTION web.get_training_sessions_sync(payload json)
 RETURNS json AS $$
@@ -11,20 +6,13 @@ DECLARE
     from_version BIGINT  := COALESCE((payload ->> 'fromVersion')::BIGINT, 0);
     seeding      BOOLEAN := COALESCE(payload ->> 'mode', 'sync') = 'seed';
 
-    -- Oldest transaction still running. Anything committed by an older transaction is
-    -- visible for good; anything at or above it may still be in flight.
-    --
-    -- This is the part that is easy to get wrong. An identity column is assigned at INSERT,
-    -- not at COMMIT, so ids become visible out of order. Storing plain MAX(id) would skip
-    -- any lower id still uncommitted, permanently. Filtering on the horizon defers those
-    -- rows to the next cycle instead, in order.
+    -- Oldest running transaction. Ids are assigned at INSERT and commit out of order: rows at or above the horizon are deferred to the next cycle, and MAX(id) alone skips uncommitted lower ids.
     horizon      xid8    := pg_snapshot_xmin(pg_current_snapshot());
 
     max_version  BIGINT;
     rows_json    json;
 BEGIN
-    -- The watermark must come through the same horizon as the rows. Using the horizon for
-    -- the rows but MAX(id) for the version reintroduces exactly the gap it prevents.
+    -- The watermark uses the same horizon as the rows: MAX(id) without the horizon skips uncommitted rows.
     SELECT COALESCE(MAX(id), from_version)
       INTO max_version
       FROM public.training_sessions_outbox
@@ -68,34 +56,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- SECURITY DEFINER runs as the owner, so row-level security on the tracked table cannot
--- silently hide changes from Trignis. Pin the search path or that becomes an injection route.
+-- SECURITY DEFINER runs as the owner: row-level security on the tracked table does not hide changes. A fixed search_path prevents injection.
 ALTER FUNCTION web.get_training_sessions_sync(json) SET search_path = public, pg_temp;
 
 GRANT EXECUTE ON FUNCTION web.get_training_sessions_sync(json) TO dotnetwebapp;
 
--- Matching environment file:
---
--- {
---   "Provider": "postgres",
---   "ConnectionStrings": {
---     "PrimaryDatabase": "Host=localhost;Database=primary;Username=dotnetwebapp;Password=..."
---   },
---   "ChangeTracking": {
---     "ExportToFile": true,
---     "TrackingObjects": [
---       {
---         "Name": "TrainingSessions",
---         "Database": "PrimaryDatabase",
---         "TableName": "public.training_sessions",
---         "StoredProcedureName": "web.get_training_sessions_sync"
---       }
---     ]
---   }
--- }
---
--- The outbox grows until you trim it. Trignis cannot do that for you, because it does not
--- know which consumer is furthest behind. Delete below the version shown on the dashboard,
--- keeping a margin, and never above it:
---
---   DELETE FROM public.training_sessions_outbox WHERE id <= <last processed version> - 100000;
+-- Environment file example and outbox cleanup: https://melosso.github.io/trignis/reference/stored-procedure (PostgreSQL).

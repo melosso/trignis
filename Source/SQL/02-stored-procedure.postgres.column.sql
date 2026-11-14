@@ -1,21 +1,10 @@
--- Column-level tracking for PostgreSQL. Run 01-change-tracking-setup.postgres.sql first.
---
--- This is the PostgreSQL counterpart to 02-stored-procedure.sqlserver.column.sql. Where SQL
--- Server exposes a change mask you read with CHANGE_TRACKING_IS_COLUMN_IN_MASK, PostgreSQL
--- has no such thing, so the trigger works out which columns actually changed and records
--- their names alongside the row.
---
--- Like the SQL Server version, this is opt-in: the table-level script is the simpler default,
--- and you only need this one when your consumers care about distinguishing "unchanged" from
--- "set to null".
+-- Column-level tracking for PostgreSQL (optional). Run 01-change-tracking-setup.postgres.sql first. The trigger records the names of changed columns: consumers can distinguish an unchanged column from a column set to NULL.
 
 -- Add the change mask to the outbox created by 01
 ALTER TABLE public.training_sessions_outbox
     ADD COLUMN IF NOT EXISTS changed TEXT[];
 
--- Replace the capture trigger with one that records which columns moved.
--- IS DISTINCT FROM is used rather than <> so that a change to or from NULL counts,
--- which a plain inequality would quietly miss.
+-- Capture trigger that records changed column names. IS DISTINCT FROM detects changes to and from NULL.
 CREATE OR REPLACE FUNCTION public.training_sessions_capture() RETURNS TRIGGER AS $$
 DECLARE
     changed_columns TEXT[] := '{}';
@@ -37,8 +26,7 @@ BEGIN
         IF NEW.adjusted_steps    IS DISTINCT FROM OLD.adjusted_steps    THEN changed_columns := changed_columns || 'AdjustedSteps'::TEXT;    END IF;
         IF NEW.adjusted_distance IS DISTINCT FROM OLD.adjusted_distance THEN changed_columns := changed_columns || 'AdjustedDistance'::TEXT; END IF;
 
-        -- An UPDATE that changed nothing still fires the trigger. Recording it would send
-        -- a row with every column null, which reads downstream as "everything was cleared".
+        -- Skip an UPDATE that changed no column: a recorded row has every column null and reads downstream as cleared.
         IF changed_columns = '{}' THEN
             RETURN NEW;
         END IF;
@@ -55,8 +43,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Emits a column only when the change actually touched it. Inserts carry every column,
--- matching how the SQL Server column-tracking example treats SYS_CHANGE_OPERATION = 'I'.
+-- Emits a column if the change includes it. Inserts include every column, as in the SQL Server column-tracking example.
 CREATE OR REPLACE FUNCTION web.get_training_sessions_sync(payload json)
 RETURNS json AS $$
 DECLARE
@@ -81,14 +68,9 @@ BEGIN
     SELECT COALESCE(json_agg(json_strip_nulls(json_build_object(
                '$operation',       o.operation,
                '$version',         o.id,
-               -- Ground truth for which columns moved. Without this a consumer cannot tell a
-               -- column that was set to NULL from one that was never touched, because
-               -- json_strip_nulls removes both. Absent from the payload but present here
-               -- means the value was cleared.
+               -- Names of changed columns. A name in $changed with no key in the payload = the column was set to NULL (json_strip_nulls removes null keys).
                '$changed',         CASE WHEN o.operation = 'U' THEN o.changed END,
-               -- A NULL mask means the row predates column tracking, so $changed is absent
-               -- and every column is sent. Absent $changed on an update therefore reads as
-               -- "mask unknown, treat this as a full row" rather than "nothing changed".
+               -- NULL mask = the row predates column tracking: $changed is absent and every column is sent. Treat an update without $changed as a full row.
                'Id',               o.session_id,
                'RecordedOn',       CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'RecordedOn'       = ANY(o.changed) THEN o.recorded_on       END,
                'Type',             CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'Type'              = ANY(o.changed) THEN o.type              END,
@@ -117,17 +99,4 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 ALTER FUNCTION web.get_training_sessions_sync(json) SET search_path = public, pg_temp;
 GRANT EXECUTE ON FUNCTION web.get_training_sessions_sync(json) TO dotnetwebapp;
 
--- Reading the payload downstream:
---
---   $operation = 'I'  the full row, though NULL columns are stripped, so a missing key
---                     on an insert simply means that column is NULL
---   $operation = 'U'  $changed lists the columns that moved. For each name in that list,
---                     a matching key in the payload is the new value, and a missing key
---                     means the column was set to NULL. If $changed itself is absent the
---                     mask was never recorded, so treat the payload as a full row.
---   $operation = 'D'  only Id is present, the row is gone
---
--- Columns absent from both the payload and $changed did not change, so leave them alone.
--- Sending NULL for an unchanged column instead would be the same mistake as
--- INCLUDE_NULL_VALUES with column tracking on SQL Server: the consumer can no longer
--- distinguish "untouched" from "cleared", and quietly wipes data it was never told to.
+-- Payload semantics for consumers: https://melosso.github.io/trignis/reference/stored-procedure (PostgreSQL, Column-level tracking).

@@ -1,11 +1,4 @@
--- Sets up a PostgreSQL database for Trignis: a role, the tracked table, and the outbox
--- that makes its changes visible.
---
--- Note: PostgreSQL has no built-in equivalent of SQL Server change tracking. There is nothing
--- to switch on at the database level. Instead, a trigger writes every change to an outbox
--- table, whose BIGSERIAL id becomes the version Trignis tracks.
---
--- Requires PostgreSQL 13 or newer for pg_current_xact_id() and pg_snapshot_xmin().
+-- PostgreSQL 13+ setup: a role, the tracked table and an outbox table. A trigger writes each change to the outbox; the outbox BIGSERIAL id is the version.
 
 -- Create a role for the application if it does not exist
 DO $$
@@ -36,8 +29,7 @@ CREATE TABLE public.training_sessions
     adjusted_distance NUMERIC(9, 6)
 );
 
--- The outbox. Its id is the version Trignis stores; xact_id is what keeps concurrent
--- inserts from being skipped. See 02-stored-procedure.postgres.sql.
+-- Outbox table. id is the version that Trignis stores; xact_id prevents skipped concurrent inserts (see 02-stored-procedure.postgres.table.sql).
 DROP TABLE IF EXISTS public.training_sessions_outbox;
 CREATE TABLE public.training_sessions_outbox
 (
@@ -58,8 +50,7 @@ CREATE TABLE public.training_sessions_outbox
 
 CREATE INDEX training_sessions_outbox_xact_idx ON public.training_sessions_outbox (xact_id, id);
 
--- One trigger covering all three operations. DELETE has to read OLD, because the base row
--- is already gone by the time anything else could look for it.
+-- One trigger for INSERT, UPDATE and DELETE. DELETE reads OLD: the base row no longer exists.
 CREATE OR REPLACE FUNCTION public.training_sessions_capture() RETURNS TRIGGER AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
@@ -84,6 +75,5 @@ CREATE TRIGGER training_sessions_capture
 AFTER INSERT OR UPDATE OR DELETE ON public.training_sessions
 FOR EACH ROW EXECUTE FUNCTION public.training_sessions_capture();
 
--- Trignis only ever calls the function, so it needs no rights on the tables themselves.
--- The function is SECURITY DEFINER in 02, which also sidesteps row-level security.
+-- Trignis calls the function and requires no table rights. The function is SECURITY DEFINER (see 02), which bypasses row-level security.
 GRANT SELECT ON public.training_sessions_outbox TO dotnetwebapp;

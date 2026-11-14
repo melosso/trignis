@@ -1,11 +1,4 @@
--- Column-level tracking for SQL Server: emit only the columns an update actually touched.
---
--- This example uses dbo.Items, matching the walkthrough in the documentation, rather than the
--- dbo.TrainingSessions table created by 01. It therefore creates what it needs, so the script
--- runs whichever order you work through the folder in.
---
--- Without this, SQL Server would still create the procedure without complaint (name resolution
--- is deferred) and only fail with "Invalid object name" when Trignis first calls it.
+-- Column-level tracking for SQL Server: emits the columns that an update changed. Uses dbo.Items from the documentation and creates the table: the script has no dependency on 01.
 
 IF OBJECT_ID('dbo.Items') IS NULL
 BEGIN
@@ -18,8 +11,7 @@ BEGIN
 END
 GO
 
--- Column tracking has to be switched on explicitly, or SYS_CHANGE_COLUMNS is always empty
--- and every update reports that nothing changed.
+-- Column tracking must be enabled explicitly: SYS_CHANGE_COLUMNS is empty without it.
 IF NOT EXISTS (SELECT * FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID('dbo.Items'))
 BEGIN
     ALTER TABLE dbo.Items ENABLE CHANGE_TRACKING WITH (TRACK_COLUMNS_UPDATED = ON);
@@ -78,10 +70,7 @@ BEGIN
 					SELECT
 						ct.SYS_CHANGE_OPERATION AS '$operation',
 						ct.SYS_CHANGE_VERSION AS '$version',
-						-- Which columns actually moved. FOR JSON PATH omits null properties, so
-						-- without this a column cleared to NULL and a column left untouched both
-						-- arrive as an absent key and a consumer cannot tell them apart. It would
-						-- silently drop the clearing, and the version advances past it for good.
+						-- Names of changed columns. FOR JSON PATH omits null properties: without $changed a consumer cannot distinguish a column set to NULL from an unchanged column.
 						CASE WHEN ct.SYS_CHANGE_OPERATION = 'U' THEN JSON_QUERY((
 							SELECT '["' + STRING_AGG(c.name, '","') + '"]'
 							FROM (VALUES
@@ -111,14 +100,4 @@ BEGIN
 END
 GO
 
--- Reading the payload downstream:
---
---   $operation = 'I'  the full row, though NULL columns are omitted by FOR JSON PATH, so a
---                     missing key on an insert simply means that column is NULL
---   $operation = 'U'  $changed lists the columns that moved. For each name in that list, a
---                     matching key carries the new value, and a missing key means the column
---                     was set to NULL. Columns in neither place did not change.
---   $operation = 'D'  only the key columns are present, the row is gone
---
--- Do not reach for INCLUDE_NULL_VALUES to solve this. It emits every unchanged column as null
--- as well, which reintroduces exactly the ambiguity $changed exists to remove.
+-- Payload semantics for consumers: https://melosso.github.io/trignis/reference/stored-procedure (SQL Server, Column-level tracking). Do not use INCLUDE_NULL_VALUES.

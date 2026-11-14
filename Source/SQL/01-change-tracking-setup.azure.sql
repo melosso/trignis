@@ -1,8 +1,4 @@
--- This script sets up the database for change tracking and creates necessary objects.
--- Create a contained user for the application with a strong password
---
--- Note: This is only for Azure SQL Database, which supports contained users.
--- If you are using SQL Server, you would typically create a login at the server level (of which we have another example file)
+-- Azure SQL Database setup: change tracking and a contained user. For SQL Server, use 01-change-tracking-setup.sqlserver.sql.
 
 -- Create a contained user (Azure SQL only supports contained users)
 IF USER_ID('DotNetWebApp') IS NULL
