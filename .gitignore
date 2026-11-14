@@ -30,12 +30,13 @@ mono_crash.*
 *.md
 !README.md
 !CONTRIBUTING.md
-!Documentation/**/*.md
+!.kb/**/*.md
 !Examples/**/*.md
 !.github/**/*.md
 
 .*/
 !.github/
+!.kb/
 
 # Build results
 [Dd]eployment/

@@ -4,8 +4,8 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'Documentation/docs/**'
-      - 'Documentation/wwwroot/**'
+      - '.kb/docs/**'
+      - '.kb/wwwroot/**'
       - '.github/workflows/documentation-pages.yml'
   workflow_dispatch: {}
 
@@ -50,11 +50,11 @@ jobs:
     - name: Copy docs and wwwroot
       run: |
         rm -rf ${{ github.workspace }}/publish/docs
-        cp -r ${{ github.workspace }}/trignis/Documentation/docs ${{ github.workspace }}/publish/docs
+        cp -r ${{ github.workspace }}/trignis/.kb/docs ${{ github.workspace }}/publish/docs
         # Brand assets are optional. Overlay them on top of Bark's wwwroot when present;
         # replacing it wholesale would drop framework assets (js/mermaid.min.js, social icons)
-        if [ -d "${{ github.workspace }}/trignis/Documentation/wwwroot" ]; then
-          cp -r ${{ github.workspace }}/trignis/Documentation/wwwroot/. ${{ github.workspace }}/publish/wwwroot/
+        if [ -d "${{ github.workspace }}/trignis/.kb/wwwroot" ]; then
+          cp -r ${{ github.workspace }}/trignis/.kb/wwwroot/. ${{ github.workspace }}/publish/wwwroot/
         fi
 
     - name: Generate static site
