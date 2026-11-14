@@ -51,8 +51,7 @@ jobs:
       run: |
         rm -rf ${{ github.workspace }}/publish/docs
         cp -r ${{ github.workspace }}/trignis/.kb/docs ${{ github.workspace }}/publish/docs
-        # Brand assets are optional. Overlay them on top of Bark's wwwroot when present;
-        # replacing it wholesale would drop framework assets (js/mermaid.min.js, social icons)
+        # Brand assets are optional. Copy them into Bark's wwwroot: replacing the directory removes framework assets (js/mermaid.min.js, social icons).
         if [ -d "${{ github.workspace }}/trignis/.kb/wwwroot" ]; then
           cp -r ${{ github.workspace }}/trignis/.kb/wwwroot/. ${{ github.workspace }}/publish/wwwroot/
         fi

@@ -54,8 +54,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # A v0.4.0 tag publishes v0.4.0, 0.4.0 and 0.4, so users can pin exactly or float
-      # on a minor. The bare commit sha is kept so existing pins keep resolving.
+      # A v0.4.0 tag publishes v0.4.0, 0.4.0 and 0.4. The commit sha tag is published for existing pins.
       - name: Derive image tags
         id: meta
         uses: docker/metadata-action@v6
