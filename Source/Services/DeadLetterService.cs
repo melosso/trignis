@@ -44,6 +44,7 @@ public class DeadLetterService
                 Data TEXT NOT NULL,
                 ErrorMessage TEXT NOT NULL,
                 Timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                EnvironmentName TEXT,
                 UNIQUE(SourceKey, DataHash)
             );
             CREATE INDEX IF NOT EXISTS idx_timestamp ON DeadLetters(Timestamp);

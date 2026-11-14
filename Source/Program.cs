@@ -117,7 +117,9 @@ try
     builder.Services.AddSingleton<DeadLetterQueueMonitor>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DeadLetterQueueMonitor>());
     builder.Services.AddSingleton<ConnectionHealthCheckService>();
-    builder.Services.AddHostedService<ConnectionHealthCheckService>();
+    // Same instance the /health/connections endpoint reads; registering the type twice ran
+    // the checks on one copy and served the other, which stayed empty
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<ConnectionHealthCheckService>());
     builder.Services.AddSingleton<DeadLetterService>();
     builder.Services.AddSingleton<PauseService>();
     builder.Services.AddSingleton<DeadLetterReplayer>();
