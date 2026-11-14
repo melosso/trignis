@@ -27,8 +27,7 @@ public class EnvironmentConfigService : IDisposable
     private readonly EncryptionService _encryptionService;
     private readonly GlobalSettings _globalSettings;
 
-    // What a file held the last time it was applied. An editor saving twice, or our own
-    // encrypt-on-reload rewrite, raises events for content that is already running.
+    // Content hash per applied file. Duplicate file events for applied content are ignored (double save, encrypt-on-reload rewrite).
     private readonly ConcurrentDictionary<string, string> _appliedHashes = new(StringComparer.OrdinalIgnoreCase);
 
     // Environment name -> why its last edit was refused. The previous version keeps running.
@@ -139,8 +138,7 @@ public class EnvironmentConfigService : IDisposable
             !name.Equals(_selectedEnvironment, StringComparison.OrdinalIgnoreCase))
             return;
 
-        // Deleted before the debounce fired. Loading it anyway yields an empty configuration,
-        // which used to come back as a ghost environment with nothing in it.
+        // File deleted before the debounce elapsed. Loading a missing file creates an empty environment.
         if (!File.Exists(fullPath)) return;
 
         // Same treatment a file gets at start-up: secrets encrypted, then validated

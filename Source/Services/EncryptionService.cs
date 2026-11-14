@@ -272,9 +272,7 @@ namespace Trignis.Services
         }
 
         /// <summary>
-        /// Encrypts any plain secrets in one environment file. Returns true when the file was
-        /// rewritten; a file with nothing left to encrypt is not touched, so calling this from
-        /// the file watcher does not trigger itself.
+        /// Encrypts plain secrets in one environment file. Returns true if the file was rewritten. A file without plain secrets is not rewritten: the file watcher does not re-trigger.
         /// </summary>
         public bool EncryptConfigFile(string file)
         {

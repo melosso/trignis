@@ -50,8 +50,7 @@ public class MessageQueueService : IAsyncDisposable
         _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)",
             endpoint.MessageQueueType, correlationId, messageSizeBytes);
 
-        // Size is settled before the breaker: an oversized payload is the payload's fault, and
-        // counting it would open the circuit on a broker that is perfectly healthy.
+        // Size check precedes the circuit breaker: an oversized payload must not count as a broker failure.
         var queueType = endpoint.MessageQueueType?.ToLower();
         var compressed = false;
 
@@ -77,8 +76,7 @@ public class MessageQueueService : IAsyncDisposable
                 break;
         }
 
-        // One breaker per endpoint per environment; a bare key would be shared by every
-        // environment that happens to reuse the name
+        // One circuit breaker per endpoint per environment: environments may reuse an endpoint name.
         var circuitBreaker = GetCircuitBreaker($"{endpoint.EnvironmentFile}/{endpoint.Key ?? endpoint.MessageQueueTarget()}");
 
         try
@@ -173,8 +171,7 @@ public class MessageQueueService : IAsyncDisposable
         IChannel? channel = null;
         try
         {
-            // With confirmations tracked, BasicPublishAsync completes only once the broker has
-            // taken the message and throws if it is nacked or, being mandatory, returned as unroutable
+            // With publisher confirmations, BasicPublishAsync completes on broker ack and throws on nack or unroutable return.
             channel = await connection.CreateChannelAsync(
                 new CreateChannelOptions(publisherConfirmationsEnabled: true, publisherConfirmationTrackingEnabled: true),
                 cancellationToken);
@@ -252,8 +249,7 @@ public class MessageQueueService : IAsyncDisposable
             _logger.LogError(ex, "Failed to send to RabbitMQ (Host: {Host}, CorrelationId: {CorrelationId})",
                 config.HostName, correlationId);
 
-            // The connection stays cached: GetOrCreateConnectionAsync swaps out a closed one, and
-            // dropping an open one here leaked it for good, since it recovers itself.
+            // Do not evict the cached connection: GetOrCreateConnectionAsync replaces a closed connection, and an open connection recovers itself.
             throw new InvalidOperationException($"RabbitMQ publish failed: {ex.Message}", ex);
         }
         finally
@@ -275,10 +271,7 @@ public class MessageQueueService : IAsyncDisposable
     }
 
     /// <summary>
-    /// One connection per host/port/vhost. The Lazy is the single-flight gate; a closed
-    /// connection is swapped out atomically.
-    /// ponytail: the first caller's token drives the shared creation, so its cancellation
-    /// faults the other waiters too; they retry on the next send.
+    /// One connection per host/port/vhost. The Lazy is the single-flight gate; a closed connection is replaced atomically. ponytail: the first caller's token cancels the shared creation for all waiters; they retry on the next send.
     /// </summary>
     private async Task<IConnection> GetOrCreateConnectionAsync(string key, MessageQueueConfig config, CancellationToken cancellationToken)
     {
@@ -595,9 +588,7 @@ public class MessageQueueService : IAsyncDisposable
 
         var producerKey = $"{config.BootstrapServers}:{config.Topic}:{config.Username}";
 
-        // Kept across failures: a producer reconnects by itself and other environment loops may
-        // be mid-send on it, so disposing it on an error only moved the failure to them.
-        // ponytail: GetOrAdd can build two producers in a race and leak the loser; wrap in Lazy if seen.
+        // ponytail: the producer is retained across failures (it reconnects itself and other loops share it); GetOrAdd can build two producers in a race and leak one, wrap in Lazy if observed.
         var producer = _kafkaProducers.GetOrAdd(producerKey, _ =>
         {
             var producerConfig = new ProducerConfig

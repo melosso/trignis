@@ -9,9 +9,7 @@ using System.Threading.Tasks;
 namespace Trignis.Services;
 
 /// <summary>
-/// Resends a dead letter to the destinations of the environment it came from.
-/// Shared by the dashboard's replay button and the automatic retry loop, so both
-/// answer "can this be replayed, and did it work" the same way.
+/// Resends a dead letter to the destinations of its source environment. Used by the dashboard replay button and the automatic retry loop.
 /// </summary>
 public sealed class DeadLetterReplayer
 {
@@ -20,8 +18,7 @@ public sealed class DeadLetterReplayer
     private readonly EnvironmentConfigService _configService;
     private readonly PauseService _pauseService;
 
-    // The manual button and the automatic loop can pick the same row at the same moment.
-    // ponytail: in-memory claim, enough for one process; move it to a column if Trignis ever runs as two.
+    // ponytail: in-memory claim against concurrent manual and automatic replay of one row; valid for one process, move to a column for multiple instances.
     private readonly ConcurrentDictionary<long, byte> _inFlight = new();
 
     public DeadLetterReplayer(
@@ -100,8 +97,7 @@ public sealed class DeadLetterReplayer
         if (await _deadLetters.GetAsync(record.Id, ct) is not { } current)
             return new Result(Outcome.Replayed, null, []);
 
-        // Only the destinations that refused it. Without this check a renamed endpoint would match
-        // nothing, report no failures, and the row would be deleted without ever being sent.
+        // Send to the destinations that refused the payload. A failed target that matches no configured endpoint must not delete the row.
         var configured = _exportService.ConfiguredTargets(environment);
         var targets = current.FailedTargets?.Where(configured.Contains).ToList();
         if (configured.Count == 0)

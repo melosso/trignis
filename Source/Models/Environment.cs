@@ -9,8 +9,7 @@ public record class EnvironmentConfig
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
-    /// Database platform every connection string in this environment points at.
-    /// One environment is one platform; split the file to mix them.
+    /// Database platform for every connection string in this environment. One environment has one platform.
     /// </summary>
     public string Provider { get; init; } = "mssql";
 
@@ -43,9 +42,7 @@ public record class EnvironmentChangeTracking
 }
 
 /// <summary>
-/// Global application settings (applies to all environments).
-/// The JsonPropertyName attributes are load-bearing: /ui/api/settings serializes this record
-/// and the settings page reads the PascalCase names.
+/// Global application settings for all environments. /ui/api/settings serializes this record and the settings page reads the PascalCase names from the JsonPropertyName attributes.
 /// </summary>
 public record class GlobalSettings
 {

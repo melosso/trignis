@@ -209,8 +209,7 @@ try
 
     var webUiAuth = app.Services.GetRequiredService<WebUiAuth>();
 
-    // Explicit config wins; otherwise follow the scheme of the request being answered, so a
-    // plain-HTTP dev run still works while a TLS deployment gets the flag automatically.
+    // Explicit config takes precedence. Default: the Secure flag follows the request scheme.
     var configuredSecureCookies = builder.Configuration.GetValue<bool?>("WebHost:SecureCookies");
     bool UseSecureCookies(HttpContext context) => configuredSecureCookies ?? context.Request.IsHttps;
 
@@ -357,8 +356,7 @@ try
                 return Results.Ok();
             });
 
-            // Double-submit gate for every mutating UI endpoint. Null means the request may proceed.
-            // Skipped when auth is off, since there is no session to forge against.
+            // Double-submit CSRF check for mutating UI endpoints. Returns null if the request is valid or auth is disabled.
             IResult? RejectIfCsrfInvalid(HttpContext context)
             {
                 if (!authEnabled)
@@ -404,8 +402,7 @@ try
                 return null;
             }
 
-            // Clearing the row makes the next cycle re-initialise the object per its InitialSyncMode.
-            // Without this the only recovery from a bad sync is stopping the service and editing state.db.
+            // Deletes the state row: the next cycle re-initialises the object per its InitialSyncMode.
             app.MapPost("/ui/api/state/{environmentName}/{objectName}/reset", async (HttpContext context, string environmentName, string objectName) =>
             {
                 if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
@@ -437,8 +434,7 @@ try
                 }
             });
 
-            // Resend a dead letter to its environment's destinations. The row is only removed once
-            // every destination succeeds, so a partial failure stays queued for another attempt.
+            // Resends a dead letter to its environment's destinations. Deletes the row if every destination succeeds.
             app.MapPost("/ui/api/deadletters/{id:long}/replay", async (
                 HttpContext context, long id, DeadLetterService deadLetters, DeadLetterReplayer replayer) =>
             {
@@ -464,8 +460,7 @@ try
                             return Results.Json(new { error = result.Reason }, statusCode: 409);
 
                         default:
-                            // A human asking for a replay is a signal the downstream problem was
-                            // addressed, so put the row back in the automatic rotation either way.
+                            // A manual replay resets the attempt count: the row re-enters automatic replay.
                             await deadLetters.ResetAttemptsAsync(id, context.RequestAborted);
                             return Results.Json(new
                             {
@@ -503,9 +498,7 @@ try
                 return Results.Ok(new { ok = true, deleted });
             });
 
-            // Pausing stops changes being read and exported, but the source database keeps recording
-            // them, so this is a "hold", not an "off". Guarded by the admin passphrase because the
-            // failure mode is silent: nothing errors, data simply stops moving.
+            // Pause stops reads and exports; the source database continues recording changes. Requires the admin passphrase: a pause produces no errors.
             app.MapPost("/ui/api/pause", async (HttpContext context, PauseService pauseService) =>
             {
                 if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
@@ -525,8 +518,7 @@ try
                 return Results.Ok(new { ok = true, scope = resolved.Scope, label = resolved.Label });
             });
 
-            // Resuming is the safe direction, so it needs no passphrase. Making operators re-authenticate
-            // to restore service is how an incident gets longer.
+            // Resume requires no passphrase: resuming restores service.
             app.MapPost("/ui/api/resume", async (HttpContext context, PauseService pauseService) =>
             {
                 if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;

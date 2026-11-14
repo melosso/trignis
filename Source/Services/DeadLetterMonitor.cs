@@ -59,8 +59,7 @@ public class DeadLetterQueueMonitor : BackgroundService
                 await Task.Delay(TimeSpan.FromMinutes(_checkIntervalMinutes), stoppingToken);
                 await CheckDeadLetterQueueAsync(stoppingToken);
 
-                // DeadletterRetentionDays is otherwise only enforced by the start-up purge,
-                // which never comes round again on a long-running service.
+                // The start-up purge runs once. This periodic purge enforces DeadletterRetentionDays on a long-running service.
                 if (DateTime.UtcNow - _lastPurgeTime >= _purgeInterval)
                 {
                     await _deadLetterService.PurgeOldDeadLettersAsync(stoppingToken);

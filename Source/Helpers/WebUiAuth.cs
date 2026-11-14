@@ -51,8 +51,7 @@ public sealed class WebUiAuth
             _ => new Attempt(1, now, null),
             (_, existing) =>
             {
-                // A lapsed lockout, or failures older than a lockout would have lasted, start the
-                // count over: ten typos spread over a year are not a brute-force attempt.
+                // An expired lockout or failures older than the lockout duration reset the failure count.
                 var failures = (existing.LockedUntil is { } until && until < now) || now - existing.LastFailure > LockoutDuration
                     ? 1
                     : existing.Failures + 1;
@@ -99,8 +98,7 @@ public sealed class WebUiAuth
     public void ConsumeCsrfToken(string token) => _csrfTokens.TryRemove(token, out _);
 
     /// <summary>
-    /// Double-submit check for mutating requests: the header must match the session cookie.
-    /// An attacker's page can force the cookie to be sent but cannot read it to set the header.
+    /// Double-submit check for mutating requests: the header must equal the session cookie. A cross-site page cannot read the cookie to set the header.
     /// </summary>
     public static bool IsDoubleSubmitValid(string? headerValue, string? cookieValue) =>
         !string.IsNullOrEmpty(headerValue) &&
@@ -110,9 +108,7 @@ public sealed class WebUiAuth
             System.Text.Encoding.UTF8.GetBytes(cookieValue));
 
     /// <summary>
-    /// Ends a session on the server, so a copied cookie stops working at logout rather than at expiry.
-    /// ponytail: held in memory, so a restart forgets it and the cookie works again until its
-    /// own 24h expiry. Persist the ids if that window matters.
+    /// Revokes a session on the server: a copied cookie is rejected after logout. ponytail: in-memory; a restart clears revocations until the cookie's 24h expiry, persist the ids if required.
     /// </summary>
     public void RevokeSession(string sessionId, DateTime expiresAt) => _revokedSessions[sessionId] = expiresAt;
 

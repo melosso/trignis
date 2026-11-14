@@ -7,9 +7,7 @@ using Microsoft.Data.SqlClient;
 namespace Trignis.Data;
 
 /// <summary>
-/// Everything that differs per RDBMS. The rest of the pipeline — reading the JSON, parsing it,
-/// exporting, dead-lettering, storing the watermark — is provider-agnostic, because the change
-/// tracking itself lives in the procedure the user writes.
+/// Settings that differ per RDBMS. The remaining pipeline is provider-agnostic: the user-written procedure implements change tracking.
 /// </summary>
 public sealed record SqlDialect
 {
@@ -24,9 +22,7 @@ public sealed record SqlDialect
     public string? SessionPrep { get; init; }
 
     /// <summary>
-    /// Reads the server's own watermark, used to seed an incremental first sync without
-    /// transferring history. Null when the platform has no server-side equivalent, in which
-    /// case the procedure is asked to report its watermark instead (see <c>mode: "seed"</c>).
+    /// SQL that reads the server watermark for an incremental first sync without history. Null if the platform has no server watermark: the procedure returns its watermark (see <c>mode: "seed"</c>).
     /// </summary>
     public string? CurrentVersionSql { get; init; }
 
@@ -34,10 +30,7 @@ public sealed record SqlDialect
     public required string CallProcedure { get; init; }
 
     /// <summary>
-    /// Connection string keys applied only when the user has not set them.
-    /// Matching is on the literal key, so a user who writes a provider synonym
-    /// (<c>App</c> for <c>Application Name</c>) gets the default applied as well; harmless,
-    /// because the provider resolves the duplicate in the user's favour.
+    /// Connection string keys applied if the user has not set them. Matching uses the literal key: for a provider synonym (<c>App</c> for <c>Application Name</c>) the provider applies the user's value.
     /// </summary>
     public IReadOnlyDictionary<string, string> ConnectionDefaults { get; init; }
         = new Dictionary<string, string>();

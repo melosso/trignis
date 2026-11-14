@@ -12,11 +12,7 @@ using Trignis.Models;
 namespace Trignis.Services;
 
 /// <summary>
-/// Shared retry policies for the source read and the export write.
-/// Policies are immutable and thread-safe, so one instance is reused per distinct
-/// (environment, retry count, delay). Keying on the values as well as the name keeps a
-/// hot-reloaded environment from reusing a policy built for its old settings.
-/// Cancellation is honoured by passing the token to ExecuteAsync, which aborts the waits.
+/// Shared retry policies for the source read and the export write. One immutable, thread-safe instance per (environment, retry count, delay): a hot-reloaded environment gets a policy for its new settings. The token passed to ExecuteAsync cancels the waits.
 /// </summary>
 public sealed class RetryPolicies
 {

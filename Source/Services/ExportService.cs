@@ -18,8 +18,7 @@ namespace Trignis.Services;
 public sealed record ExportFailure(string Target, Exception Error);
 
 /// <summary>
-/// Broadcasts the change payload to all configured destinations.  
-/// Failures are returned to the caller for context-specific handling.
+/// Sends the change payload to all configured destinations. Returns failures to the caller.
 /// </summary>
 public sealed class ExportService
 {
@@ -50,8 +49,7 @@ public sealed class ExportService
 
     private const string FileTarget = "FILE";
 
-    // ponytail: endpoints without a Key share the name "unnamed", so a replay narrowed to one of
-    // them resends to all of them. Give endpoints a Key to tell them apart.
+    // ponytail: endpoints without a Key share the name "unnamed"; a replay for one resends to all. Set a Key per endpoint.
     private static string TargetName(ApiEndpoint endpoint) =>
         $"{(string.IsNullOrEmpty(endpoint.MessageQueueType) ? "HTTP" : "MQ")}:{endpoint.Key ?? "unnamed"}";
 
@@ -119,8 +117,7 @@ public sealed class ExportService
 
             stoppingToken.ThrowIfCancellationRequested();
 
-            // Survives a retry, so a failure in batch 3 resumes at batch 3 rather than resending 1 and 2.
-            // ponytail: a dead-lettered payload still replays whole; store the offset if that matters.
+            // ponytail: persists across retries (a failure in batch 3 resumes at batch 3); a dead-lettered payload replays whole, store the offset if required.
             var batchesSent = 0;
 
             try
@@ -214,9 +211,7 @@ public sealed class ExportService
     }
 
     /// <summary>
-    /// Directory the size limit applies to: the fixed part of the template, before the first
-    /// placeholder. Returns null when that would be the working directory, since sweeping the
-    /// whole working directory for space is never what the setting means.
+    /// Directory that the size limit applies to: the fixed part of the template before the first placeholder. Returns null if that directory is the working directory.
     /// </summary>
     internal static string? ExportRoot(string filePathTemplate)
     {
@@ -282,8 +277,7 @@ public sealed class ExportService
                     }
                     break;
                 case "oauth2clientcredentials":
-                    // Everything that decides which token comes back, so a reloaded scope or
-                    // token endpoint never reuses a token issued for the old one.
+                    // Cache key includes every value that selects the token: a changed scope or token endpoint gets a new token.
                     oauthCacheKey = $"{environment.Name}/{endpoint.Key ?? "default"}_{endpoint.Auth.ClientId}_{endpoint.Auth.TokenEndpoint}_{endpoint.Auth.Scope}";
                     var token = await _oauth2TokenService.GetAccessTokenAsync(endpoint.Auth, oauthCacheKey, stoppingToken);
                     if (!string.IsNullOrEmpty(token))
@@ -345,9 +339,7 @@ public sealed class ExportService
             payloadBytes = Encoding.UTF8.GetByteCount(jsonContent);
         }
 
-        // Measured on what actually goes over the wire. Not an HttpRequestException, so the
-        // retry policy skips it (a retry cannot make the body smaller) and the caller
-        // dead-letters the batch instead.
+        // Size of the serialized body. Not an HttpRequestException: the retry policy skips it and the caller dead-letters the batch.
         if (payloadBytes > _globalSettings.MaxPayloadSizeBytes)
         {
             throw new InvalidOperationException(

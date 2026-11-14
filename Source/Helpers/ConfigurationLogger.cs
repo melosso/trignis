@@ -12,8 +12,7 @@ namespace Trignis.Helpers;
 public static class ConfigurationLogger
 {
     /// <summary>
-    /// First of <paramref name="keys"/> present in the connection string, since the key naming
-    /// differs per provider (SQL Server "Server", PostgreSQL "Host", both accept "Data Source").
+    /// Returns the first of <paramref name="keys"/> present in the connection string. Key names differ per provider (SQL Server "Server", PostgreSQL "Host", both accept "Data Source").
     /// </summary>
     private static string Lookup(DbConnectionStringBuilder builder, params string[] keys)
     {

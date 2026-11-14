@@ -9,10 +9,7 @@ using Trignis.Models;
 namespace Trignis.Services;
 
 /// <summary>
-/// Retries dead letters on an exponential backoff until they succeed or run out of attempts.
-/// What is left over is a genuine "someone has to look at this", which is what the dashboard
-/// replay button is for. Separate from <see cref="DeadLetterQueueMonitor"/> so that turning
-/// the alerting off does not silently turn retrying off with it.
+/// Retries dead letters with exponential backoff until success or the attempt limit. Separate from <see cref="DeadLetterQueueMonitor"/>: disabling alerting does not disable retries.
 /// </summary>
 public sealed class DeadLetterReplayService : BackgroundService
 {
@@ -98,8 +95,7 @@ public sealed class DeadLetterReplayService : BackgroundService
             }
             catch (Exception ex)
             {
-                // An unexpected failure counts as an attempt; otherwise a poison payload
-                // that throws before reaching a destination would be retried forever.
+                // An unexpected failure counts as an attempt: a payload that throws before delivery must reach the attempt limit.
                 result = new DeadLetterReplayer.Result(DeadLetterReplayer.Outcome.Failed, ex.Message, []);
             }
 
@@ -110,8 +106,7 @@ public sealed class DeadLetterReplayService : BackgroundService
                     break;
 
                 case DeadLetterReplayer.Outcome.Unroutable:
-                    // Park it rather than retry it: no amount of waiting brings a deleted
-                    // environment back. A manual replay resets this once the config is fixed.
+                    // Park the row: a deleted environment cannot receive a retry. A manual replay resets the row.
                     await _deadLetters.RecordReplayFailureAsync(
                         record.Id, result.Reason ?? "Unroutable", DateTime.UtcNow.AddYears(1), ct);
                     _logger.LogWarning("Dead letter {Id} cannot be replayed automatically: {Reason}", record.Id, result.Reason);
@@ -121,8 +116,7 @@ public sealed class DeadLetterReplayService : BackgroundService
                     break;
 
                 case DeadLetterReplayer.Outcome.Paused:
-                    // Not an attempt. Step it aside so held rows do not fill every batch and
-                    // starve the ones that can still be delivered.
+                    // Not an attempt. Defer the row: paused rows must not fill each batch.
                     await _deadLetters.DeferAsync(record.Id, DateTime.UtcNow + PausedRecheck, ct);
                     break;
 
@@ -143,8 +137,7 @@ public sealed class DeadLetterReplayService : BackgroundService
     }
 
     /// <summary>
-    /// Doubling delay, capped. <paramref name="attempts"/> is the count the row had going in,
-    /// so the first failure waits one base delay and the fifth waits sixteen.
+    /// Doubling delay, capped. <paramref name="attempts"/> is the count before this failure: attempt 0 waits one base delay, attempt 4 waits sixteen.
     /// </summary>
     internal static TimeSpan Backoff(int attempts, int baseSeconds)
     {

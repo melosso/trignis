@@ -46,8 +46,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
     private sealed record EnvTask(CancellationTokenSource Cts, Task Task);
 
-    // Loops that ignored their stop timeout. A replacement waits for its predecessor here, so
-    // one environment never has two loops exporting at once. Guarded by _lifecycleGate.
+    // Loops that exceeded their stop timeout. A replacement loop awaits its predecessor: one loop per environment. Guarded by _lifecycleGate.
     private readonly Dictionary<string, Task> _draining = new();
 
     private static readonly TimeSpan EnvTaskStopTimeout = TimeSpan.FromSeconds(5);
@@ -339,8 +338,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         _logger.LogDebug($"Starting processing thread for environment '{environment.Name}' (Interval: {pollingInterval.TotalSeconds}s)");
 
-        // Paused scopes are logged on transition only; at one cycle every 30s, logging the
-        // steady state would bury everything else.
+        // Log pause state on transition: per-cycle logging floods the log.
         var environmentWasPaused = false;
         var pausedObjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -446,8 +444,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         var dialect = SqlDialect.Parse(environment.Provider);
 
-        // Only the source read is retried. Exporting has its own per-destination retry, and
-        // retrying the bookkeeping from here would send the payload to every destination again.
+        // Retry the source read alone: export has per-destination retry, and a retry here resends the payload to every destination.
         var (result, expectedVersion, seeding) = await _retryPolicies.For(environment).ExecuteAsync(
             _ => ReadChangesAsync(environment, trackingObject, dialect, connectionString, stoppingToken), stoppingToken);
 
@@ -463,9 +460,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
         if (seeding)
         {
-            // A procedure that honours mode: "seed" returns no rows. One that ignores it
-            // returns history, which incremental mode exists to avoid — so drop it here
-            // rather than flooding every destination on the first cycle.
+            // Discard rows from a procedure that ignores mode "seed": incremental mode sends no history.
             if (doc.RootElement.TryGetProperty("Data", out var seeded)
                 && seeded.ValueKind == JsonValueKind.Array && seeded.GetArrayLength() > 0)
             {
@@ -486,8 +481,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
                 .Where(v => v.HasValue).Select(v => v!.Value)
                 .DefaultIfEmpty(version).Max();
 
-            // One dead letter per payload, remembering which destinations refused it, so a
-            // replay goes only to those once the downstream problem is fixed.
+            // One dead letter per payload, with the destinations that refused it: replay targets those destinations.
             var failures = await _exportService.ExportAsync(environment, trackingObject, data, stoppingToken);
             if (failures.Count > 0)
             {
@@ -510,23 +504,19 @@ public class ChangeTrackingBackgroundService : BackgroundService
     }
 
     /// <summary>
-    /// Runs the tracking procedure and returns its raw JSON, the watermark the cycle started
-    /// from (null when the object has never synced), and whether this is an incremental seed.
+    /// Runs the tracking procedure. Returns the raw JSON, the starting watermark (null if the object has never synced), and the incremental seed flag.
     /// </summary>
     private async Task<(string Result, long? ExpectedVersion, bool Seeding)> ReadChangesAsync(
         EnvironmentConfig environment, TrackingObject trackingObject, SqlDialect dialect, string connectionString, CancellationToken stoppingToken)
     {
         using var conn = await dialect.OpenAsync(connectionString, stoppingToken);
 
-        // Null means "never synced". Zero is a real watermark: a database that has seen no
-        // changes yet reports it, and treating it as "never synced" re-seeded past the first ones.
+        // Null = never synced. Zero is a valid watermark: a database with no changes returns zero.
         var lastVersion = await GetLastProcessedVersionAsync(environment.Name, trackingObject.Name);
 
         long fromVersion;
 
-        // Seeding means "start from now": report the watermark, send no history.
-        // The server tells us on platforms that track it; elsewhere the procedure does,
-        // which is why the payload carries the mode.
+        // Seeding returns the watermark and no history. The server reports seeding where supported; elsewhere the procedure reads the mode from the payload.
         var seeding = false;
 
         if (lastVersion is { } known)
@@ -548,10 +538,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
 
             if (fromVersion == 0)
             {
-                // Nothing has ever been tracked in this database. Procedures read fromVersion 0 as
-                // "send the whole table", so there is no incremental watermark to hand out yet.
-                // ponytail: changes committed in the same polling interval as the database's very
-                // first tracked change are skipped; use InitialSyncMode "Full" if that matters.
+                // ponytail: no watermark exists before the first tracked change, and changes in that first polling interval are skipped; use InitialSyncMode "Full" if required.
                 _logger.LogDebug($"[{environment.Name}] No changes tracked yet for {trackingObject.Name}; waiting for the first one");
                 return (string.Empty, null, false);
             }
@@ -640,9 +627,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
     }
 
     /// <summary>
-    /// Compare-and-swap on the watermark: writes only if the row is still what the cycle read
-    /// (<paramref name="expected"/> null meaning "no row"). False means someone else changed it
-    /// in the meantime, typically a reset from the dashboard, and that change wins.
+    /// Compare-and-swap on the watermark. Writes if the row equals <paramref name="expected"/> (null = no row). Returns false if another writer changed the row, for example a dashboard reset.
     /// </summary>
     private async Task<bool> TryAdvanceVersionAsync(string environmentName, string objectName, long? expected, long version)
     {

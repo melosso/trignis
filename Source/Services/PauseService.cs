@@ -8,11 +8,7 @@ using Microsoft.Extensions.Configuration;
 namespace Trignis.Services;
 
 /// <summary>
-/// Which environments and tracking objects are currently held. Deliberately not part of the
-/// environment files: those are the operator's declared intent, and a pause is an operational
-/// override that has to survive a config redeploy and never rewrite a file under version control.
-/// Stored alongside the watermarks in state.db, so losing one loses the other and the pair stays
-/// consistent.
+/// Paused environments and tracking objects. Stored in state.db with the watermarks, outside the environment files: a pause must persist across a config redeploy and must not rewrite a versioned file.
 /// </summary>
 public sealed class PauseService
 {
@@ -49,8 +45,7 @@ public sealed class PauseService
     }
 
     /// <summary>
-    /// Every held scope, read once per cycle so a paused object costs one query rather than one
-    /// per object. Small enough that caching it would be premature.
+    /// Returns every paused scope. Read once per cycle: one query for all objects.
     /// </summary>
     public async Task<IReadOnlySet<string>> GetPausedScopesAsync(CancellationToken cancellationToken = default)
     {

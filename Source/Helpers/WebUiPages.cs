@@ -8,10 +8,7 @@ using Microsoft.AspNetCore.Http;
 namespace Trignis.Helpers;
 
 /// <summary>
-/// Beacon-style page rendering: _shell.html + views/{page}.html + _footer.html composed into one
-/// document. Templates live outside wwwroot, so the static file middleware can never hand out a
-/// raw fragment, and only names present in <see cref="Titles"/> resolve to a file, so no request
-/// value reaches the filesystem.
+/// Composes _shell.html, views/{page}.html and _footer.html into one document. Templates are outside wwwroot: the static file middleware cannot serve them. Page names resolve through <see cref="Titles"/>: no request value reaches the filesystem.
 /// </summary>
 internal static partial class WebUiPages
 {

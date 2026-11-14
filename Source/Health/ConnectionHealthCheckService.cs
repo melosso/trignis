@@ -111,9 +111,7 @@ public class ConnectionHealthCheckService : BackgroundService
             }
         }
 
-        // Check message queue endpoints
-        // Keyed by environment as well: two environments may reuse an endpoint name.
-        // Types with no probe are left out rather than reported as down.
+        // Message queue endpoints, keyed by environment and endpoint name. Types without a probe are excluded.
         var mqEndpoints = environments
             .SelectMany(e => (e.ChangeTracking.ApiEndpoints ?? Array.Empty<ApiEndpoint>())
                 .Where(ep => ProbedQueueTypes.Contains(ep.MessageQueueType ?? ""))

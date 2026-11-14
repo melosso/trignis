@@ -49,8 +49,7 @@ public class OAuth2TokenService
 
             var (token, expiresIn) = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
 
-            // Configured value wins, then whatever the server reported, then one hour.
-            // The minute of slack keeps a token from expiring mid-request.
+            // Lifetime precedence: configured value, server value, one hour. The one-minute margin prevents expiry mid-request.
             var lifetime = auth.TokenExpirationSeconds ?? expiresIn ?? 3600;
             var expiration = DateTime.UtcNow.AddSeconds(lifetime).AddMinutes(-1);
 
@@ -106,8 +105,7 @@ public class OAuth2TokenService
     }
 
     /// <summary>
-    /// RFC 6749 names these fields in snake_case. The names must be stated explicitly: the web
-    /// JSON defaults are camelCase and case-insensitive, which never matches an underscore.
+    /// RFC 6749 field names are snake_case. Explicit names are required: the web JSON defaults are camelCase and do not match underscores.
     /// </summary>
     private sealed class TokenResponse
     {

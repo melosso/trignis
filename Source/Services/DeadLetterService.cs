@@ -50,9 +50,7 @@ public class DeadLetterService
         ";
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        // Replay needs to know which environment to resend to. Older rows folded the environment
-        // into SourceKey/TrackingObjectName, where an underscore in a name makes it unrecoverable,
-        // those stay null and are not replayable.
+        // Replay requires the environment name. Older rows have a null environment and are not replayable.
         var columnExists = conn.CreateCommand();
         columnExists.CommandText = "SELECT COUNT(*) FROM pragma_table_info('DeadLetters') WHERE name = 'EnvironmentName'";
         if (Convert.ToInt64(await columnExists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false)) == 0)
@@ -63,13 +61,11 @@ public class DeadLetterService
             _logger.LogInformation("Added EnvironmentName to the dead letter table; existing rows cannot be replayed");
         }
 
-        // Automatic replay state. Existing rows start at zero attempts and are due immediately,
-        // so upgrading picks up whatever is already queued.
+        // Automatic replay state. Existing rows default to zero attempts and are due immediately.
         await AddColumnIfMissingAsync(conn, "Attempts", "INTEGER NOT NULL DEFAULT 0", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(conn, "NextAttempt", "DATETIME", cancellationToken).ConfigureAwait(false);
 
-        // Which destinations refused the payload, as a JSON array. Null on older rows, which
-        // replay to every destination as they always did.
+        // JSON array of the destinations that refused the payload. Null = every destination.
         await AddColumnIfMissingAsync(conn, "FailedTargets", "TEXT", cancellationToken).ConfigureAwait(false);
 
         var index = conn.CreateCommand();
@@ -127,8 +123,7 @@ public class DeadLetterService
 
             if (existingId is { } id)
             {
-                // Same payload, possibly a different destination this time. A null on the row
-                // already means "every destination", so there is nothing to widen.
+                // Merge failed targets for a repeated payload. Null on the row = every destination: no merge required.
                 if (existingTargets != null && failedTargets is { Count: > 0 })
                 {
                     var merge = conn.CreateCommand();
@@ -224,8 +219,7 @@ public class DeadLetterService
         var environmentName = reader.IsDBNull(1) ? null : reader.GetString(1);
         var trackingObjectName = reader.GetString(2);
 
-        // TrackingObjectName is "{environment}_{object}"; knowing the environment makes the
-        // split unambiguous even when either name contains an underscore.
+        // TrackingObjectName is "{environment}_{object}". The environment name makes the split unambiguous for names with underscores.
         var objectName = environmentName != null && trackingObjectName.StartsWith(environmentName + "_", StringComparison.Ordinal)
             ? trackingObjectName[(environmentName.Length + 1)..]
             : trackingObjectName;
@@ -235,9 +229,7 @@ public class DeadLetterService
     }
 
     /// <summary>
-    /// Rows whose backoff has elapsed and that have attempts left, oldest first.
-    /// A row that exhausts <paramref name="maxAttempts"/> stops being returned and waits
-    /// for a human to replay or discard it from the dashboard.
+    /// Returns rows with elapsed backoff and remaining attempts, oldest first. Rows at <paramref name="maxAttempts"/> are excluded and require a manual replay or discard.
     /// </summary>
     public async Task<IReadOnlyList<DeadLetterRecord>> GetDueForReplayAsync(int maxAttempts, int limit, CancellationToken cancellationToken = default)
     {
