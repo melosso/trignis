@@ -148,7 +148,7 @@ function retryStatus(row) {
   const attempts = row.attempts ?? 0;
   const max = row.max_attempts ?? 0;
   if (max > 0 && attempts >= max) return `Gave up after ${attempts} attempt(s). Replay it manually once the destination is fixed.`;
-  const next = row.next_attempt ? `, next try at ${row.next_attempt} UTC` : ', due now';
+  const next = row.next_attempt ? `, next try at ${String(row.next_attempt).slice(0, 19)} UTC` : ', due now';
   return `Attempt ${attempts} of ${max}${next}`;
 }
 
