@@ -4,10 +4,7 @@ using Xunit;
 namespace Trignis.Tests.Records;
 
 /// <summary>
-/// Pins the model defaults production actually depends on: each one is the value a service
-/// falls back to when the corresponding configuration key is absent. Record mechanics
-/// (with-expressions, value equality, init-only accessors) are compiler behaviour and are
-/// deliberately not tested here.
+/// Verifies the model defaults that services use if a configuration key is absent. Record mechanics are compiler behaviour and are not tested.
 /// </summary>
 public class ModelRecordTests
 {

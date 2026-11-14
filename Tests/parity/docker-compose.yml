@@ -1,9 +1,4 @@
-# Throwaway databases for the parity and stress tests. One of each supported platform, so
-# every pipeline scenario runs against both. Local-only credentials; nothing here is a secret.
-#
-#   docker compose -f Tests/parity/docker-compose.yml up -d --wait
-#   Tests/parity/run.sh
-#   docker compose -f Tests/parity/docker-compose.yml down -v
+# Throwaway databases for the parity and stress tests, one per supported platform. Local credentials, no secrets. Usage: docker compose -f Tests/parity/docker-compose.yml up -d --wait; Tests/parity/run.sh; docker compose -f Tests/parity/docker-compose.yml down -v
 name: trignis-parity
 services:
   mssql:

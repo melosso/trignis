@@ -10,9 +10,7 @@ using Xunit;
 namespace Trignis.Tests.Stress;
 
 /// <summary>
-/// The whole pipeline against real databases and real HTTP destinations: rows go into a tracked
-/// table, and the assertions are on what the destinations actually received. Every scenario runs
-/// on every platform, so a behaviour that only holds on one of them fails here.
+/// Runs the pipeline against real databases and real HTTP destinations. Assertions use the requests that the destinations received. Every scenario runs on every platform.
 /// </summary>
 [Collection("SqliteTests")]
 public sealed class PipelineParityTests
@@ -160,8 +158,7 @@ public sealed class PipelineParityTests
     [ParityTheory, MemberData(nameof(Providers))]
     public async Task FirstChangesOnAnEmptySource_AreNotSkippedByIncrementalSeeding(string provider)
     {
-        // SQL Server cannot express "since version 0" without asking for the whole table, so
-        // there the guarantee comes from a full first sync; Postgres seeds from the procedure.
+        // SQL Server reads the whole table for version 0: the first sync is Full. PostgreSQL seeds from the procedure.
         await using var rig = await Rig.StartAsync(provider, provider == "mssql" ? "Full" : "Incremental");
 
         await Task.Delay(2500); // several cycles against an empty table

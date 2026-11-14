@@ -42,16 +42,14 @@ internal sealed class StressHost : IAsyncDisposable
 
     public StressHost(int pollingIntervalSeconds = 1)
     {
-        // The encrypted json provider roots its file provider at AppContext.BaseDirectory, so the
-        // environment files have to live under it or they are silently skipped as optional
+        // The encrypted JSON provider reads from AppContext.BaseDirectory: environment files outside it are skipped as optional.
         _originalCwd = Environment.CurrentDirectory;
         Root = Path.Combine(AppContext.BaseDirectory, $"stress-{Guid.NewGuid():N}");
         EnvDir = Path.Combine(Root, "environments");
         Directory.CreateDirectory(EnvDir);
         Environment.CurrentDirectory = AppContext.BaseDirectory;
 
-        // DeadLetterService hard-codes a relative sinkhole.db, which therefore lands here and
-        // would otherwise carry dead letters from one test into the next
+        // DeadLetterService uses the relative path sinkhole.db in this directory. Dead letters must not persist between tests.
         SqliteConnection.ClearAllPools();
         File.Delete(Path.Combine(AppContext.BaseDirectory, "sinkhole.db"));
 

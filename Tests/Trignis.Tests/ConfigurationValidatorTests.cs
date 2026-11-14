@@ -7,8 +7,7 @@ using Xunit;
 namespace Trignis.Tests;
 
 /// <summary>
-/// Tests for ConfigurationValidator: covering all message queue types, HTTP endpoints,
-/// and core environment/tracking-object validation.
+/// Tests for ConfigurationValidator: message queue types, HTTP endpoints, and environment and tracking-object validation.
 /// </summary>
 public class ConfigurationValidatorTests
 {

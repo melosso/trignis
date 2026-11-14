@@ -12,17 +12,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Tests for DeadLetterService: schema initialisation, record persistence,
-/// deduplication, and purge logic.
-///
-/// DeadLetterService hard-codes "Data Source=sinkhole.db" (relative path).
-/// To isolate each test:
-///   - A unique temp directory is created per test instance.
-///   - Environment.CurrentDirectory is set to that directory in InitializeAsync (not the constructor) so it takes effect just-in-time, after xUnit has
-///     finished constructing all instances for the collection.
-///   - SqliteConnection.ClearAllPools() is called in DisposeAsync so pooled handles do not bleed across tests.
-///
-/// [Collection("SqliteTests")] ensures these tests run sequentially and never race against each other on Environment.CurrentDirectory.
+/// Tests for DeadLetterService: schema initialisation, record persistence, deduplication and purge. Each test sets Environment.CurrentDirectory to a unique temp directory in InitializeAsync (DeadLetterService uses the relative path sinkhole.db) and calls SqliteConnection.ClearAllPools() in DisposeAsync.
 /// </summary>
 [Collection("SqliteTests")]
 public sealed class DeadLetterServiceTests : IAsyncLifetime
@@ -94,8 +84,7 @@ public sealed class DeadLetterServiceTests : IAsyncLifetime
         cmd.CommandText = "SELECT TrackingObjectName, EnvironmentName, DatabaseName, ErrorMessage FROM DeadLetters LIMIT 1";
         await using var reader = await cmd.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        // TrackingObjectName keeps its "{environment}_{object}" shape; the environment is now
-        // also stored on its own so replay can resolve the target unambiguously.
+        // TrackingObjectName has the format "{environment}_{object}". The environment is also stored in its own column for replay.
         Assert.Equal("TestEnv_Orders", reader.GetString(0));
         Assert.Equal("TestEnv", reader.GetString(1));
         Assert.Equal("SalesDB", reader.GetString(2));

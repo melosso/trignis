@@ -6,12 +6,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Tests for EncryptionService: round-trip encryption, IsEncrypted detection,
-/// and error handling for invalid input.
-///
-/// Each test instance gets its own isolated temp directory.
-/// FindProjectRoot searches upward for an "environments" folder; we create one
-/// inside the temp dir so the service roots itself there.
+/// Tests for EncryptionService: round-trip encryption, IsEncrypted detection and invalid input errors. Each test creates a temp directory with an "environments" folder: FindProjectRoot resolves to that directory.
 /// </summary>
 public sealed class EncryptionServiceTests : IDisposable
 {

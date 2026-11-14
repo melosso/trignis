@@ -43,8 +43,7 @@ public class SqlDialectTests
     }
 
     /// <summary>
-    /// Only SQL Server can be seeded from the server. Postgres has to ask the function,
-    /// which is what drives <c>mode: "seed"</c> in the payload.
+    /// SQL Server seeds from the server. PostgreSQL seeds from the function through <c>mode: "seed"</c> in the payload.
     /// </summary>
     [Fact]
     public void Only_mssql_reports_a_server_side_watermark()

@@ -12,9 +12,7 @@ using System.Threading.Tasks;
 namespace Trignis.Tests.Stress;
 
 /// <summary>
-/// A real HTTP destination on a loopback port. Records the row ids of every request it
-/// accepted, and can be told to refuse, so a test can check what was delivered where
-/// rather than what the service believes it sent.
+/// HTTP destination on a loopback port. Records the row ids of every accepted request and can be set to refuse requests.
 /// </summary>
 internal sealed class HttpSink : IAsyncDisposable
 {

@@ -4,8 +4,7 @@ using Microsoft.Extensions.Configuration;
 namespace Trignis.Tests.Helpers;
 
 /// <summary>
-/// Builds IConfiguration objects for use in unit tests, using flat in-memory key-value pairs
-/// that mirror the format ConfigurationValidator expects.
+/// Builds IConfiguration objects from flat in-memory key-value pairs in the format that ConfigurationValidator reads.
 /// </summary>
 internal static class TestConfigurationBuilder
 {
@@ -15,8 +14,7 @@ internal static class TestConfigurationBuilder
     public const string EP = $"{EnvBase}:ChangeTracking:ApiEndpoints:0";
 
     /// <summary>
-    /// Returns a minimal set of valid key-value pairs for one environment with one tracking object.
-    /// ExportToApi is set to true so the validator will evaluate any ApiEndpoints you add.
+    /// Returns the minimal valid key-value pairs for one environment with one tracking object. ExportToApi is true: the validator evaluates added ApiEndpoints.
     /// </summary>
     public static Dictionary<string, string?> MinimalValidEnvironment() => new()
     {

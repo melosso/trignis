@@ -8,8 +8,7 @@ using Xunit;
 namespace Trignis.Tests.Stress;
 
 /// <summary>
-/// Runs only when the parity containers are up (Tests/parity/docker-compose.yml) and their
-/// connection strings are exported, so a plain `dotnet test` stays self-contained.
+/// Runs if the parity containers are up (Tests/parity/docker-compose.yml) and their connection strings are exported. Skipped otherwise.
 /// </summary>
 public sealed class ParityTheoryAttribute : TheoryAttribute
 {
@@ -21,8 +20,7 @@ public sealed class ParityTheoryAttribute : TheoryAttribute
 }
 
 /// <summary>
-/// A tracked table and its change procedure on a real server, one per test. Both platforms
-/// follow the documented contract: {"Metadata":{"Sync":{"Version":n}},"Data":[{..,"$version":n}]}.
+/// A tracked table and its change procedure on a real server, one per test. Contract: {"Metadata":{"Sync":{"Version":n}},"Data":[{..,"$version":n}]}.
 /// </summary>
 internal sealed class ParitySource : IAsyncDisposable
 {
@@ -120,8 +118,7 @@ internal sealed class ParitySource : IAsyncDisposable
     }
 
     /// <summary>
-    /// The newest version the procedure can report: the database-wide change tracking version
-    /// on SQL Server (one per commit, shared by every table), the highest row id on Postgres.
+    /// Returns the newest version the procedure can return: the database-wide change tracking version on SQL Server, the highest row id on PostgreSQL.
     /// </summary>
     public async Task<long> CurrentVersionAsync()
     {

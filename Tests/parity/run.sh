@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Runs the container-backed pipeline tests against the parity databases.
-# Usage: Tests/parity/run.sh [extra dotnet test args]
+# Runs the container-backed pipeline tests against the parity databases. Usage: Tests/parity/run.sh [extra dotnet test args]
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 

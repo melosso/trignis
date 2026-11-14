@@ -8,9 +8,7 @@ using Xunit;
 namespace Trignis.Tests.Data;
 
 /// <summary>
-/// Holds every dialect to the same contract, so a provider added later has to earn its place
-/// rather than quietly skipping half of what the pipeline assumes. These run against
-/// <see cref="SqlDialect.All"/> on purpose: adding a dialect adds cases here for free.
+/// Verifies the same contract for every dialect in <see cref="SqlDialect.All"/>. A new dialect is included automatically.
 /// </summary>
 public class SqlDialectParityTests
 {
@@ -98,8 +96,7 @@ public class SqlDialectParityTests
     {
         var dialect = Get(name);
 
-        // The defaults are merged through a provider-neutral builder, but the provider's own
-        // builder has to accept the result or opening the connection throws at runtime.
+        // The provider's builder must accept the merged defaults: an invalid key throws on connection open.
         var builder = dialect.Factory.CreateConnectionStringBuilder();
         Assert.NotNull(builder);
 
@@ -144,8 +141,7 @@ public class SqlDialectParityTests
     {
         var dialect = Get(name);
 
-        // Seeding sends mode: "seed" in the same JSON parameter, so there is nothing extra to
-        // declare - but the call has to carry a parameter at all, or seeding is impossible.
+        // Seeding sends mode "seed" in the JSON parameter: the call must have a parameter.
         if (dialect.CurrentVersionSql is null)
             Assert.Contains($"@{SqlDialect.JsonParameter}", string.Format(dialect.CallProcedure, "p"));
         else

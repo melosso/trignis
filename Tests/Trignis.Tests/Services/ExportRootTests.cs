@@ -25,8 +25,7 @@ public class ExportRootTests
     }
 
     [Theory]
-    // A bare filename or a leading placeholder would resolve to the working directory.
-    // Sweeping that for space is never what the setting means, so cleanup is skipped.
+    // A bare filename or a leading placeholder resolves to the working directory: cleanup is skipped.
     [InlineData("{object}-{timestamp}.json")]
     [InlineData("changes.json")]
     public void SkipsCleanupWhenRootWouldBeTheWorkingDirectory(string template)

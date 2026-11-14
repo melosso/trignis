@@ -10,11 +10,7 @@ using Xunit;
 namespace Trignis.Tests;
 
 /// <summary>
-/// Tests for MessageQueueService: covers dispatch logic, required-field guards,
-/// and message size validation for all supported queue types.
-///
-/// These tests verify behaviour that does NOT require a live broker: all guards
-/// that throw InvalidOperationException before a network connection is attempted.
+/// Tests for MessageQueueService without a live broker: dispatch logic, required-field guards and message size validation for all queue types.
 /// </summary>
 public class MessageQueueServiceTests : IAsyncLifetime
 {
@@ -92,8 +88,7 @@ public class MessageQueueServiceTests : IAsyncLifetime
     [Fact]
     public async Task AzureServiceBus_MissingQueueAndTopic_Throws()
     {
-        // A valid-format connection string so ServiceBusClient can be constructed,
-        // but neither QueueName nor TopicName is set.
+        // Valid connection string format for ServiceBusClient. QueueName and TopicName are not set.
         var endpoint = MqEndpoint("AzureServiceBus", new MessageQueueConfig
         {
             ConnectionString = "Endpoint=sb://fake-ns.servicebus.windows.net/;SharedAccessKeyName=k;SharedAccessKey=ZmFrZQ==",

@@ -11,9 +11,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// Regression cover for the snake_case token response. The web JSON defaults are camelCase and
-/// case-insensitive, which never matches "access_token", so before the explicit
-/// JsonPropertyName attributes every OAuth2 export failed with "Failed to obtain access token".
+/// Regression tests for the snake_case token response. The web JSON defaults are camelCase and do not match "access_token" without explicit JsonPropertyName attributes.
 /// </summary>
 public class OAuth2TokenBindingTests
 {
@@ -80,8 +78,7 @@ public class OAuth2TokenBindingTests
     }
 
     /// <summary>
-    /// expires_in drives the cache lifetime when nothing is configured. A 60-second token is
-    /// already past the one-minute safety margin, so the next call must re-request.
+    /// expires_in sets the cache lifetime if no lifetime is configured. A 60-second token equals the one-minute safety margin: the next call requests a new token.
     /// </summary>
     [Fact]
     public async Task ShortExpiresIn_ForcesReRequest()

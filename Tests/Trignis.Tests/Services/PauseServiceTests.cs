@@ -11,8 +11,7 @@ using Xunit;
 namespace Trignis.Tests.Services;
 
 /// <summary>
-/// PauseService takes its database path from configuration, so each test gets its own file
-/// and no working-directory juggling is needed.
+/// PauseService reads its database path from configuration: each test has its own database file.
 /// </summary>
 public sealed class PauseServiceTests : IAsyncLifetime
 {
@@ -130,8 +129,7 @@ public sealed class PauseServiceTests : IAsyncLifetime
     [Fact]
     public async Task Resuming_an_environment_does_not_resume_its_individually_paused_objects()
     {
-        // Otherwise resuming an environment would silently restart an object someone
-        // deliberately held for a different reason.
+        // Resuming an environment must not resume an object that was paused separately.
         await _svc.PauseAsync(PauseService.EnvironmentScope("prod"), null, null);
         await _svc.PauseAsync(PauseService.ObjectScope("prod", "Orders"), null, null);
 
