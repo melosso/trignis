@@ -156,7 +156,12 @@ public class EnvironmentConfigService : IDisposable
         }
 
         var hashKey = Path.GetFullPath(fullPath);
-        if (_appliedHashes.TryGetValue(hashKey, out var applied) && applied == hash) return;
+        if (_appliedHashes.TryGetValue(hashKey, out var applied) && applied == hash)
+        {
+            // Reverted to the running config.
+            _loadErrors.TryRemove(name, out _);
+            return;
+        }
 
         var newEnv = LoadFile(fullPath, out var loadError);
         if (newEnv != null)
@@ -225,7 +230,7 @@ public class EnvironmentConfigService : IDisposable
         try
         {
             var cfg = new ConfigurationBuilder()
-                .AddEncryptedJsonFile(relativePath, _encryptionService, optional: true)
+                .AddEncryptedJsonFile(relativePath, _encryptionService, optional: false)
                 .Build();
 
             var connectionStrings = new Dictionary<string, string>();
