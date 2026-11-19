@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -48,6 +49,15 @@ public sealed class ExportService
     }
 
     private const string FileTarget = "FILE";
+
+    private readonly ConcurrentDictionary<string, DateTime> _failingHttpEndpoints = new();
+
+    /// <summary>Health key for an HTTP endpoint.</summary>
+    public static string HttpHealthKey(EnvironmentConfig environment, ApiEndpoint endpoint) =>
+        $"http:{environment.Name}/{endpoint.Key ?? "unnamed"}";
+
+    /// <summary>HTTP endpoints with a failed last export.</summary>
+    public IReadOnlyCollection<string> FailingHttpEndpoints() => _failingHttpEndpoints.Keys.ToList();
 
     // ponytail: endpoints without a Key share the name "unnamed"; a replay for one resends to all. Set a Key per endpoint.
     private static string TargetName(ApiEndpoint endpoint) =>
@@ -162,6 +172,7 @@ public sealed class ExportService
                 }
                 else
                 {
+                    _failingHttpEndpoints.TryRemove(HttpHealthKey(environment, endpoint), out _);
                     _logger.LogInformation($"[{environment.Name}]  {prefix} [HTTP] Exported to endpoint '{endpoint.Key ?? "unnamed"}': {endpoint.Url}");
                 }
             }
@@ -173,6 +184,8 @@ public sealed class ExportService
             catch (Exception ex)
             {
                 var exportType = isQueue ? "MQ" : "HTTP";
+                if (!isQueue)
+                    _failingHttpEndpoints[HttpHealthKey(environment, endpoint)] = DateTime.UtcNow;
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [{exportType}] Export FAILED: {ex.Message}");
                 failures.Add(new ExportFailure(TargetName(endpoint), ex));
             }

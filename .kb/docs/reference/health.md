@@ -24,12 +24,19 @@ The overall picture: is the service up, and can it still reach its databases?
     "database": {
       "status": "ok (all)",
       "response_time_ms": 42
+    },
+    "destinations": {
+      "status": "ok",
+      "unhealthy": [],
+      "open_circuits": []
     }
   }
 }
 ```
 
-The top-level `status` reads `healthy` only when every configured database answers, so it is a genuinely strict signal rather than a liveness ping. When something is off, `database.status` tells you how much: `ok (all)`, `degraded (2/3)` or `failed (all)`.
+The top-level `status` is `healthy` if every database answers and no destination is failing. Otherwise it is `degraded`. `database.status` is `ok (all)`, `degraded (2/3)` or `failed (all)`.
+
+`destinations.unhealthy` contains queues that failed their last probe and HTTP endpoints with a failed last export. `destinations.open_circuits` contains queues with an open circuit breaker.
 
 Behind that answer, each call opens a real connection to every unique database with a 5 second timeout. Because that is real work, the response is cached for `Health:CacheDurationSeconds` (120 by default), which lets you poll as often as you like without turning your health check into a source of load.
 
@@ -121,4 +128,4 @@ With the dashboard turned off, the root path serves a small JSON index of the ro
 
 If you only wire up one route, make it `/health`. A non-200 means the process is not answering at all, and within a 200 the `status` field distinguishes `healthy` from `degraded`.
 
-It is worth adding `/health/deadletters` as a second signal, though. A rising `LastHourCount` tells you exports are failing right now, and that is something `/health` genuinely cannot see: a database can be perfectly reachable while every downstream endpoint refuses what you send it. The two together cover both halves of the pipeline.
+It is worth adding `/health/deadletters` as a second signal, though. A rising `LastHourCount` shows exports are failing right now.

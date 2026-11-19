@@ -17,6 +17,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using Trignis.Helpers;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Trignis.Services;
 
@@ -115,6 +116,11 @@ public class MessageQueueService : IAsyncDisposable
             throw new InvalidOperationException($"Message queue service is temporarily unavailable: {ex.Message}", ex);
         }
     }
+
+    /// <summary>Endpoint keys with an open circuit breaker.</summary>
+    public IReadOnlyList<string> OpenCircuits() =>
+        _circuitBreakers.Where(kvp => kvp.Value.CircuitState is CircuitState.Open or CircuitState.Isolated)
+            .Select(kvp => kvp.Key).Order().ToList();
 
     private AsyncCircuitBreakerPolicy GetCircuitBreaker(string key)
     {

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
@@ -17,6 +18,9 @@ public class HealthCheckService
     private readonly ILogger<HealthCheckService> _logger;
     private readonly IConfiguration _config;
     private readonly EnvironmentConfigService _envConfigService;
+    private readonly ConnectionHealthCheckService _connectionHealth;
+    private readonly MessageQueueService _messageQueues;
+    private readonly ExportService _exports;
     private readonly DateTime _startTime;
     private readonly string _version;
     private readonly int _cacheDurationSeconds;
@@ -28,11 +32,17 @@ public class HealthCheckService
     public HealthCheckService(
         ILogger<HealthCheckService> logger,
         IConfiguration config,
-        EnvironmentConfigService envConfigService)
+        EnvironmentConfigService envConfigService,
+        ConnectionHealthCheckService connectionHealth,
+        MessageQueueService messageQueues,
+        ExportService exports)
     {
         _logger = logger;
         _config = config;
         _envConfigService = envConfigService;
+        _connectionHealth = connectionHealth;
+        _messageQueues = messageQueues;
+        _exports = exports;
         _startTime = DateTime.UtcNow;
         _version = (typeof(HealthCheckService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0").Split('+')[0];
         _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
@@ -59,10 +69,16 @@ public class HealthCheckService
 
             // Check database connectivity
             var (dbStatus, dbResponseTime) = await CheckDatabaseHealthAsync(cancellationToken).ConfigureAwait(false);
+            var configuredHttp = _envConfigService.Environments
+                .SelectMany(e => (e.ChangeTracking.ApiEndpoints ?? []).Where(ep => string.IsNullOrEmpty(ep.MessageQueueType))
+                    .Select(ep => ExportService.HttpHealthKey(e, ep)))
+                .ToHashSet();
+            var destinations = CheckDestinations(_connectionHealth.GetHealthStatus(), _messageQueues.OpenCircuits(),
+                _exports.FailingHttpEndpoints().Where(configuredHttp.Contains).ToList());
 
             var healthResponse = new
             {
-                status = dbStatus == "ok (all)" ? "healthy" : "degraded",
+                status = dbStatus == "ok (all)" && destinations.Status == "ok" ? "healthy" : "degraded",
                 service = "trignis-service",
                 uptime = $"{uptime}s",
                 timestamp = timestamp,
@@ -73,6 +89,12 @@ public class HealthCheckService
                     {
                         status = dbStatus,
                         response_time_ms = dbResponseTime
+                    },
+                    destinations = new
+                    {
+                        status = destinations.Status,
+                        unhealthy = destinations.Unhealthy,
+                        open_circuits = destinations.OpenCircuits
                     }
                 }
             };
@@ -85,6 +107,20 @@ public class HealthCheckService
         {
             _semaphore.Release();
         }
+    }
+
+    public sealed record DestinationHealth(string Status, IReadOnlyList<string> Unhealthy, IReadOnlyList<string> OpenCircuits);
+
+    /// <summary>Queue probes, failing HTTP endpoints, open circuits.</summary>
+    public static DestinationHealth CheckDestinations(IReadOnlyDictionary<string, ConnectionHealth> connections,
+        IReadOnlyList<string> openCircuits, IReadOnlyCollection<string>? failingHttp = null)
+    {
+        var unhealthy = connections
+            .Where(kvp => !kvp.Key.StartsWith("sql:", StringComparison.Ordinal) && !kvp.Value.IsHealthy)
+            .Select(kvp => kvp.Key)
+            .Concat(failingHttp ?? [])
+            .Order().ToList();
+        return new DestinationHealth(unhealthy.Count == 0 && openCircuits.Count == 0 ? "ok" : "degraded", unhealthy, openCircuits);
     }
 
     private bool IsFresh(CacheEntry? entry, DateTime now) =>
