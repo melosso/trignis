@@ -563,6 +563,44 @@ try
                 return Results.Ok(new { ok = true, resumed, scope = resolved.Scope, label = resolved.Label });
             });
 
+            // Browser errors from the UI. Capped: the endpoint must not flood the log.
+            var clientErrorGate = new object();
+            var clientErrorWindow = DateTime.MinValue;
+            var clientErrorCount = 0;
+            app.MapPost("/ui/api/client-errors", async (HttpContext context) =>
+            {
+                if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
+                if (context.Request.ContentLength is null or > 8192)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
+                lock (clientErrorGate)
+                {
+                    if (DateTime.UtcNow - clientErrorWindow > TimeSpan.FromMinutes(1))
+                        (clientErrorWindow, clientErrorCount) = (DateTime.UtcNow, 0);
+                    if (++clientErrorCount > 30)
+                        return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+                }
+
+                JsonElement body;
+                try
+                {
+                    body = await context.Request.ReadFromJsonAsync<JsonElement>(context.RequestAborted);
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+                {
+                    return Results.BadRequest();
+                }
+
+                // One line each: the log viewer splits entries on new lines.
+                string Field(string name) =>
+                    body.ValueKind == JsonValueKind.Object && body.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String && v.GetString() is { } text
+                        ? text[..Math.Min(text.Length, 500)].ReplaceLineEndings(" ")
+                        : "";
+
+                Log.Warning("Web UI error on {Page}: {Message} ({Source})", Field("page"), Field("message"), Field("source"));
+                return Results.NoContent();
+            });
+
             app.MapGet("/ui/api/pauses", async (PauseService pauseService, HttpContext context) =>
                 Results.Json(await pauseService.ListAsync(context.RequestAborted)));
 

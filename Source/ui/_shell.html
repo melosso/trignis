@@ -28,6 +28,29 @@
     if (res.status === 401) window.location.href = '/ui/login';
     return res;
   };
+
+  // Double-submit: echo the session CSRF cookie back in a header. .NET URL-encodes cookie values, so decode to match what the server reads.
+  function csrfToken() {
+    const entry = document.cookie.split('; ').find(c => c.startsWith('trignis_csrf='));
+    return entry ? decodeURIComponent(entry.slice('trignis_csrf='.length)) : '';
+  }
+
+  // Browser errors go to the server log, once per message.
+  const reportedErrors = new Set();
+  function reportClientError(message, source) {
+    const text = String(message ?? 'Unknown error').slice(0, 500);
+    if (reportedErrors.has(text) || reportedErrors.size >= 20) return;
+    reportedErrors.add(text);
+    fetchOnce('/ui/api/client-errors', {
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken() },
+      body: JSON.stringify({ message: text, source: String(source ?? '').slice(0, 500), page: location.pathname })
+    }).catch(() => {});
+  }
+  window.addEventListener('error', e => reportClientError(e.message, `${e.filename}:${e.lineno}:${e.colno}`));
+  window.addEventListener('unhandledrejection', e => reportClientError(e.reason?.message ?? e.reason, 'unhandledrejection'));
   </script>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>

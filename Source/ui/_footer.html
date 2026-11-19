@@ -4,12 +4,6 @@
 // One delegated instance: rows are re-rendered, so per-element tooltips would be lost.
 tippy.delegate(document.body, { target: '[data-tippy-content]', arrow: false, delay: [300, 0], offset: [0, 6] });
 
-// Double-submit: echo the session CSRF cookie back in a header. .NET URL-encodes cookie values, so decode to match what the server reads.
-function csrfToken() {
-  const entry = document.cookie.split('; ').find(c => c.startsWith('trignis_csrf='));
-  return entry ? decodeURIComponent(entry.slice('trignis_csrf='.length)) : '';
-}
-
 function postJson(url, body) {
   return fetch(url, {
     method: 'POST',
