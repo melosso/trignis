@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
+using Microsoft.Data.Sqlite;
 
 namespace Trignis.Helpers;
 
@@ -24,6 +25,26 @@ public sealed class WebUiAuth
     private const int MaxCsrfTokens = 10_000;
 
     private readonly ConcurrentDictionary<string, DateTime> _revokedSessions = new();
+    private readonly string? _stateConnectionString;
+
+    public WebUiAuth() { }
+
+    /// <summary>Persists revoked sessions in the state database.</summary>
+    public WebUiAuth(string stateDbPath)
+    {
+        _stateConnectionString = $"Data Source={stateDbPath}";
+        using var conn = new SqliteConnection(_stateConnectionString);
+        conn.Open();
+        var command = conn.CreateCommand();
+        command.CommandText = @"
+            CREATE TABLE IF NOT EXISTS RevokedSessions (SessionId TEXT PRIMARY KEY, ExpiresAt INTEGER NOT NULL);
+            DELETE FROM RevokedSessions WHERE ExpiresAt < @now;
+            SELECT SessionId, ExpiresAt FROM RevokedSessions;";
+        command.Parameters.AddWithValue("@now", DateTime.UtcNow.Ticks);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            _revokedSessions[reader.GetString(0)] = new DateTime(reader.GetInt64(1), DateTimeKind.Utc);
+    }
 
     private readonly record struct Attempt(int Failures, DateTime LastFailure, DateTime? LockedUntil);
 
@@ -108,9 +129,22 @@ public sealed class WebUiAuth
             System.Text.Encoding.UTF8.GetBytes(cookieValue));
 
     /// <summary>
-    /// Revokes a session on the server: a copied cookie is rejected after logout. ponytail: in-memory; a restart clears revocations until the cookie's 24h expiry, persist the ids if required.
+    /// Revokes a session on the server: a copied cookie is rejected after logout.
     /// </summary>
-    public void RevokeSession(string sessionId, DateTime expiresAt) => _revokedSessions[sessionId] = expiresAt;
+    public void RevokeSession(string sessionId, DateTime expiresAt)
+    {
+        _revokedSessions[sessionId] = expiresAt;
+        if (_stateConnectionString is null)
+            return;
+
+        using var conn = new SqliteConnection(_stateConnectionString);
+        conn.Open();
+        var command = conn.CreateCommand();
+        command.CommandText = "INSERT OR REPLACE INTO RevokedSessions (SessionId, ExpiresAt) VALUES (@id, @expiresAt)";
+        command.Parameters.AddWithValue("@id", sessionId);
+        command.Parameters.AddWithValue("@expiresAt", expiresAt.Ticks);
+        command.ExecuteNonQuery();
+    }
 
     public bool IsSessionRevoked(string sessionId) => _revokedSessions.ContainsKey(sessionId);
 

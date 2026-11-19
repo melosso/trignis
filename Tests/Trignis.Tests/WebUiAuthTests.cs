@@ -67,3 +67,27 @@ public class WebUiAuthTests
     public void DoubleSubmit_RequiresMatchingNonEmptyValues(string? header, string? cookie, bool expected) =>
         Assert.Equal(expected, WebUiAuth.IsDoubleSubmitValid(header, cookie));
 }
+
+public sealed class WebUiAuthPersistenceTests : IDisposable
+{
+    private readonly string _dbPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"trignis-auth-{Guid.NewGuid():N}.db");
+
+    [Fact]
+    public void RevokedSession_IsRevokedAfterRestart_UntilItExpires()
+    {
+        var before = new WebUiAuth(_dbPath);
+        before.RevokeSession("live", DateTime.UtcNow.AddHours(1));
+        before.RevokeSession("expired", DateTime.UtcNow.AddHours(-1));
+
+        var after = new WebUiAuth(_dbPath);
+
+        Assert.True(after.IsSessionRevoked("live"));
+        Assert.False(after.IsSessionRevoked("expired"));
+    }
+
+    public void Dispose()
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        System.IO.File.Delete(_dbPath);
+    }
+}

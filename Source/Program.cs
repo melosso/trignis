@@ -112,7 +112,7 @@ try
     builder.Services.AddDataProtection()
         .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, ".core", "dp-keys")));
     builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(globalSettings));
-    builder.Services.AddSingleton<WebUiAuth>();
+    builder.Services.AddSingleton(_ => new WebUiAuth(builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db")!));
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterQueueMonitor>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DeadLetterQueueMonitor>());
