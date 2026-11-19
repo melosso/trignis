@@ -255,6 +255,20 @@ try
         Log.Warning("Ignoring WebHost:TrustedProxies entry {Entry}: not an IP address or CIDR range", entry);
     app.UseForwardedHeaders(forwardedOptions);
 
+    // Views use inline scripts and handlers.
+    app.Use(async (context, next) =>
+    {
+        var headers = context.Response.Headers;
+        headers.TryAdd("X-Content-Type-Options", "nosniff");
+        headers.TryAdd("X-Frame-Options", "DENY");
+        headers.TryAdd("Referrer-Policy", "no-referrer");
+        headers.TryAdd("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+        headers.TryAdd("Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+            "img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+        await next();
+    });
+
     // Auth middleware: registered before static files so .html paths are also protected
     if (authEnabled)
     {
