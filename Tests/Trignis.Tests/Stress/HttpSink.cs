@@ -20,6 +20,7 @@ internal sealed class HttpSink : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _loop;
     private readonly ConcurrentQueue<long> _accepted = new();
+    private readonly ConcurrentQueue<(long Id, string? Val)> _rows = new();
     private int _requests;
 
     public string Url { get; }
@@ -33,6 +34,9 @@ internal sealed class HttpSink : IAsyncDisposable
     public int Requests => Volatile.Read(ref _requests);
 
     public IReadOnlyList<long> Accepted => _accepted.ToArray();
+
+    /// <summary>Accepted rows with their <c>val</c> column.</summary>
+    public IReadOnlyList<(long Id, string? Val)> AcceptedRows => _rows.ToArray();
 
     public HttpSink()
     {
@@ -75,7 +79,11 @@ internal sealed class HttpSink : IAsyncDisposable
             {
                 using var doc = JsonDocument.Parse(body);
                 foreach (var row in doc.RootElement.EnumerateArray())
-                    _accepted.Enqueue(row.GetProperty("id").GetInt64());
+                {
+                    var id = row.GetProperty("id").GetInt64();
+                    _accepted.Enqueue(id);
+                    _rows.Enqueue((id, row.TryGetProperty("val", out var val) ? val.GetString() : null));
+                }
             }
 
             context.Response.StatusCode = status;

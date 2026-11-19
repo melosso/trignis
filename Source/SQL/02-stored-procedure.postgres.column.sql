@@ -53,7 +53,7 @@ DECLARE
     max_version  BIGINT;
     rows_json    json;
 BEGIN
-    SELECT COALESCE(MAX(id), from_version)
+    SELECT COALESCE(MAX(xact_id::text::BIGINT), from_version)
       INTO max_version
       FROM public.training_sessions_outbox
      WHERE xact_id < horizon;
@@ -67,7 +67,7 @@ BEGIN
 
     SELECT COALESCE(json_agg(json_strip_nulls(json_build_object(
                '$operation',       o.operation,
-               '$version',         o.id,
+               '$version',         o.xact_id::text::BIGINT,
                -- Names of changed columns. A name in $changed with no key in the payload = the column was set to NULL (json_strip_nulls removes null keys).
                '$changed',         CASE WHEN o.operation = 'U' THEN o.changed END,
                -- NULL mask = the row predates column tracking: $changed is absent and every column is sent. Treat an update without $changed as a full row.
@@ -81,10 +81,10 @@ BEGIN
                'PostProcessedOn',  CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'PostProcessedOn' = ANY(o.changed) THEN o.post_processed_on END,
                'AdjustedSteps',    CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'AdjustedSteps'    = ANY(o.changed) THEN o.adjusted_steps    END,
                'AdjustedDistance', CASE WHEN o.operation = 'I' OR o.changed IS NULL OR 'AdjustedDistance' = ANY(o.changed) THEN o.adjusted_distance END
-           )) ORDER BY o.id), '[]'::json)
+           )) ORDER BY o.xact_id, o.id), '[]'::json)
       INTO rows_json
       FROM public.training_sessions_outbox o
-     WHERE o.id > from_version
+     WHERE o.xact_id::text::BIGINT > from_version
        AND o.xact_id < horizon;
 
     RETURN json_build_object(

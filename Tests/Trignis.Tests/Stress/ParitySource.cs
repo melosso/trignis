@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Data.Common;
 using System.Threading;
@@ -31,6 +32,7 @@ internal sealed class ParitySource : IAsyncDisposable
     private readonly string _suffix = Guid.NewGuid().ToString("N")[..12];
 
     public string Provider { get; }
+    public bool Transactional { get; private init; }
     public string Connection { get; private set; }
     public string Table => Provider == "mssql" ? $"dbo.items_{_suffix}" : $"public.items_{_suffix}";
     public string Procedure => Provider == "mssql" ? $"dbo.changes_{_suffix}" : $"public.changes_{_suffix}";
@@ -42,9 +44,10 @@ internal sealed class ParitySource : IAsyncDisposable
         Connection = ConnectionString(provider)!;
     }
 
-    public static async Task<ParitySource> CreateAsync(string provider)
+    /// <param name="transactional">Versions that stay correct under concurrent transactions: SNAPSHOT reads on SQL Server, transaction ids on PostgreSQL. Tracks updates on both.</param>
+    public static async Task<ParitySource> CreateAsync(string provider, bool transactional = false)
     {
-        var source = new ParitySource(provider);
+        var source = new ParitySource(provider) { Transactional = transactional };
 
         if (provider == "mssql")
         {
@@ -55,6 +58,8 @@ internal sealed class ParitySource : IAsyncDisposable
                     alter database trignis_parity set change_tracking = on (change_retention = 2 days, auto_cleanup = on);
                 """);
             source.Connection += ";Database=trignis_parity";
+            if (transactional)
+                await source.ExecuteAsync("alter database trignis_parity set allow_snapshot_isolation on");
 
             await source.ExecuteAsync($"""
                 create table {source.Table} (id bigint identity primary key, val nvarchar(100) not null);
@@ -64,6 +69,7 @@ internal sealed class ParitySource : IAsyncDisposable
                 create procedure {source.Procedure} @Json nvarchar(max) as
                 begin
                     set nocount on;
+                    {(transactional ? "set transaction isolation level snapshot; begin tran;" : "")}
                     declare @from bigint = json_value(@Json, '$.fromVersion');
                     declare @current bigint = change_tracking_current_version();
                     select (
@@ -74,7 +80,33 @@ internal sealed class ParitySource : IAsyncDisposable
                                  where ct.SYS_CHANGE_VERSION <= @current
                                    for json path) as Data
                            for json path, without_array_wrapper);
+                    {(transactional ? "commit;" : "")}
                 end
+                """);
+        }
+        else if (transactional)
+        {
+            // Rows carry the writing transaction's id; everything below the snapshot xmin is committed or gone.
+            await source.ExecuteAsync($"""
+                create table {source.Table} (id bigserial primary key, val text not null, xv xid8 not null default pg_current_xact_id());
+                create function {source.Procedure}_touch() returns trigger language plpgsql as $$
+                begin new.xv := pg_current_xact_id(); return new; end $$;
+                create trigger touch before update on {source.Table} for each row execute function {source.Procedure}_touch();
+                """);
+            await source.ExecuteAsync($"""
+                create function {source.Procedure}(payload json) returns json language plpgsql as $$
+                declare
+                    from_version bigint := coalesce((payload ->> 'fromVersion')::bigint, 0);
+                    safe bigint := pg_snapshot_xmin(pg_current_snapshot())::text::bigint;
+                begin
+                    if coalesce(payload ->> 'mode', 'sync') = 'seed' then
+                        return json_build_object('Metadata', json_build_object('Sync', json_build_object('Version', safe - 1)));
+                    end if;
+                    return json_build_object(
+                        'Metadata', json_build_object('Sync', json_build_object('Version', safe - 1)),
+                        'Data', (select coalesce(json_agg(json_build_object('id', o.id, 'val', o.val, '$version', o.xv::text::bigint) order by o.xv), '[]'::json)
+                                   from {source.Table} o where o.xv::text::bigint > from_version and o.xv::text::bigint < safe));
+                end $$
                 """);
         }
         else
@@ -117,6 +149,16 @@ internal sealed class ParitySource : IAsyncDisposable
         await tx.CommitAsync(ct);
     }
 
+    /// <summary>Inserts <paramref name="count"/> rows in one statement.</summary>
+    public Task BulkInsertAsync(int count) => ExecuteAsync(Provider == "mssql"
+        ? $"insert into {Table} (val) select top ({count}) 'v' from sys.all_objects a cross join sys.all_objects b"
+        : $"insert into {Table} (val) select 'v' from generate_series(1, {count})");
+
+    /// <summary>Updates up to <paramref name="count"/> existing rows. Tracked on PostgreSQL only by a transactional source.</summary>
+    public Task BulkUpdateAsync(int count, string value) => ExecuteAsync(Provider == "mssql"
+        ? $"update top ({count}) {Table} set val = '{value}' where val <> '{value}'"
+        : $"update {Table} set val = '{value}' where id in (select id from {Table} where val <> '{value}' limit {count})");
+
     /// <summary>
     /// Returns the newest version the procedure can return: the database-wide change tracking version on SQL Server, the highest row id on PostgreSQL.
     /// </summary>
@@ -126,8 +168,20 @@ internal sealed class ParitySource : IAsyncDisposable
         await using DbCommand cmd = conn.CreateCommand();
         cmd.CommandText = Provider == "mssql"
             ? "select change_tracking_current_version()"
-            : $"select coalesce(max(id), 0) from {Table}";
+            : Transactional ? $"select coalesce(max(xv::text::bigint), 0) from {Table}" : $"select coalesce(max(id), 0) from {Table}";
         return Convert.ToInt64(await cmd.ExecuteScalarAsync());
+    }
+
+    /// <summary>Current value of every row.</summary>
+    public async Task<Dictionary<long, string>> ValuesAsync()
+    {
+        await using var conn = await _dialect.OpenAsync(Connection, CancellationToken.None);
+        await using DbCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $"select id, val from {Table}";
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var result = new Dictionary<long, string>();
+        while (await reader.ReadAsync()) result[reader.GetInt64(0)] = reader.GetString(1);
+        return result;
     }
 
     public async Task ExecuteAsync(string sql)
@@ -145,6 +199,7 @@ internal sealed class ParitySource : IAsyncDisposable
         {
             await ExecuteAsync($"drop {routine} if exists {Procedure}");
             await ExecuteAsync($"drop table if exists {Table}");
+            if (Provider != "mssql") await ExecuteAsync($"drop function if exists {Procedure}_touch()");
         }
         catch (Exception)
         {

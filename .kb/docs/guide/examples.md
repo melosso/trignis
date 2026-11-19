@@ -7,13 +7,14 @@ description: Two complete setups, one custom table and one from AdventureWorks
 
 Two full walkthroughs. The first builds a table from scratch, so you can run it on an empty database. The second tracks an existing AdventureWorks table, which is closer to what you will actually be doing.
 
-Both follow the same four steps: create or pick a table, enable change tracking, write the procedure, point an environment at it.
+Both follow the same four steps: create or pick a table, enable change tracking, write the procedure, point an environment at it. Example 1 has a SQL Server and a PostgreSQL tab. Example 2 uses AdventureWorks, a SQL Server sample database.
 
-## Example 1: a custom `dbo.Products` table
+## Example 1: a custom `Products` table
 
 ### The table
 
-```sql
+::: code-group
+```sql [SQL Server]
 CREATE TABLE dbo.Products
 (
     ProductId     INT             NOT NULL IDENTITY(1,1),
@@ -28,23 +29,60 @@ CREATE TABLE dbo.Products
     CONSTRAINT UQ_Products_Sku UNIQUE (Sku)
 );
 ```
+```sql [PostgreSQL]
+CREATE TABLE public.products
+(
+    product_id    INT            GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    sku           TEXT           NOT NULL UNIQUE,
+    name          TEXT           NOT NULL,
+    category      TEXT,
+    unit_price    NUMERIC(18, 2) NOT NULL DEFAULT 0,
+    in_stock      BOOLEAN        NOT NULL DEFAULT TRUE,
+    modified_date TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+```
+:::
 
 Change tracking needs a primary key. `ProductId` is it, and it is the value that appears in every change row, including deletes.
 
 ### Enable change tracking
 
-```sql
+::: code-group
+```sql [SQL Server]
 ALTER DATABASE ShopDb
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
 ALTER TABLE dbo.Products ENABLE CHANGE TRACKING;
 ```
+```sql [PostgreSQL]
+-- One outbox row per change, deletes included.
+CREATE TABLE public.products_outbox
+(
+    id         BIGINT  GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    xact_id    xid8    NOT NULL DEFAULT pg_current_xact_id(),
+    operation  CHAR(1) NOT NULL,
+    product_id INT     NOT NULL
+);
 
-`CHANGE_RETENTION` is how long history survives. If Trignis is stopped for longer than that, the stored version ages out and the next run falls back to a full sync.
+CREATE OR REPLACE FUNCTION public.products_capture() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.products_outbox (operation, product_id)
+    VALUES (LEFT(TG_OP, 1), CASE WHEN TG_OP = 'DELETE' THEN OLD.product_id ELSE NEW.product_id END);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER products_capture AFTER INSERT OR UPDATE OR DELETE ON public.products
+FOR EACH ROW EXECUTE FUNCTION public.products_capture();
+```
+:::
+
+On SQL Server, `CHANGE_RETENTION` is how long history survives. If Trignis is stopped for longer than that, the stored version ages out and the next run falls back to a full sync. On PostgreSQL the outbox keeps every change until you delete it (see [Cleaning up](/reference/stored-procedure#cleaning-up)).
 
 ### The procedure
 
-```sql
+::: code-group
+```sql [SQL Server]
 CREATE OR ALTER PROCEDURE dbo.get_productssync
     @Json NVARCHAR(MAX)
 AS
@@ -113,6 +151,43 @@ BEGIN
     COMMIT TRAN;
 END
 ```
+```sql [PostgreSQL]
+CREATE OR REPLACE FUNCTION public.get_productssync(payload json) RETURNS json AS $$
+DECLARE
+    from_version BIGINT := COALESCE((payload ->> 'fromVersion')::BIGINT, 0);
+    horizon      xid8   := pg_snapshot_xmin(pg_current_snapshot());
+    -- Every transaction below the horizon has finished.
+    max_version  BIGINT := horizon::text::BIGINT - 1;
+BEGIN
+
+    IF payload ->> 'mode' = 'seed' THEN
+        RETURN json_build_object('Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Diff')));
+    END IF;
+
+    IF from_version = 0 THEN
+        RETURN json_build_object(
+            'Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Full')),
+            'Data', (SELECT COALESCE(json_agg(json_build_object(
+                        'ProductId', p.product_id, 'Sku', p.sku, 'Name', p.name, 'Category', p.category,
+                        'UnitPrice', p.unit_price, 'InStock', p.in_stock, 'ModifiedDate', p.modified_date)), '[]'::json)
+                       FROM public.products p));
+    END IF;
+
+    -- Latest change per product, like CHANGETABLE.
+    RETURN json_build_object(
+        'Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Diff')),
+        'Data', (SELECT COALESCE(json_agg(json_build_object(
+                    '$operation', c.operation, '$version', c.xact_id::text::BIGINT, 'ProductId', c.product_id,
+                    'Sku', p.sku, 'Name', p.name, 'Category', p.category,
+                    'UnitPrice', p.unit_price, 'InStock', p.in_stock, 'ModifiedDate', p.modified_date)), '[]'::json)
+                   FROM (SELECT DISTINCT ON (product_id) * FROM public.products_outbox
+                          WHERE xact_id::text::BIGINT > from_version AND xact_id < horizon
+                          ORDER BY product_id, xact_id DESC, id DESC) c
+                   LEFT JOIN public.products p ON p.product_id = c.product_id));
+END;
+$$ LANGUAGE plpgsql;
+```
+:::
 
 ::: tip
 Driving the join from `CHANGETABLE` with a `LEFT OUTER JOIN` keeps deleted rows, exactly like the `RIGHT OUTER JOIN` form in [Track your first table](/guide/first-table). Both work. Leading with the change table reads more naturally, because it is the side that always has a row.
@@ -124,7 +199,8 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
 
 `environments/shop.json`:
 
-```json
+::: code-group
+```json [SQL Server]
 {
   "ConnectionStrings": {
     "ShopDb": "Server=localhost;Database=ShopDb;Trusted_Connection=True;TrustServerCertificate=True;"
@@ -145,12 +221,36 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
   }
 }
 ```
+```json [PostgreSQL]
+{
+  "Provider": "postgres",
+  "ConnectionStrings": {
+    "ShopDb": "Host=localhost;Database=shopdb;Username=trignis;Password=..."
+  },
+  "ChangeTracking": {
+    "PollingIntervalSeconds": 15,
+    "ExportToFile": true,
+    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
+    "TrackingObjects": [
+      {
+        "Name": "Products",
+        "Database": "ShopDb",
+        "TableName": "public.products",
+        "StoredProcedureName": "public.get_productssync",
+        "InitialSyncMode": "Full"
+      }
+    ]
+  }
+}
+```
+:::
 
 `InitialSyncMode: "Full"` is reasonable here: a product catalogue is small, and the downstream system probably wants the whole thing before it starts receiving updates.
 
 ### Try it
 
-```sql
+::: code-group
+```sql [SQL Server]
 INSERT INTO dbo.Products (Sku, Name, Category, UnitPrice)
 VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
        ('SKU-002', 'Red Widget',  'Widgets', 12.50);
@@ -158,6 +258,15 @@ VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
 UPDATE dbo.Products SET UnitPrice = 11.00 WHERE Sku = 'SKU-001';
 DELETE FROM dbo.Products WHERE Sku = 'SKU-002';
 ```
+```sql [PostgreSQL]
+INSERT INTO public.products (sku, name, category, unit_price)
+VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
+       ('SKU-002', 'Red Widget',  'Widgets', 12.50);
+
+UPDATE public.products SET unit_price = 11.00 WHERE sku = 'SKU-001';
+DELETE FROM public.products WHERE sku = 'SKU-002';
+```
+:::
 
 Within one polling interval a file appears under `exports/shop/Products/`:
 
@@ -167,6 +276,8 @@ Within one polling interval a file appears under `exports/shop/Products/`:
   { "$operation": "D", "$version": 4, "ProductId": 2 }
 ]
 ```
+
+On PostgreSQL, `$version` is the transaction id and `ModifiedDate` includes the time zone.
 
 Two changes, not three. The insert and the update to `SKU-001` collapse into one row at the latest version, which is the point of polling. `SKU-002` was inserted and deleted between polls, so only the delete survives.
 

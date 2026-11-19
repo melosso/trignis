@@ -7,15 +7,16 @@ description: From an empty install to changes landing on disk
 
 End to end with one table, exporting to files. Swapping the destination later is a config change.
 
-This walkthrough uses SQL Server change tracking, the most common setup. For PostgreSQL, the [contract reference](/reference/stored-procedure#postgresql) has the equivalent outbox table, trigger and function; steps 2 to 4 below are identical once `"Provider": "postgres"` is set.
+Each code block has a SQL Server and a PostgreSQL tab. SQL Server uses change tracking. PostgreSQL uses an outbox table filled by a trigger.
 
 ## 1. Write the stored procedure
 
 Trignis asks your procedure for changes since a version, and it answers in JSON. Nothing is generated for you. You choose the columns.
 
-For `dbo.Items` with `ItemCode`, `Description`, `Assortment` and `sysguid`:
+For an items table with `ItemCode`, `Description`, `Assortment` and `sysguid`:
 
-```sql
+::: code-group
+```sql [SQL Server]
 CREATE OR ALTER PROCEDURE web.get_itemssync
     @json NVARCHAR(MAX)
 AS
@@ -74,11 +75,67 @@ BEGIN
     COMMIT TRAN;
 END
 ```
+```sql [PostgreSQL]
+-- One outbox row per change, deletes included.
+CREATE TABLE public.items_outbox
+(
+    id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    xact_id     xid8    NOT NULL DEFAULT pg_current_xact_id(),
+    operation   CHAR(1) NOT NULL,
+    item_code   TEXT    NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION public.items_capture() RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO public.items_outbox (operation, item_code)
+    VALUES (LEFT(TG_OP, 1), CASE WHEN TG_OP = 'DELETE' THEN OLD.item_code ELSE NEW.item_code END);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER items_capture AFTER INSERT OR UPDATE OR DELETE ON public.items
+FOR EACH ROW EXECUTE FUNCTION public.items_capture();
+
+CREATE SCHEMA IF NOT EXISTS web;
+
+CREATE OR REPLACE FUNCTION web.get_itemssync(payload json) RETURNS json AS $$
+DECLARE
+    from_version BIGINT := COALESCE((payload ->> 'fromVersion')::BIGINT, 0);
+    horizon      xid8   := pg_snapshot_xmin(pg_current_snapshot());
+    -- Every transaction below the horizon has finished.
+    max_version  BIGINT := horizon::text::BIGINT - 1;
+BEGIN
+
+    IF payload ->> 'mode' = 'seed' THEN
+        RETURN json_build_object('Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Diff')));
+    END IF;
+
+    IF from_version = 0 THEN
+        RETURN json_build_object(
+            'Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Full')),
+            'Data', (SELECT COALESCE(json_agg(json_build_object(
+                        'ItemCode', i.item_code, 'Description', i.description, 'Assortment', i.assortment, 'sysguid', i.sysguid)), '[]'::json)
+                       FROM public.items i));
+    END IF;
+
+    RETURN json_build_object(
+        'Metadata', json_build_object('Sync', json_build_object('Version', max_version, 'Type', 'Diff')),
+        'Data', (SELECT COALESCE(json_agg(json_build_object(
+                    '$operation', c.operation, '$version', c.xact_id::text::BIGINT,
+                    'ItemCode', c.item_code, 'Description', i.description, 'Assortment', i.assortment, 'sysguid', i.sysguid)), '[]'::json)
+                   FROM (SELECT DISTINCT ON (item_code) * FROM public.items_outbox
+                          WHERE xact_id::text::BIGINT > from_version AND xact_id < horizon
+                          ORDER BY item_code, xact_id DESC, id DESC) c
+                   LEFT JOIN public.items i ON i.item_code = c.item_code));
+END;
+$$ LANGUAGE plpgsql;
+```
+:::
 
 Two details that matter:
 
-- The **`RIGHT OUTER JOIN`** keeps deletes. The change table has the row, the base table no longer does.
-- **`SNAPSHOT` isolation** keeps the version number and the rows consistent with each other.
+- **Deletes:** on SQL Server the `RIGHT OUTER JOIN` keeps them, because the change table has the row and the base table does not. On PostgreSQL the trigger writes them to the outbox.
+- **Consistent versions:** on SQL Server `SNAPSHOT` isolation keeps the version number and the rows consistent. On PostgreSQL the `pg_snapshot_xmin` horizon defers changes from transactions that are still open.
 
 Full contract, including column-level tracking, is in the [reference](/reference/stored-procedure).
 
@@ -86,7 +143,8 @@ Full contract, including column-level tracking, is in the [reference](/reference
 
 Create `environments/production.json`:
 
-```json
+::: code-group
+```json [SQL Server]
 {
   "Provider": "mssql",
   "ConnectionStrings": {
@@ -106,6 +164,27 @@ Create `environments/production.json`:
   }
 }
 ```
+```json [PostgreSQL]
+{
+  "Provider": "postgres",
+  "ConnectionStrings": {
+    "PrimaryDatabase": "Host=prod-pg.company.com;Database=primarydb;Username=trignis;Password=..."
+  },
+  "ChangeTracking": {
+    "ExportToFile": true,
+    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
+    "TrackingObjects": [
+      {
+        "Name": "Items",
+        "Database": "PrimaryDatabase",
+        "TableName": "public.items",
+        "StoredProcedureName": "web.get_itemssync"
+      }
+    ]
+  }
+}
+```
+:::
 
 The filename becomes the environment name. `Database` refers to a key in `ConnectionStrings`, not a server-side database name.
 

@@ -240,7 +240,9 @@ pg_snapshot_xmin(pg_current_snapshot())
 
 Every row whose `xact_id` is below that is committed and visible for good. Rows at or above it are excluded this cycle and picked up by the next one, in order. This is what snapshot isolation does for you on SQL Server; here it is explicit.
 
-Filter **and** compute the watermark through the same horizon. Using the horizon for the rows but `MAX(id)` for the version reintroduces exactly the gap it exists to prevent.
+Use `xact_id` as the version, and filter and compute the watermark through the same horizon. An outbox `id` is assigned at insert: an older transaction can insert a higher `id` and commit while a newer one is still open, and an `id` watermark then skips the newer one.
+
+If an existing outbox function versions by `id`: replace it, then reset the object's sync state from the dashboard.
 
 ### The function
 
@@ -254,7 +256,7 @@ DECLARE
     max_version  BIGINT;
     rows_json    json;
 BEGIN
-    SELECT COALESCE(MAX(id), from_version)
+    SELECT COALESCE(MAX(xact_id::text::BIGINT), from_version)
       INTO max_version
       FROM items_outbox
      WHERE xact_id < horizon;
@@ -268,13 +270,13 @@ BEGIN
 
     SELECT COALESCE(json_agg(json_build_object(
                '$operation',  o.operation,
-               '$version',    o.id,
+               '$version',    o.xact_id::text::BIGINT,
                'ItemCode',    o.item_code,
                'Description', o.description
-           ) ORDER BY o.id), '[]'::json)
+           ) ORDER BY o.xact_id, o.id), '[]'::json)
       INTO rows_json
       FROM items_outbox o
-     WHERE o.id > from_version
+     WHERE o.xact_id::text::BIGINT > from_version
        AND o.xact_id < horizon;
 
     RETURN json_build_object(

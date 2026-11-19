@@ -44,38 +44,34 @@ public class MessageQueueService : IAsyncDisposable
             throw new InvalidOperationException("MessageQueue configuration is required");
         }
 
-        var correlationId = Guid.NewGuid().ToString();
-        var messageBody = JsonSerializer.Serialize(data);
-        var messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
-
-        _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)",
-            endpoint.MessageQueueType, correlationId, messageSizeBytes);
+        var queueType = endpoint.MessageQueueType?.ToLower();
 
         // Size check precedes the circuit breaker: an oversized payload must not count as a broker failure.
-        var queueType = endpoint.MessageQueueType?.ToLower();
-        var compressed = false;
-
-        switch (queueType)
+        var fit = Fit(queueType, JsonSerializer.Serialize(data));
+        if (fit is null)
         {
-            case "rabbitmq":
-                ValidateMessageSize(messageSizeBytes, RABBITMQ_MAX_SIZE, "RabbitMQ");
-                break;
-            case "azureservicebus" when messageSizeBytes > AZURE_SB_STANDARD_MAX:
-            case "awssqs" when messageSizeBytes > AWS_SQS_MAX_SIZE:
-                messageBody = CompressMessage(messageBody);
-                messageSizeBytes = Encoding.UTF8.GetByteCount(messageBody);
-                compressed = true;
-                ValidateMessageSize(messageSizeBytes,
-                    queueType == "awssqs" ? AWS_SQS_MAX_SIZE : AZURE_SB_STANDARD_MAX,
-                    queueType == "awssqs" ? "AWS SQS" : "Azure Service Bus");
-                break;
-            case "azureeventhubs":
-                ValidateMessageSize(messageSizeBytes, AZURE_EH_MAX_SIZE, "Azure Event Hubs");
-                break;
-            case "kafka":
-                ValidateMessageSize(messageSizeBytes, KAFKA_DEFAULT_MAX_SIZE, "Kafka");
-                break;
+            if (data.ValueKind != JsonValueKind.Array || data.GetArrayLength() < 2)
+                throw new InvalidOperationException(queueType switch
+                {
+                    "rabbitmq" => "RabbitMQ",
+                    "azureservicebus" => "Azure Service Bus",
+                    "awssqs" => "AWS SQS",
+                    "azureeventhubs" => "Azure Event Hubs",
+                    _ => "Kafka",
+                } + " message size limit exceeded by a payload that cannot be split.");
+
+            // Halve until each part fits the broker limit.
+            var rows = data.EnumerateArray().ToList();
+            var half = rows.Count / 2;
+            await SendToQueueAsync(endpoint, JsonSerializer.SerializeToElement(rows.Take(half)), cancellationToken);
+            await SendToQueueAsync(endpoint, JsonSerializer.SerializeToElement(rows.Skip(half)), cancellationToken);
+            return;
         }
+
+        var (messageBody, compressed) = fit.Value;
+        var correlationId = Guid.NewGuid().ToString();
+        _logger.LogDebug("Sending message to {QueueType} (CorrelationId: {CorrelationId}, Size: {Size} bytes)",
+            endpoint.MessageQueueType, correlationId, Encoding.UTF8.GetByteCount(messageBody));
 
         // One circuit breaker per endpoint per environment: environments may reuse an endpoint name.
         var circuitBreaker = GetCircuitBreaker($"{endpoint.EnvironmentFile}/{endpoint.Key ?? endpoint.MessageQueueTarget()}");
@@ -143,14 +139,26 @@ public class MessageQueueService : IAsyncDisposable
         );
     }
 
-    private void ValidateMessageSize(int actualSize, int maxSize, string serviceName)
+    /// <summary>The body to send, compressed where the broker allows; null when it exceeds the broker limit.</summary>
+    private (string Body, bool Compressed)? Fit(string? queueType, string body)
     {
-        if (actualSize > maxSize)
+        var limit = queueType switch
         {
-            throw new InvalidOperationException(
-                $"Message size ({actualSize} bytes) exceeds {serviceName} limit ({maxSize} bytes) even after compression. " +
-                $"Consider implementing message batching or splitting.");
-        }
+            "rabbitmq" => RABBITMQ_MAX_SIZE,
+            "azureservicebus" => AZURE_SB_STANDARD_MAX,
+            "awssqs" => AWS_SQS_MAX_SIZE,
+            "azureeventhubs" => AZURE_EH_MAX_SIZE,
+            "kafka" => KAFKA_DEFAULT_MAX_SIZE,
+            _ => int.MaxValue,
+        };
+
+        if (Encoding.UTF8.GetByteCount(body) <= limit)
+            return (body, false);
+
+        if (queueType is "azureservicebus" or "awssqs" && CompressMessage(body) is var compressed && compressed.Length <= limit)
+            return (compressed, true);
+
+        return null;
     }
 
     private string CompressMessage(string message)

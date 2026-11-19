@@ -12,8 +12,8 @@ DECLARE
     max_version  BIGINT;
     rows_json    json;
 BEGIN
-    -- The watermark uses the same horizon as the rows: MAX(id) without the horizon skips uncommitted rows.
-    SELECT COALESCE(MAX(id), from_version)
+    -- Version by xact_id, not outbox id.
+    SELECT COALESCE(MAX(xact_id::text::BIGINT), from_version)
       INTO max_version
       FROM public.training_sessions_outbox
      WHERE xact_id < horizon;
@@ -30,7 +30,7 @@ BEGIN
 
     SELECT COALESCE(json_agg(json_build_object(
                '$operation',       o.operation,
-               '$version',         o.id,
+               '$version',         o.xact_id::text::BIGINT,
                'Id',               o.session_id,
                'RecordedOn',       o.recorded_on,
                'Type',             o.type,
@@ -41,10 +41,10 @@ BEGIN
                'PostProcessedOn',  o.post_processed_on,
                'AdjustedSteps',    o.adjusted_steps,
                'AdjustedDistance', o.adjusted_distance
-           ) ORDER BY o.id), '[]'::json)
+           ) ORDER BY o.xact_id, o.id), '[]'::json)
       INTO rows_json
       FROM public.training_sessions_outbox o
-     WHERE o.id > from_version
+     WHERE o.xact_id::text::BIGINT > from_version
        AND o.xact_id < horizon;
 
     RETURN json_build_object(

@@ -1,4 +1,4 @@
--- PostgreSQL 13+ setup: a role, the tracked table and an outbox table. A trigger writes each change to the outbox; the outbox BIGSERIAL id is the version.
+-- PostgreSQL 13+ setup: a role, the tracked table and an outbox table. A trigger writes each change to the outbox; the writing transaction id (xact_id) is the version.
 
 -- Create a role for the application if it does not exist
 DO $$
@@ -29,7 +29,7 @@ CREATE TABLE public.training_sessions
     adjusted_distance NUMERIC(9, 6)
 );
 
--- Outbox table. id is the version that Trignis stores; xact_id prevents skipped concurrent inserts (see 02-stored-procedure.postgres.table.sql).
+-- Outbox table. xact_id is the version that Trignis stores (see 02-stored-procedure.postgres.table.sql).
 DROP TABLE IF EXISTS public.training_sessions_outbox;
 CREATE TABLE public.training_sessions_outbox
 (

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -108,6 +110,33 @@ public sealed class BrokerParityTests
     [BrokerFact]
     public Task Kafka_ProbeAndSendFail_ForAMissingTopic() =>
         AssertParity(Endpoint("kafka", new() { BootstrapServers = "localhost:9092", Topic = "missing-topic" }), false);
+
+    [BrokerFact]
+    public async Task Kafka_OversizedPayload_IsSplitAndEveryRowArrives()
+    {
+        var topic = await KafkaTopic();
+        await using var queues = new MessageQueueService(NullLogger<MessageQueueService>.Instance);
+        var rows = Enumerable.Range(1, 40_000).Select(i => new { id = i, val = "row-" + i });
+        await queues.SendToQueueAsync(Endpoint("kafka", new() { BootstrapServers = "localhost:9092", Topic = topic }),
+            JsonSerializer.SerializeToElement(rows));
+
+        using var consumer = new ConsumerBuilder<Ignore, string>(new ConsumerConfig
+        {
+            BootstrapServers = "localhost:9092", GroupId = Guid.NewGuid().ToString("N"), AutoOffsetReset = AutoOffsetReset.Earliest,
+        }).Build();
+        consumer.Subscribe(topic);
+        var ids = new HashSet<long>();
+        // Joining a new consumer group takes a few empty polls.
+        for (var idle = 0; idle < 3;)
+        {
+            if (consumer.Consume(TimeSpan.FromSeconds(2)) is not { } message) { idle++; continue; }
+            idle = 0;
+            foreach (var row in JsonDocument.Parse(message.Message.Value).RootElement.EnumerateArray())
+                ids.Add(row.GetProperty("id").GetInt64());
+        }
+
+        Assert.Equal(40_000, ids.Count(id => id <= 40_000));
+    }
 
     private static async Task<string> SqsQueueUrl(string name)
     {
