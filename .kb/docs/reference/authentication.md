@@ -88,7 +88,7 @@ The same key is asked for a second time before you [pause an environment](/guide
 
 A few protections sit on the sign-in route:
 
-- **Lockout.** Ten failed attempts from one address lock it out for 30 minutes, and a correct key is refused while the lockout stands.
+- **Lockout.** Ten failed attempts from one address lock it out for 30 minutes, and a correct key is refused while the lockout stands. For reverse proxy deployments, set [`WebHost:TrustedProxies`](/reference/global-settings#webhost) to count failures per client address.
 - **CSRF.** Signing in needs a one-time token from `/ui/api/auth/csrf`, which is consumed as it is used.
 - **Double submit.** Mutating calls echo the session CSRF cookie back in an `X-CSRF-Token` header, so a request forged from another site cannot succeed.
 

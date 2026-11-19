@@ -248,6 +248,13 @@ try
     bool ValidateAuthToken(string token) =>
         SessionIdOf(token) is { } sessionId && !webUiAuth.IsSessionRevoked(sessionId);
 
+    // First: later checks need client IP.
+    var forwardedOptions = TrustedProxies.CreateOptions(
+        builder.Configuration.GetSection("WebHost:TrustedProxies").Get<string[]>(), out var invalidProxies);
+    foreach (var entry in invalidProxies)
+        Log.Warning("Ignoring WebHost:TrustedProxies entry {Entry}: not an IP address or CIDR range", entry);
+    app.UseForwardedHeaders(forwardedOptions);
+
     // Auth middleware: registered before static files so .html paths are also protected
     if (authEnabled)
     {
@@ -287,7 +294,8 @@ try
                     if (remote == null || !System.Net.IPAddress.IsLoopback(remote))
                     {
                         context.Response.StatusCode = 403;
-                        await context.Response.WriteAsync("Web UI is restricted to localhost.");
+                        await context.Response.WriteAsync(
+                            "Web UI is restricted to localhost. For reverse proxy access, set WebHost:Host to \"*\".");
                         return;
                     }
                 }

@@ -130,10 +130,15 @@ Deleting the file is a valid way to start over: every object re-initialises acco
 | `Enabled` | false | Serve the dashboard |
 | `Host` | `*` | `localhost` or `127.0.0.1` restricts `/ui` to loopback |
 | `SecureCookies` | unset | Force the `Secure` cookie flag |
+| `TrustedProxies` | loopback | Reverse proxy addresses or CIDR ranges |
 
 If you would rather reach the dashboard through an SSH tunnel than expose it, setting `Host` to `127.0.0.1` is a tidy way to do that.
 
 Left unset, `SecureCookies` follows the scheme of the incoming request. Setting it to `true` is the right call behind a TLS-terminating proxy, where the app itself only ever sees plain HTTP and would otherwise decide the connection is insecure.
+
+`TrustedProxies` contains reverse proxy addresses or CIDR ranges, for example `["172.18.0.0/16"]`. Trignis reads the client address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto` on requests from these proxies and from loopback. Trignis ignores these headers from other senders. The login lockout and the `localhost` restriction use the forwarded client address.
+
+If a reverse proxy serves the dashboard: set `Host` to `*`. With `Host` set to `localhost`, Trignis rejects proxied requests from remote clients.
 
 ## Trignis:AdminApiKey
 
