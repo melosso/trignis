@@ -5,12 +5,13 @@ services:
     ports:
       - "2455:2455"
     environment:
-      - TRIGNIS_ENCRYPTION_KEY=YourEncryptionKeyHere
+      - TRIGNIS_ENCRYPTION_KEY=${TRIGNIS_ENCRYPTION_KEY}
       - Trignis__AdminApiKey=${TRIGNIS_ADMIN_API_KEY}
 
     volumes:
       - ./environments:/app/environments
       - ./log:/app/log
       - ./exports:/app/exports
+      - ./data:/app/data
       - ./appsettings.json:/app/appsettings.json:ro
     restart: unless-stopped

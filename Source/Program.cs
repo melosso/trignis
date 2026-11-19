@@ -28,7 +28,14 @@ var tempConfig = new ConfigurationBuilder()
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: true)
     .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production"}.json", optional: true)
+    .AddEnvironmentVariables()
+    .AddInMemoryCollection(EnvironmentSetting.Aliases())
     .Build();
+
+// SQLite creates files, not folders
+if (tempConfig["ChangeTracking:DataPath"] is { Length: > 0 } dataPath)
+    Directory.CreateDirectory(dataPath);
+var corePath = DataPaths.Core(tempConfig);
 
 bool useEventLog = tempConfig.GetValue<bool>("Windows:UseEventLog", false);
 
@@ -59,12 +66,13 @@ Console.WriteLine("   ╚═╝   ╚═╝  ╚═╝╚═╝ ╚════�
 Console.WriteLine("");
 
 // Initialize encryption service
-var encryptionService = new EncryptionService(AppContext.BaseDirectory);
+var encryptionService = new EncryptionService(AppContext.BaseDirectory, corePath);
 
 
 try
 {
     var builder = WebApplication.CreateBuilder(args);
+    builder.Configuration.AddInMemoryCollection(EnvironmentSetting.Aliases());
 
     // Initialize Serilog globally 
     builder.Host.UseSerilog();
@@ -98,9 +106,9 @@ try
 
     // Register services
     builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(AppContext.BaseDirectory, ".core", "dp-keys")));
+        .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(corePath ?? Path.Combine(AppContext.BaseDirectory, ".core"), "dp-keys")));
     builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(globalSettings));
-    builder.Services.AddSingleton(_ => new WebUiAuth(builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db")!));
+    builder.Services.AddSingleton(_ => new WebUiAuth(DataPaths.State(builder.Configuration)));
     builder.Services.AddHostedService<ChangeTrackingBackgroundService>();
     builder.Services.AddSingleton<DeadLetterQueueMonitor>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DeadLetterQueueMonitor>());
@@ -446,7 +454,7 @@ try
 
                 try
                 {
-                    var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
+                    var stateDbPath = DataPaths.State(builder.Configuration);
 
                     using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stateDbPath}");
                     await conn.OpenAsync();
@@ -767,12 +775,13 @@ try
             {
                 page = Math.Max(1, page);
                 pageSize = Math.Clamp(pageSize, 1, 200);
-                if (!File.Exists("sinkhole.db"))
+                var sinkholePath = DataPaths.Sinkhole(builder.Configuration);
+                if (!File.Exists(sinkholePath))
                     return Results.Json(new { total = 0, page = 1, page_size = pageSize, total_pages = 0, data = Array.Empty<object>() });
 
                 try
                 {
-                    using var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=sinkhole.db");
+                    using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={sinkholePath}");
                     await conn.OpenAsync();
                     var pragmaCmd = conn.CreateCommand();
                     pragmaCmd.CommandText = "PRAGMA busy_timeout = 3000;";
@@ -969,6 +978,10 @@ try
                 return Results.Content(health, "application/json");
             });
 
+            app.MapGet("/metrics", async (EnvironmentConfigService environments, PauseService pauses, ExportService exports, System.Threading.CancellationToken ct) =>
+                Results.Text(await Trignis.Health.Metrics.RenderAsync(DataPaths.State(builder.Configuration), DataPaths.Sinkhole(builder.Configuration),
+                    environments, pauses, exports, ct), "text/plain; version=0.0.4"));
+
             app.MapGet("/health/deadletters", async (DeadLetterQueueMonitor dlqMonitor) =>
             {
                 var stats = await dlqMonitor.GetStatsAsync();
@@ -1004,7 +1017,7 @@ try
 
                 try
                 {
-                    var stateDbPath = builder.Configuration.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
+                    var stateDbPath = DataPaths.State(builder.Configuration);
 
                     using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={stateDbPath}");
                     await conn.OpenAsync();

@@ -7,7 +7,7 @@ description: Every appsettings.json key
 
 `appsettings.json` contains the settings that apply to your whole installation: how often Trignis polls, what it does when an export fails, whether the dashboard is served at all. Unlike the environment files, this one is read once when the service starts, so a change here needs a restart before it takes effect.
 
-Environment variables override `appsettings.json` (`Trignis__AdminApiKey` sets `Trignis:AdminApiKey`). A `.env` file next to the executable sets unset environment variables. Environment variables override `.env` values.
+Settings can also come from environment variables and a `.env` file; see [Sources](#sources) below.
 
 Here is the whole file with its defaults, so you can see the shape before working through the sections below:
 
@@ -108,9 +108,13 @@ Purging runs when the service starts and every 24 hours after that. Since retent
 
 The first probe runs about ten seconds after startup, which means the dashboard already has something to show you the first time you open it rather than an empty panel.
 
+## ChangeTracking:DataPath
+
+The folder for the files Trignis must keep: `state.db`, `sinkhole.db` and the `.core` key folder. Empty by default, which keeps them in the install folder. The container image sets it to `/app/data`; mount a volume there.
+
 ## ChangeTracking:StateDbPath
 
-The state database stores the last processed version for each object. Defaults to `state.db` in the working directory. It is also where a [pause](/guide/dashboard#pausing-change-tracking) is recorded.
+The state database stores the last processed version for each object. Defaults to `state.db` in the data path. A relative path resolves inside `DataPath`. It is also where a [pause](/guide/dashboard#pausing-change-tracking) is recorded.
 
 Deleting the file is a valid way to start over: every object re-initialises according to its `InitialSyncMode` on the next cycle. Just be aware that an object set to `Full` will re-export its entire table when it does.
 
@@ -119,7 +123,7 @@ Deleting the file is a valid way to start over: every object re-initialises acco
 | Key | Default | Purpose |
 |---|---|---|
 | `Enabled` | false | Expose [health endpoints](/reference/health) |
-| `Port` | 2455 | Listening port, shared with the UI |
+| `Port` | 2455 | Listening port, shared with the UI. In Docker, keep 2455 and change the published port instead |
 | `Host` | `*` | Binding host |
 | `CacheDurationSeconds` | 120 | How long `/health` is cached |
 
@@ -157,3 +161,38 @@ Windows only. Turning this on writes to the Application event log under the sour
 ## Serilog
 
 Standard [Serilog](https://github.com/serilog/serilog-settings-configuration) configuration, so anything you already know about configuring Serilog applies here unchanged. Out of the box you get console output plus a daily rolling file in `log/`, with five files retained.
+
+## Sources
+
+Precedence, highest first:
+
+1. Environment variables
+2. `.env` in the install folder
+3. `appsettings.{Environment}.json`
+4. `appsettings.json`
+
+Each setting accepts four environment variable names. If more than one name is set, the lowest number applies.
+
+| Style | Example | Precedence |
+|---|---|---|
+| Canonical | `Health__Port` | 1 |
+| Prefixed screaming snake | `TRIGNIS_HEALTH_PORT` | 2 |
+| Screaming snake | `HEALTH_PORT` | 3 |
+| Bare | `HealthPort` | 4 |
+
+Unprefixed names the .NET host reads itself (`PORT`, `URLS`, `ASPNETCORE_*`, `DOTNET_*`) are not accepted.
+
+::: warning
+Use one spelling per setting. Name precedence applies after sources merge: `HEALTH_PORT` from `.env` overrides `Health:Port` in `appsettings.json`.
+:::
+
+| Setting | Prefixed name |
+|---|---|
+| `Trignis:AdminApiKey` | `TRIGNIS_ADMIN_API_KEY` |
+| Encryption key (no `appsettings.json` key) | `TRIGNIS_ENCRYPTION_KEY` |
+| `SelectedEnvironment` | `TRIGNIS_SELECTED_ENVIRONMENT`; `TRIGNIS_ENVIRONMENT` also works |
+| `Health:Enabled`, `Health:Port`, `Health:Host`, `Health:CacheDurationSeconds` | `TRIGNIS_HEALTH_ENABLED`, `TRIGNIS_HEALTH_PORT`, `TRIGNIS_HEALTH_HOST`, `TRIGNIS_HEALTH_CACHE_DURATION_SECONDS` |
+| `WebHost:Enabled`, `WebHost:Host` | `TRIGNIS_WEB_HOST_ENABLED`, `TRIGNIS_WEB_HOST_HOST` |
+| `Windows:UseEventLog` | `TRIGNIS_USE_EVENT_LOG` |
+| `ChangeTracking:DataPath`, `ChangeTracking:StateDbPath` | `TRIGNIS_DATA_PATH`, `TRIGNIS_STATE_DB_PATH` |
+| `ChangeTracking:GlobalSettings:<Name>` | `TRIGNIS_` plus the name in screaming snake case, for example `TRIGNIS_POLLING_INTERVAL_SECONDS` |

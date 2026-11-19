@@ -41,7 +41,43 @@ volumes:
   trignis-state:
 ```
 
-Persist `state.db` and `sinkhole.db`. Losing `state.db` means every object re-initialises on next start; losing `sinkhole.db` discards unreplayed dead letters.
+The container listens on port 2455, and its built-in health check calls that port. To serve Trignis on another port, change the published port (`"8080:2455"`), not `Health:Port`.
+
+The image keeps `state.db`, `sinkhole.db` and the `.core` key folder in `/app/data`. Mount a volume there, or an upgrade loses them:
+
+- Without `state.db`, every object re-initialises according to `initial_sync`.
+- Without `sinkhole.db`, unreplayed dead letters are gone.
+- Without `.core`, Trignis cannot decrypt the secrets in your environment files.
+
+::: warning Upgrading a container from v0.4
+Up to v0.4 the image kept these files in `/app`, outside every volume. Copy them out before you replace the container:
+
+```bash
+mkdir -p data
+docker cp trignis:/app/state.db data/
+docker cp trignis:/app/sinkhole.db data/   # absent if there never was a dead letter
+docker cp trignis:/app/.core data/
+```
+
+Then mount `./data:/app/data` (or a named volume holding these files) and start the new version.
+:::
+
+### Backup and restore
+
+Back up the data folder and `TRIGNIS_ENCRYPTION_KEY` together. One without the other cannot decrypt your environment files.
+
+The databases can be copied while Trignis runs:
+
+```bash
+docker exec trignis sqlite3 /app/data/state.db ".backup /app/data/state.bak"
+docker exec trignis sqlite3 /app/data/sinkhole.db ".backup /app/data/sinkhole.bak"
+```
+
+To restore: stop Trignis, put the files back, start it. A `state.db` older than the last export makes Trignis send the changes since the backup again. Receivers handle this like any other [repeat delivery](/reference/delivery).
+
+### High availability
+
+Run one instance per data folder. Active/passive works: a standby with the same volume and key starts where the active one stopped. Two active instances on the same tables send every change twice.
 
 ### Pinning a version
 

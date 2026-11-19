@@ -10,6 +10,9 @@ public record class ApiEndpoint
     public string? EnvironmentFile { get; init; }
     public IReadOnlyDictionary<string, string>? CustomHeaders { get; init; }
     public bool EnableCompression { get; init; } = false;
+
+    /// <summary>HMAC key for the <c>X-Trignis-Signature</c> header. Null: requests are not signed.</summary>
+    public string? SigningSecret { get; init; }
     public string? MessageQueueType { get; init; } // "RabbitMQ", "AzureServiceBus", "AWSSQS"
     public MessageQueueConfig? MessageQueue { get; init; }
 }

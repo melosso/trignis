@@ -139,6 +139,7 @@
             "title": "Contracts",
             "items": [
               { "title": "Procedure contract", "path": "reference/stored-procedure" },
+              { "title": "Delivery contract", "path": "reference/delivery" },
               { "title": "Health endpoints", "path": "reference/health" }
             ]
           }

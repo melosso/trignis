@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,8 +7,10 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Trignis.Helpers;
 using Trignis.Models;
 
 namespace Trignis.Services;
@@ -18,14 +19,18 @@ public class DeadLetterService
 {
     private readonly ILogger<DeadLetterService> _logger;
     private readonly string _sinkholeConnectionString;
+
+    /// <summary>Connection string of sinkhole.db, for readers outside this service.</summary>
+    public string SinkholeConnectionString => _sinkholeConnectionString;
     private readonly int _retentionDays;
 
     public DeadLetterService(
         ILogger<DeadLetterService> logger,
-        IOptions<GlobalSettings> globalSettings)
+        IOptions<GlobalSettings> globalSettings,
+        IConfiguration? config = null)
     {
         _logger = logger;
-        _sinkholeConnectionString = "Data Source=sinkhole.db";
+        _sinkholeConnectionString = $"Data Source={(config is null ? "sinkhole.db" : DataPaths.Sinkhole(config))}";
         _retentionDays = globalSettings.Value.DeadletterRetentionDays;
     }
 
@@ -92,7 +97,7 @@ public class DeadLetterService
     public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default, IReadOnlyCollection<string>? failedTargets = null)
     {
         var dataJson = JsonSerializer.Serialize(data);
-        var dataHash = ComputeSha256Hash(dataJson);
+        var dataHash = PayloadHash(dataJson);
 
         // Kept in the original shape so existing rows and the UI's filters stay consistent
         var trackingObjectName = $"{environmentName}_{objectName}";
@@ -349,11 +354,6 @@ public class DeadLetterService
         return deleted;
     }
 
-    private static string ComputeSha256Hash(string input)
-    {
-        using var sha256 = SHA256.Create();
-        var bytes = Encoding.UTF8.GetBytes(input);
-        var hash = sha256.ComputeHash(bytes);
-        return Convert.ToHexString(hash);
-    }
+    /// <summary>Identifies a payload: the dead letter dedupe key, and the base of the <c>X-Trignis-Delivery</c> header.</summary>
+    public static string PayloadHash(string json) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
 }

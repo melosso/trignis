@@ -175,4 +175,17 @@ public sealed class EncryptionServiceTests : IDisposable
         Assert.DoesNotContain("secret", File.ReadAllText(file));
         Assert.False(File.Exists(file + ".tmp"));
     }
+
+    [Fact]
+    public void ConfiguredKey_RekeysPrivateKeyWrittenUnderFallbackKey()
+    {
+        var dir = Path.Combine(_tempDir, "rekey");
+        var secret = new EncryptionService(_tempDir, dir, EncryptionService.FallbackKey).Encrypt("secret");
+
+        var rekeyed = new EncryptionService(_tempDir, dir, "a-real-key-of-at-least-32-characters");
+        Assert.Equal("secret", rekeyed.Decrypt(secret));
+
+        // The file is now under the configured key: the fallback key no longer opens it
+        Assert.Throws<InvalidOperationException>(() => new EncryptionService(_tempDir, dir, EncryptionService.FallbackKey));
+    }
 }

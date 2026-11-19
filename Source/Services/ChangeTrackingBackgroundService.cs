@@ -72,8 +72,7 @@ public class ChangeTrackingBackgroundService : BackgroundService
         _pauseService = pauseService;
         _globalSettings = globalSettings.Value;
 
-        var stateDbPath = config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
-        _stateConnectionString = $"Data Source={stateDbPath}";
+        _stateConnectionString = $"Data Source={DataPaths.State(config)}";
     }
 
     public override async Task StartAsync(CancellationToken cancellationToken)

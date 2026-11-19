@@ -108,14 +108,14 @@ The other fields depend on `type`:
 | Type | Fields (required in bold) |
 |---|---|
 | `file` | **`path`** (one enabled file destination per environment) |
-| `http` | **`url`**, `auth`, `headers`, `compression` |
+| `http` | **`url`**, `auth`, `headers`, `compression`, `signing_secret` |
 | `rabbitmq` | **`host`**, `port`, `virtual_host`, `username`, `password`, `queue`, `exchange`, `routing_key` |
 | `azureservicebus` | **`connection_string`**, `queue`, `topic` |
 | `awssqs` | **`queue_url`**, `region`, `access_key_id`, `secret_access_key` |
 | `azureeventhubs` | **`connection_string`**, **`event_hub`** |
 | `kafka` | **`bootstrap_servers`**, **`topic`**, `username`, `password`, `security_protocol`, `sasl_mechanism` |
 
-`auth` is described in [Authentication](/reference/authentication). Passwords, keys, connection strings and `headers` values are encrypted in place on first read. See [files](/guide/export-files), [HTTP](/guide/export-http) and [queues](/guide/export-queues) for each type.
+`auth` is described in [Authentication](/reference/authentication). `signing_secret` signs every request; see [Delivery contract](/reference/delivery). Passwords, keys, connection strings, `signing_secret` and `headers` values are encrypted in place on first read. See [files](/guide/export-files), [HTTP](/guide/export-http) and [queues](/guide/export-queues) for each type.
 
 ## Placeholders
 
