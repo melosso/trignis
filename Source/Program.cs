@@ -29,6 +29,7 @@ var tempConfig = new ConfigurationBuilder()
     .AddJsonFile("appsettings.json", optional: true)
     .AddJsonFile($"appsettings.{Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT") ?? "Production"}.json", optional: true)
     .AddEnvironmentVariables()
+    .AddInMemoryCollection(EnvironmentSetting.Aliases())
     .Build();
 
 // SQLite creates files, not folders
@@ -71,6 +72,7 @@ var encryptionService = new EncryptionService(AppContext.BaseDirectory, corePath
 try
 {
     var builder = WebApplication.CreateBuilder(args);
+    builder.Configuration.AddInMemoryCollection(EnvironmentSetting.Aliases());
 
     // Initialize Serilog globally 
     builder.Host.UseSerilog();

@@ -46,7 +46,7 @@ namespace Trignis.Services
         private string LoadEncryptionKey()
         {
             // Process env includes machine variables.
-            var envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY");
+            var envKey = EnvironmentSetting.Resolve("EncryptionKey");
             if (envKey == "YourEncryptionKeyHere")
                 Log.Error("TRIGNIS_ENCRYPTION_KEY is the placeholder from the example compose file. Anyone with that file can read your private key; set a random key");
             if (!string.IsNullOrWhiteSpace(envKey))
