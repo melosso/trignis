@@ -5,7 +5,7 @@ description: Connection strings, tracked objects and endpoints
 
 # Environment files
 
-Each file in `environments/` describes one self-contained environment: where to connect, what to track there, and where the changes should go. The filename without its extension becomes the environment name, so `production.json` gives you an environment called `production`.
+Each file in `environments/` describes one self-contained environment: where to connect, what to track there, and where the changes should go. The filename without its extension becomes the environment name, so `production.json` gives you an environment called `production`. Sync state, pauses and dead letters are stored per environment name. The name is the identifier for each connection and acts as primary key.
 
 These files are watched. Saving one reloads that environment within about a second, which means you can iterate on what you track without restarting anything.
 
