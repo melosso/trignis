@@ -47,7 +47,7 @@ Placeholders: `{guid}`, `{key}`, `{timestamp}`, `{object}`, `{database}`, `{envi
 
 The URL accepts the same placeholders, URL-encoded.
 
-`compression: true` gzips the body and sets `Content-Encoding: gzip`. Confirm the receiver handles it. Most servers do, but not all.
+`compression: true` gzips the body and sets `Content-Encoding: gzip`. The receiver must accept gzip request bodies.
 
 ## Batching
 
@@ -80,4 +80,4 @@ It is not retried, because a retry cannot make the body smaller. Lower `MaxRecor
 
 ## Retries
 
-Failed requests retry per `retry.count` and `retry.delay`. Retries cover transport failures and non-success status codes. After the last attempt the payload becomes a [dead letter](/guide/dead-letters).
+Failed requests retry per `retry.count` and `retry.delay`. Retries apply to transport failures and non-success status codes. After the last attempt the payload becomes a [dead letter](/guide/dead-letters).

@@ -89,11 +89,11 @@ public static class EnvironmentMigration
 
         var backup = jsonPath + ".migrated";
         if (File.Exists(backup)) backup = $"{jsonPath}.{DateTime.UtcNow:yyyyMMddHHmmss}.migrated";
-        // The backup must not keep plaintext secrets; v0.4 decrypts PWENC values.
+        // No plaintext secrets in the backup; v0.4 decrypts PWENC values.
         File.WriteAllText(backup, EncryptJson(json, YamlEnvironment.Secrets(yaml).Where(s => !isEncrypted(s)).ToHashSet(StringComparer.Ordinal), encrypt));
         File.Delete(jsonPath);
 
-        Log.Warning("Environment '{Name}': migrated to {Yaml}. The original is kept as {Backup}", name, Path.GetFileName(yamlPath), Path.GetFileName(backup));
+        Log.Warning("Environment '{Name}': migrated to {Yaml}. The original is stored as {Backup}", name, Path.GetFileName(yamlPath), Path.GetFileName(backup));
         return Outcome.Migrated;
     }
 

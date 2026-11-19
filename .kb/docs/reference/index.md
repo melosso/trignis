@@ -28,7 +28,7 @@ A handful of settings appear in both places, which lets you set a sensible defau
 environment value  →  ChangeTracking:GlobalSettings  →  built-in default
 ```
 
-Three settings can be overridden per environment: `polling.interval`, `retry.count` and `retry.delay`. Exports are set per environment by `destinations`; the global `ExportToFile`, `ExportToApi` and `FilePath` apply only to the v0.5 migration of JSON files.
+Three settings can be overridden per environment: `polling.interval`, `retry.count` and `retry.delay`. `destinations` in each environment file defines its exports. `ExportToFile`, `ExportToApi` and `FilePath` in `appsettings.json` have no effect on YAML environment files. The JSON migration writes their effective values to `destinations`.
 
 A common shape is a slow polling interval globally with one busy environment turned up, rather than repeating the same value in every file.
 

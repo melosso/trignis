@@ -33,7 +33,7 @@ Directories are created as needed.
 
 ## Keeping the directory in check
 
-`FilePathSizeLimit` in `appsettings.json` (MB, default 500) caps the export directory. Once over, oldest files are deleted until it fits.
+`FilePathSizeLimit` in `appsettings.json` (MB, default 500) caps the export directory. If the directory exceeds the limit: Trignis deletes the oldest files until the directory is within the limit.
 
 ```json
 {
@@ -48,7 +48,7 @@ Directories are created as needed.
 The limit applies to the fixed part of `path`: the text before the first placeholder. With `exports/{environment}/...` that is `exports/`.
 
 ::: warning
-If `path` has no directory before the first placeholder (`"{object}-{timestamp}.json"`), cleanup is skipped entirely rather than sweeping the working directory. Keep a directory prefix if you want the limit enforced.
+If `path` has no directory before the first placeholder (`"{object}-{timestamp}.json"`), cleanup is skipped. Add a directory prefix to enforce the limit.
 :::
 
 ## Combining destinations

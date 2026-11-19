@@ -155,7 +155,7 @@ public sealed class EndToEndTests(ITestOutputHelper output)
         await Expect(admin, HttpMethod.Post, "/ui/api/client-errors", HttpStatusCode.NoContent, new { message = "e2e probe", page = "/ui/dashboard" });
         await Expect(admin, HttpMethod.Get, "/ui/api/deadletters?pageSize=0&page=-1", HttpStatusCode.OK);
 
-        // Hot reload: an invalid edit is rejected, the previous configuration keeps running
+        // Hot reload: an invalid edit is rejected; the previous configuration runs
         var envFile = Path.Combine(app.Dir, "environments", "e2e.yaml");
         var valid = File.ReadAllText(envFile);
         File.WriteAllText(envFile, valid.Replace("interval: 1s", "interval: often"));

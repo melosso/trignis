@@ -57,7 +57,7 @@ destinations:
     queue: trignis-changes
 ```
 
-For a topic, set `topic` instead of `queue`. If both are set, `queue` is used.
+For a topic, set `topic`. If `queue` and `topic` are both set, `queue` is used.
 
 ## AWS SQS
 

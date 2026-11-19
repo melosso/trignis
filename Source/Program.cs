@@ -590,7 +590,7 @@ try
                         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
                 }
 
-                // Bounded read: chunked bodies carry no Content-Length.
+                // Bounded read: chunked bodies have no Content-Length.
                 var buffer = new byte[8193];
                 var length = 0;
                 for (int read; length < buffer.Length && (read = await context.Request.Body.ReadAsync(buffer.AsMemory(length), context.RequestAborted)) > 0;)

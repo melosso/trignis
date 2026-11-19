@@ -101,7 +101,7 @@ Every destination receives every change from the environment. To send different 
 |---|---|---|
 | `name` | yes | Name in logs, dead letters and `{key}`; unique per file |
 | `type` | yes | `file`, `http`, `rabbitmq`, `azureservicebus`, `awssqs`, `azureeventhubs` or `kafka` |
-| `enabled` | no | `false` keeps the destination configured and sends nothing |
+| `enabled` | no | `false` disables sending to the destination |
 
 The other fields depend on `type`:
 
@@ -136,12 +136,12 @@ Available in `path`, `url` and `headers`:
 Trignis validates every file at startup and on each save. Each problem is reported with its line and column.
 
 - **Errors** stop startup: invalid YAML, a duplicate key, a value of the wrong type, a missing required field, a `database` that is not under `databases`, a duplicate table or destination name.
-- **On save**, an error rejects the edit. The previous version keeps running, and the dashboard shows a warning badge.
+- **On save**, an error rejects the edit. Trignis runs the previous version. The dashboard shows a warning badge.
 - **Warnings** do not stop anything: an unknown key, with a suggestion when the key is close to a valid one.
 
 ## Migrating from JSON
 
-Trignis v0.5 converts each `environments/*.json` file to `.yaml` at startup and on save, and logs `Migrating environments to new format`. The JSON file is kept as `name.json.migrated`, with its secrets encrypted. The global `ExportToFile`, `ExportToApi` and `FilePath` settings are written into the YAML file as destinations; a disabled export gets `enabled: false`. If `name.yaml` already exists, the JSON file is left unchanged and Trignis logs a warning.
+Trignis v0.5 converts each `environments/*.json` file to `.yaml` at startup and on save, and logs `Migrating environments to new format`. The JSON file is stored as `name.json.migrated`, with its secrets encrypted. The global `ExportToFile`, `ExportToApi` and `FilePath` settings are written into the YAML file as destinations; a disabled export gets `enabled: false`. If `name.yaml` already exists, the JSON file is left unchanged and Trignis logs a warning.
 
 - **Read-only folder** (a ConfigMap or a `:ro` mount): Trignis cannot write the YAML file. It logs a warning and loads the JSON file in memory. Convert the file before v0.6.
 - **Conversion error:** a JSON file that cannot be converted, or that does not load back to the same environment, stops startup. On save, the edit is rejected.

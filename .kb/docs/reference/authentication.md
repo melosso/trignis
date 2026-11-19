@@ -67,7 +67,7 @@ These fields are picked up automatically:
 - Every value under `headers`
 - Queue destinations: `password`, `connection_string`, `secret_access_key`, `access_key_id`
 
-Comments and layout are kept: Trignis replaces each secret value in place.
+Trignis replaces each secret value in place. Comments and layout are unchanged.
 
 The scheme is hybrid: each value gets its own AES-256 key, which is then wrapped with a 2048-bit RSA key. The RSA private key is stored in `.core/`, encrypted with your `TRIGNIS_ENCRYPTION_KEY`. The practical upshot is that a copy of an environment file, on its own, gives nothing away.
 
