@@ -709,6 +709,8 @@ try
 
             app.MapGet("/ui/api/deadletters", async (int page = 1, int pageSize = 50, string? search = null, string? objectFilter = null) =>
             {
+                page = Math.Max(1, page);
+                pageSize = Math.Clamp(pageSize, 1, 200);
                 if (!File.Exists("sinkhole.db"))
                     return Results.Json(new { total = 0, page = 1, page_size = pageSize, total_pages = 0, data = Array.Empty<object>() });
 
@@ -785,6 +787,8 @@ try
 
             app.MapGet("/ui/api/logs", async (int limit = 200, int offset = 0, string? level = null) =>
             {
+                limit = Math.Clamp(limit, 1, 1000);
+                offset = Math.Max(0, offset);
                 var logDir = Path.Combine(AppContext.BaseDirectory, "log");
                 if (!Directory.Exists(logDir))
                     return Results.Json(new { file = (string?)null, total = 0, lines = Array.Empty<object>(), has_more = false });
