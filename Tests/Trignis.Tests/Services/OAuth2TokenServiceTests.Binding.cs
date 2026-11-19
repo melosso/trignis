@@ -78,10 +78,10 @@ public class OAuth2TokenBindingTests
     }
 
     /// <summary>
-    /// expires_in sets the cache lifetime if no lifetime is configured. A 60-second token equals the one-minute safety margin: the next call requests a new token.
+    /// expires_in sets the cache lifetime if no lifetime is configured. A token under two minutes is cached for half its lifetime.
     /// </summary>
     [Fact]
-    public async Task ShortExpiresIn_ForcesReRequest()
+    public async Task ShortExpiresIn_IsCachedForHalfItsLifetime()
     {
         var handler = new StubHandler("""{"access_token":"tok-123","expires_in":60}""");
         var service = Service(handler);
@@ -89,7 +89,7 @@ public class OAuth2TokenBindingTests
         await service.GetAccessTokenAsync(Auth(), "key");
         await service.GetAccessTokenAsync(Auth(), "key");
 
-        Assert.Equal(2, handler.Calls);
+        Assert.Equal(1, handler.Calls);
     }
 
     /// <summary>A configured lifetime overrides whatever the server reports.</summary>

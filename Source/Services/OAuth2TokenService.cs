@@ -49,9 +49,9 @@ public class OAuth2TokenService
 
             var (token, expiresIn) = await RequestAccessTokenAsync(auth, cancellationToken).ConfigureAwait(false);
 
-            // Lifetime precedence: configured value, server value, one hour. The one-minute margin prevents expiry mid-request.
+            // Lifetime precedence: configured value, server value, one hour. The margin (one minute, at most half the lifetime) prevents expiry mid-request.
             var lifetime = auth.TokenExpirationSeconds ?? expiresIn ?? 3600;
-            var expiration = DateTime.UtcNow.AddSeconds(lifetime).AddMinutes(-1);
+            var expiration = DateTime.UtcNow.AddSeconds(lifetime - Math.Min(60, lifetime / 2));
 
             _tokenCache[cacheKey] = new TokenCacheEntry(token, expiration);
             _logger.LogInformation($"Obtained new OAuth2 token for {cacheKey}, expires at {expiration}");
