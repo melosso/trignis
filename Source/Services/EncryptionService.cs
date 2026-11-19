@@ -316,7 +316,20 @@ namespace Trignis.Services
                 if (!changed)
                     return false;
 
-                File.WriteAllText(file, JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true }));
+                // Atomic: a crash must not lose the only copy.
+                var json = JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true });
+                var temp = file + ".tmp";
+                File.WriteAllText(temp, json);
+                try
+                {
+                    File.Move(temp, file, overwrite: true);
+                }
+                catch (IOException)
+                {
+                    // Single-file bind mounts reject rename.
+                    File.WriteAllText(file, json);
+                    File.Delete(temp);
+                }
                 Log.Debug("Encrypted config file: {File}", file);
                 return true;
             }

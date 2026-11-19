@@ -163,4 +163,16 @@ public sealed class EncryptionServiceTests : IDisposable
             Directory.Delete(tempDir2, recursive: true);
         }
     }
+
+    [Fact]
+    public void EncryptConfigFile_EncryptsSecrets_AndLeavesNoTempFile()
+    {
+        var file = Path.Combine(_tempDir, "environments", "prod.json");
+        File.WriteAllText(file, """{"ConnectionStrings":{"Main":"Server=db;Password=secret"}}""");
+
+        Assert.True(_svc.EncryptConfigFile(file));
+
+        Assert.DoesNotContain("secret", File.ReadAllText(file));
+        Assert.False(File.Exists(file + ".tmp"));
+    }
 }
