@@ -7,7 +7,7 @@ description: JSON status routes
 
 Trignis exposes a handful of plain JSON routes so your existing monitoring can see how it is doing without anyone opening the dashboard. You turn them on with `Health:Enabled`, and they are served on `Health:Port`, which defaults to 2455.
 
-These routes are deliberately unauthenticated, since most monitoring agents are happier without a credential to manage. That does mean the information is available to anything that can reach the port, so binding to localhost or keeping the port behind a firewall is a sensible precaution when the host is shared.
+These routes are deliberately unauthenticated, since most monitoring agents are happier without a credential to manage. The information is available to any client that can reach the port. On a shared host: bind to localhost or restrict the port with a firewall.
 
 ## GET /health
 
@@ -38,7 +38,7 @@ The top-level `status` is `healthy` if every database answers and no destination
 
 `destinations.unhealthy` contains queues that failed their last probe and HTTP endpoints with a failed last export. `destinations.open_circuits` contains queues with an open circuit breaker.
 
-Behind that answer, each call opens a real connection to every unique database with a 5 second timeout. Because that is real work, the response is cached for `Health:CacheDurationSeconds` (120 by default), which lets you poll as often as you like without turning your health check into a source of load.
+Each call opens a connection to every unique database with a 5 second timeout. The response is cached for `Health:CacheDurationSeconds` (120 by default). Frequent polling does not add database load.
 
 ## GET /health/connections
 

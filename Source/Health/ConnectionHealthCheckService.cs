@@ -137,7 +137,7 @@ public class ConnectionHealthCheckService : BackgroundService
             }
         }
 
-        // Forget connections whose environment or endpoint is gone
+        // Drop removed environments and endpoints.
         foreach (var stale in _healthStatus.Keys.Where(k => !seen.Contains(k)).ToList())
             _healthStatus.TryRemove(stale, out _);
 

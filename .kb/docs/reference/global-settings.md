@@ -5,7 +5,7 @@ description: Every appsettings.json key
 
 # Global settings
 
-`appsettings.json` holds the settings that apply to your whole installation: how often Trignis polls, what it does when an export fails, whether the dashboard is served at all. Unlike the environment files, this one is read once when the service starts, so a change here needs a restart before it takes effect.
+`appsettings.json` contains the settings that apply to your whole installation: how often Trignis polls, what it does when an export fails, whether the dashboard is served at all. Unlike the environment files, this one is read once when the service starts, so a change here needs a restart before it takes effect.
 
 Here is the whole file with its defaults, so you can see the shape before working through the sections below:
 
@@ -68,7 +68,7 @@ Trignis will log a friendly warning if you set the polling interval below 5 seco
 | `RetryCount` | 3 | Attempts before a dead letter | yes |
 | `RetryDelaySeconds` | 5 | Fixed delay between attempts | yes |
 
-The delay here is fixed rather than exponential, which suits the transient failures these retries are meant for: a transport hiccup, a brief IO error, a database that was momentarily unreachable. Longer outages are better handled by the [dead letter replay](/guide/dead-letters), which does back off.
+The delay here is fixed rather than exponential, which suits the transient failures these retries are meant for: a transport hiccup, a brief IO error, a database that was momentarily unreachable. The [dead letter replay](/guide/dead-letters) retries longer outages with backoff.
 
 One thing worth knowing: a payload larger than `MaxPayloadSizeBytes` is not retried, because a second attempt cannot make it smaller. It goes straight to the dead letter store instead.
 
@@ -108,7 +108,7 @@ The first probe runs about ten seconds after startup, which means the dashboard 
 
 ## ChangeTracking:StateDbPath
 
-This is where the last processed version for each object lives, defaulting to `state.db` next to the working directory. It is also where a [pause](/guide/dashboard#pausing-change-tracking) is recorded.
+The state database stores the last processed version for each object. Defaults to `state.db` in the working directory. It is also where a [pause](/guide/dashboard#pausing-change-tracking) is recorded.
 
 Deleting the file is a valid way to start over: every object re-initialises according to its `InitialSyncMode` on the next cycle. Just be aware that an object set to `Full` will re-export its entire table when it does.
 
@@ -134,7 +134,7 @@ Deleting the file is a valid way to start over: every object re-initialises acco
 
 If you would rather reach the dashboard through an SSH tunnel than expose it, setting `Host` to `127.0.0.1` is a tidy way to do that.
 
-Left unset, `SecureCookies` follows the scheme of the incoming request. Setting it to `true` is the right call behind a TLS-terminating proxy, where the app itself only ever sees plain HTTP and would otherwise decide the connection is insecure.
+Left unset, `SecureCookies` follows the scheme of the incoming request. Set it to `true` for a TLS-terminating proxy that sends no `X-Forwarded-Proto` header. Without that header, Trignis receives plain HTTP and treats the connection as insecure.
 
 `TrustedProxies` contains reverse proxy addresses or CIDR ranges, for example `["172.18.0.0/16"]`. Trignis reads the client address and scheme from `X-Forwarded-For` and `X-Forwarded-Proto` on requests from these proxies and from loopback. Trignis ignores these headers from other senders. The login lockout and the `localhost` restriction use the forwarded client address.
 
