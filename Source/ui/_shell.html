@@ -51,6 +51,9 @@
   }
   window.addEventListener('error', e => reportClientError(e.message, `${e.filename}:${e.lineno}:${e.colno}`));
   window.addEventListener('unhandledrejection', e => reportClientError(e.reason?.message ?? e.reason, 'unhandledrejection'));
+  // Report-only Trusted Types: violations arrive here.
+  document.addEventListener('securitypolicyviolation', e =>
+    reportClientError(`CSP ${e.disposition} ${e.effectiveDirective}: ${e.sample || e.blockedURI}`, `${e.sourceFile}:${e.lineNumber}`));
   </script>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>

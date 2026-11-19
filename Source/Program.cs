@@ -266,6 +266,8 @@ try
         headers.TryAdd("Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+        // Report-only until violations stay at zero.
+        headers.TryAdd("Content-Security-Policy-Report-Only", "require-trusted-types-for 'script'; trusted-types lit-html");
         await next();
     });
 
