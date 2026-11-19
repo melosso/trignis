@@ -185,7 +185,7 @@ public class ConnectionHealthCheckService : BackgroundService
         return conn.State == System.Data.ConnectionState.Open;
     }
 
-    private async Task<bool> CheckMessageQueueHealthAsync(ApiEndpoint endpoint)
+    internal async Task<bool> CheckMessageQueueHealthAsync(ApiEndpoint endpoint)
     {
         if (endpoint.MessageQueue == null)
         {

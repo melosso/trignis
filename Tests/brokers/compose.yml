@@ -1,0 +1,70 @@
+# Throwaway message brokers for the probe parity tests. Local credentials, no secrets. Usage: Tests/brokers/run.sh
+name: trignis-brokers
+services:
+  rabbitmq:
+    image: docker.io/library/rabbitmq:4.1-alpine
+    environment:
+      # guest is loopback-only inside the container.
+      RABBITMQ_DEFAULT_USER: trignis
+      RABBITMQ_DEFAULT_PASS: trignis
+    ports:
+      - "127.0.0.1:5672:5672"
+
+  kafka:
+    image: docker.io/apache/kafka:3.9.1
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Matches managed Kafka defaults.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+  sqs:
+    image: docker.io/softwaremill/elasticmq-native:1.6.14
+    ports:
+      - "127.0.0.1:9324:9324"
+
+  servicebus-sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Brokers_Test_1433!"
+
+  servicebus:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    depends_on: [servicebus-sql]
+    volumes:
+      - ./servicebus.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro,z
+    ports:
+      - "127.0.0.1:5673:5672"
+      - "127.0.0.1:5301:5300"
+    environment:
+      ACCEPT_EULA: "Y"
+      SQL_SERVER: servicebus-sql
+      MSSQL_SA_PASSWORD: "Brokers_Test_1433!"
+      SQL_WAIT_INTERVAL: "15"
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+
+  eventhubs:
+    image: mcr.microsoft.com/azure-messaging/eventhubs-emulator:latest
+    depends_on: [azurite]
+    volumes:
+      - ./eventhubs.json:/Eventhubs_Emulator/ConfigFiles/Config.json:ro,z
+    ports:
+      - "127.0.0.1:5674:5672"
+      - "127.0.0.1:5302:5300"
+    environment:
+      ACCEPT_EULA: "Y"
+      BLOB_SERVER: azurite
+      METADATA_SERVER: azurite
