@@ -52,7 +52,7 @@ Where `/health` asks the databases directly, this route reports what the backgro
 
 Keys follow one of two shapes: `sql:{environment}/{connectionKey}` for databases, and `{queueType}:{endpointKey}` for queues. The first results appear about ten seconds after startup and refresh every `HealthCheckIntervalMinutes`.
 
-Only RabbitMQ, Azure Service Bus and AWS SQS are probed at the moment, so Event Hubs and Kafka endpoints will not show up here. If those matter to your alerting, watching `/health/deadletters` covers them indirectly: a broker that stops accepting messages shows up there quickly enough.
+RabbitMQ, Azure Service Bus, AWS SQS, Azure Event Hubs and Kafka are probed. A Kafka topic must exist to pass.
 
 ## GET /health/state
 

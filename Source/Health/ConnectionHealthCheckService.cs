@@ -9,6 +9,9 @@ using Microsoft.Extensions.Options;
 using Trignis.Models;
 using RabbitMQ.Client;
 using Azure.Messaging.ServiceBus;
+using Azure.Messaging.EventHubs;
+using Azure.Messaging.EventHubs.Producer;
+using Confluent.Kafka;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using System.Linq;
@@ -27,9 +30,10 @@ public class ConnectionHealthCheckService : BackgroundService
 
     private readonly EnvironmentConfigService _envConfigService;
 
-    // ponytail: Kafka and Event Hubs have no probe; add cases to CheckMessageQueueHealthAsync to cover them
     private static readonly HashSet<string> ProbedQueueTypes =
-        new(StringComparer.OrdinalIgnoreCase) { "rabbitmq", "azureservicebus", "awssqs" };
+        new(StringComparer.OrdinalIgnoreCase) { "rabbitmq", "azureservicebus", "awssqs", "azureeventhubs", "kafka" };
+
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
 
     public ConnectionHealthCheckService(
         ILogger<ConnectionHealthCheckService> logger,
@@ -196,6 +200,10 @@ public class ConnectionHealthCheckService : BackgroundService
                 return await CheckAzureServiceBusHealthAsync(endpoint.MessageQueue);
             case "awssqs":
                 return await CheckAwsSqsHealthAsync(endpoint.MessageQueue);
+            case "azureeventhubs":
+                return await CheckAzureEventHubsHealthAsync(endpoint.MessageQueue);
+            case "kafka":
+                return await CheckKafkaHealthAsync(endpoint.MessageQueue);
             default:
                 return false;
         }
@@ -329,6 +337,48 @@ public class ConnectionHealthCheckService : BackgroundService
         finally
         {
             client?.Dispose();
+        }
+    }
+
+    private async Task<bool> CheckAzureEventHubsHealthAsync(MessageQueueConfig config)
+    {
+        try
+        {
+            await using var producer = new EventHubProducerClient(config.ConnectionString, config.EventHubName,
+                new EventHubProducerClientOptions
+                {
+                    RetryOptions = new EventHubsRetryOptions { MaximumRetries = 0, TryTimeout = ProbeTimeout }
+                });
+            // Opens the link; needs Send only.
+            using var batch = await producer.CreateBatchAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Azure Event Hubs health check failed for {EventHub}", config.EventHubName);
+            return false;
+        }
+    }
+
+    private async Task<bool> CheckKafkaHealthAsync(MessageQueueConfig config)
+    {
+        try
+        {
+            var adminConfig = new AdminClientConfig { BootstrapServers = config.BootstrapServers };
+            MessageQueueService.ApplyKafkaSecurity(adminConfig, config);
+
+            // All-topic metadata never auto-creates the topic.
+            return await Task.Run(() =>
+            {
+                using var admin = new AdminClientBuilder(adminConfig).Build();
+                var metadata = admin.GetMetadata(ProbeTimeout);
+                return metadata.Topics.Any(t => t.Topic == config.Topic && !t.Error.IsError);
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Kafka health check failed for {BootstrapServers}", config.BootstrapServers);
+            return false;
         }
     }
 

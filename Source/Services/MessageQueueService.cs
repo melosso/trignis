@@ -575,6 +575,32 @@ public class MessageQueueService : IAsyncDisposable
         }
     }
 
+    /// <summary>Applies SASL and TLS settings to a Kafka client.</summary>
+    internal static void ApplyKafkaSecurity(ClientConfig client, MessageQueueConfig config)
+    {
+        if (!string.IsNullOrEmpty(config.Username) && !string.IsNullOrEmpty(config.Password))
+        {
+            client.SaslMechanism = config.SaslMechanism?.ToUpper() switch
+            {
+                "SCRAM-SHA-256" => SaslMechanism.ScramSha256,
+                "SCRAM-SHA-512" => SaslMechanism.ScramSha512,
+                _ => SaslMechanism.Plain
+            };
+            client.SecurityProtocol = config.SecurityProtocol?.ToUpper() switch
+            {
+                "SSL" => Confluent.Kafka.SecurityProtocol.Ssl,
+                "SASL_PLAINTEXT" => Confluent.Kafka.SecurityProtocol.SaslPlaintext,
+                _ => Confluent.Kafka.SecurityProtocol.SaslSsl
+            };
+            client.SaslUsername = config.Username;
+            client.SaslPassword = config.Password;
+        }
+        else if (config.SecurityProtocol?.Equals("SSL", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            client.SecurityProtocol = Confluent.Kafka.SecurityProtocol.Ssl;
+        }
+    }
+
     private async Task SendToKafkaAsync(MessageQueueConfig config, string message, string correlationId, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(config.BootstrapServers))
@@ -598,27 +624,7 @@ public class MessageQueueService : IAsyncDisposable
                 Acks = Acks.All
             };
 
-            if (!string.IsNullOrEmpty(config.Username) && !string.IsNullOrEmpty(config.Password))
-            {
-                producerConfig.SaslMechanism = config.SaslMechanism?.ToUpper() switch
-                {
-                    "SCRAM-SHA-256" => SaslMechanism.ScramSha256,
-                    "SCRAM-SHA-512" => SaslMechanism.ScramSha512,
-                    _ => SaslMechanism.Plain
-                };
-                producerConfig.SecurityProtocol = config.SecurityProtocol?.ToUpper() switch
-                {
-                    "SSL" => Confluent.Kafka.SecurityProtocol.Ssl,
-                    "SASL_PLAINTEXT" => Confluent.Kafka.SecurityProtocol.SaslPlaintext,
-                    _ => Confluent.Kafka.SecurityProtocol.SaslSsl
-                };
-                producerConfig.SaslUsername = config.Username;
-                producerConfig.SaslPassword = config.Password;
-            }
-            else if (config.SecurityProtocol?.Equals("SSL", StringComparison.OrdinalIgnoreCase) == true)
-            {
-                producerConfig.SecurityProtocol = Confluent.Kafka.SecurityProtocol.Ssl;
-            }
+            ApplyKafkaSecurity(producerConfig, config);
 
             _logger.LogDebug("Created Kafka producer for '{BootstrapServers}'", config.BootstrapServers);
             return new ProducerBuilder<Null, string>(producerConfig).Build();
