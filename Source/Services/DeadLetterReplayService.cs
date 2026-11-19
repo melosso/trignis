@@ -22,6 +22,9 @@ public sealed class DeadLetterReplayService : BackgroundService
     /// <summary>How soon a row held by a pause is looked at again.</summary>
     private static readonly TimeSpan PausedRecheck = TimeSpan.FromMinutes(5);
 
+    /// <summary>How soon an unroutable row is looked at again.</summary>
+    internal static readonly TimeSpan UnroutableRecheck = TimeSpan.FromHours(1);
+
     private readonly ILogger<DeadLetterReplayService> _logger;
     private readonly DeadLetterService _deadLetters;
     private readonly DeadLetterReplayer _replayer;
@@ -72,7 +75,7 @@ public sealed class DeadLetterReplayService : BackgroundService
         }
     }
 
-    private async Task ReplayDueAsync(int maxAttempts, CancellationToken ct)
+    internal async Task ReplayDueAsync(int maxAttempts, CancellationToken ct)
     {
         var due = await _deadLetters.GetDueForReplayAsync(maxAttempts, BatchSize, ct);
         if (due.Count == 0)
@@ -106,9 +109,8 @@ public sealed class DeadLetterReplayService : BackgroundService
                     break;
 
                 case DeadLetterReplayer.Outcome.Unroutable:
-                    // Park the row: a deleted environment cannot receive a retry. A manual replay resets the row.
-                    await _deadLetters.RecordReplayFailureAsync(
-                        record.Id, result.Reason ?? "Unroutable", DateTime.UtcNow.AddYears(1), ct);
+                    // Not an attempt: a restored config makes it routable.
+                    await _deadLetters.DeferAsync(record.Id, DateTime.UtcNow + UnroutableRecheck, ct);
                     _logger.LogWarning("Dead letter {Id} cannot be replayed automatically: {Reason}", record.Id, result.Reason);
                     break;
 
