@@ -10,6 +10,11 @@ $COMPOSE -f Tests/brokers/compose.yml up -d
 for port in 5301 5302; do
   for _ in $(seq 1 90); do curl -fs "http://127.0.0.1:$port/health" >/dev/null && break; sleep 2; done
 done
+# RabbitMQ, Kafka and SQS accept connections once started.
+for port in 5672 9092 9324; do
+  for _ in $(seq 1 90); do (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null && break; sleep 2; done
+done
+sleep 10 # Kafka elects its controller after the port opens.
 
 export TRIGNIS_BROKERS=1
 dotnet test trignis.sln --filter "FullyQualifiedName~BrokerParityTests" "$@"
