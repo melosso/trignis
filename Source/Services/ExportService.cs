@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -95,6 +96,9 @@ public sealed class ExportService
         var totalExports = (exportToFile ? 1 : 0) + apiEndpoints.Length;
         var currentExportIndex = 0;
 
+        // Same payload, same id: a replay sends the stored payload again, so receivers can drop the duplicate
+        var payloadHash = DeadLetterService.PayloadHash(JsonSerializer.Serialize(data));
+
         if (exportToFile)
         {
             currentExportIndex++;
@@ -156,13 +160,13 @@ public sealed class ExportService
                         for (int i = batchesSent; i < batches.Count; i++)
                         {
                             using var batchDocument = JsonDocument.Parse(JsonSerializer.Serialize(batches[i]));
-                            await SendHttpRequestAsync(endpoint, trackingObject, environment, batchDocument.RootElement, i + 1, batches.Count, stoppingToken);
+                            await SendHttpRequestAsync(endpoint, trackingObject, environment, batchDocument.RootElement, i + 1, batches.Count, $"{payloadHash}-{i + 1}", stoppingToken);
                             batchesSent = i + 1;
                         }
                     }
                     else
                     {
-                        await SendHttpRequestAsync(endpoint, trackingObject, environment, data, null, null, stoppingToken);
+                        await SendHttpRequestAsync(endpoint, trackingObject, environment, data, null, null, $"{payloadHash}-1", stoppingToken);
                     }
                 }, stoppingToken);
 
@@ -242,6 +246,7 @@ public sealed class ExportService
         JsonElement data,
         int? batchNumber,
         int? totalBatches,
+        string deliveryId,
         CancellationToken stoppingToken)
     {
         var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
@@ -333,6 +338,11 @@ public sealed class ExportService
         }
 
         var jsonContent = JsonSerializer.Serialize(data);
+
+        client.DefaultRequestHeaders.Add("X-Trignis-Delivery", deliveryId);
+        if (endpoint.SigningSecret is { Length: > 0 } signingSecret)
+            client.DefaultRequestHeaders.Add("X-Trignis-Signature", Signature(signingSecret, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), jsonContent));
+
         HttpContent content;
         int payloadBytes;
 
@@ -441,4 +451,8 @@ public sealed class ExportService
             }
         }
     }
+
+    /// <summary><c>t=&lt;unix seconds&gt;,v1=&lt;hex HMAC-SHA256 of "t.body"&gt;</c> over the uncompressed body. The timestamp lets receivers reject old requests.</summary>
+    internal static string Signature(string secret, long timestamp, string body) =>
+        $"t={timestamp},v1={Convert.ToHexStringLower(HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes($"{timestamp}.{body}")))}";
 }

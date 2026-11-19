@@ -68,7 +68,8 @@ public static partial class YamlEnvironment
         new()
         {
             [FileTarget] = Obj(["path"], null, ("path", Text)),
-            ["http"] = Obj(["url"], null, ("url", Text), ("auth", Auth), ("headers", new MapShape(Text)), ("compression", new FlagShape())),
+            ["http"] = Obj(["url"], ["signing_secret"], ("url", Text), ("auth", Auth), ("headers", new MapShape(Text)), ("compression", new FlagShape()),
+                ("signing_secret", Text)),
             ["rabbitmq"] = Obj(["host"], ["password"], ("host", Text), ("port", new WholeShape()), ("virtual_host", Text), ("username", Text),
                 ("password", Text), ("queue", Text), ("exchange", Text), ("routing_key", Text)),
             ["azureservicebus"] = Obj(["connection_string"], ["connection_string"], ("connection_string", Text), ("queue", Text), ("topic", Text)),
@@ -168,6 +169,7 @@ public static partial class YamlEnvironment
                 EnvironmentFile = name,
                 Url = type == "http" ? Get(d, "url") : null,
                 EnableCompression = bool.TryParse(d.Text("compression"), out var compress) && compress,
+                SigningSecret = type == "http" ? Get(d, "signing_secret") : null,
                 CustomHeaders = (d["headers"] as MapNode)?.Items.Where(kv => kv.Value is ScalarNode { IsNull: false })
                     .ToDictionary(kv => kv.Key.Value, kv => decrypt(((ScalarNode)kv.Value).Value)),
                 Auth = auth is null ? null : new ApiAuth
@@ -315,6 +317,7 @@ public static partial class YamlEnvironment
             case "http":
                 line(4, "url", Q(e.Url));
                 if (e.EnableCompression) line(4, "compression", "true");
+                line(4, "signing_secret", Q(e.SigningSecret));
                 if (e.Auth is { } a)
                 {
                     text.Append("    auth:\n");

@@ -97,7 +97,7 @@ public class DeadLetterService
     public async Task SaveDeadLetterAsync(string environmentName, string objectName, string databaseName, JsonElement data, Exception exception, CancellationToken cancellationToken = default, IReadOnlyCollection<string>? failedTargets = null)
     {
         var dataJson = JsonSerializer.Serialize(data);
-        var dataHash = ComputeSha256Hash(dataJson);
+        var dataHash = PayloadHash(dataJson);
 
         // Kept in the original shape so existing rows and the UI's filters stay consistent
         var trackingObjectName = $"{environmentName}_{objectName}";
@@ -354,11 +354,6 @@ public class DeadLetterService
         return deleted;
     }
 
-    private static string ComputeSha256Hash(string input)
-    {
-        using var sha256 = SHA256.Create();
-        var bytes = Encoding.UTF8.GetBytes(input);
-        var hash = sha256.ComputeHash(bytes);
-        return Convert.ToHexString(hash);
-    }
+    /// <summary>Identifies a payload: the dead letter dedupe key, and the base of the <c>X-Trignis-Delivery</c> header.</summary>
+    public static string PayloadHash(string json) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
 }
