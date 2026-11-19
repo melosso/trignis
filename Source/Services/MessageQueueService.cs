@@ -171,7 +171,8 @@ public class MessageQueueService : IAsyncDisposable
             throw new InvalidOperationException("RabbitMQ HostName is required");
         }
 
-        var connectionKey = $"{config.HostName}:{config.Port}:{config.VirtualHost}";
+        // Per login: environments must not share credentials.
+        var connectionKey = $"{config.HostName}:{config.Port}:{config.VirtualHost}:{config.Username}";
         var connection = await GetOrCreateConnectionAsync(connectionKey, config, cancellationToken).ConfigureAwait(false);
 
         IChannel? channel = null;
@@ -618,7 +619,7 @@ public class MessageQueueService : IAsyncDisposable
             throw new InvalidOperationException("Kafka Topic is required");
         }
 
-        var producerKey = $"{config.BootstrapServers}:{config.Topic}:{config.Username}";
+        var producerKey = $"{config.BootstrapServers}:{config.Topic}:{config.Username}:{config.SecurityProtocol}:{config.SaslMechanism}";
 
         // ponytail: the producer is retained across failures (it reconnects itself and other loops share it); GetOrAdd can build two producers in a race and leak one, wrap in Lazy if observed.
         var producer = _kafkaProducers.GetOrAdd(producerKey, _ =>

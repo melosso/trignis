@@ -77,6 +77,17 @@ public sealed class BrokerParityTests
     [BrokerFact]
     public Task RabbitMq_ProbeAndSendFail_ForAClosedPort() => AssertParity(Endpoint("rabbitmq", Rabbit(5999)), false);
 
+    [BrokerFact]
+    public async Task RabbitMq_DoesNotReuseAConnectionAcrossLogins()
+    {
+        await using var queues = new MessageQueueService(NullLogger<MessageQueueService>.Instance);
+        using var data = JsonDocument.Parse("""[{"id":1}]""");
+        await queues.SendToQueueAsync(Endpoint("rabbitmq", Rabbit(5672)), data.RootElement);
+
+        var otherLogin = Rabbit(5672) with { Username = "intruder", Password = "wrong" };
+        await Assert.ThrowsAnyAsync<Exception>(() => queues.SendToQueueAsync(Endpoint("rabbitmq", otherLogin), data.RootElement));
+    }
+
     private static async Task<string> KafkaTopic()
     {
         using var admin = new AdminClientBuilder(new AdminClientConfig { BootstrapServers = "localhost:9092" }).Build();
