@@ -58,7 +58,7 @@
 <script>
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 function fmt(v, suffix = '') {
@@ -87,8 +87,8 @@ function renderEnv(env, idx) {
         <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
         <td style="text-align:right">${
           o.paused
-            ? `<button class="btn-icon" aria-label="Resume this object" data-tippy-content="Resume this object" onclick="resumeScope('${esc(env.name)}','${esc(o.name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg></button>`
-            : `<button class="btn-icon" aria-label="Pause this object" data-tippy-content="Pause this object" onclick="askPause('${esc(env.name)}','${esc(o.name)}')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg></button>`
+            ? `<button class="btn-icon" aria-label="Resume this object" data-tippy-content="Resume this object" data-env="${esc(env.name)}" data-object="${esc(o.name)}" onclick="resumeScope(this.dataset.env, this.dataset.object)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg></button>`
+            : `<button class="btn-icon" aria-label="Pause this object" data-tippy-content="Pause this object" data-env="${esc(env.name)}" data-object="${esc(o.name)}" onclick="askPause(this.dataset.env, this.dataset.object)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg></button>`
         }</td>
       </tr>`).join('')
     : '<tr><td colspan="6" class="empty-state">No tracking objects</td></tr>';
@@ -112,7 +112,7 @@ function renderEnv(env, idx) {
       <span class="accordion-trigger-left">
         <span class="badge badge-muted">${esc(env.name)}</span>
         ${env.paused ? '<span class="badge badge-warning">Paused</span>' : ''}
-        ${env.config_error ? `<span class="badge badge-warning" title="${esc(env.config_error).replace(/"/g,'&quot;')}">Edit rejected, running previous config</span>` : ''}
+        ${env.config_error ? `<span class="badge badge-warning" title="${esc(env.config_error)}">Edit rejected, running previous config</span>` : ''}
         ${env.provider && env.provider !== 'mssql' ? `<span class="pill">${esc(env.provider)}</span>` : ''}
         <span style="font-size:0.8rem;font-weight:400;color:hsl(var(--muted-foreground))">${objects.length} objects · ${endpoints.length} endpoints</span>
       </span>
@@ -126,10 +126,10 @@ function renderEnv(env, idx) {
           ${env.paused
             ? `<span class="badge badge-warning">Paused</span>
                <span class="muted" style="font-size:0.8rem">Changes are accumulating in the source database and nothing is being exported.</span>
-               <button class="btn btn-primary ml-auto" onclick="resumeScope('${esc(env.name)}', null)">Resume environment</button>`
+               <button class="btn btn-primary ml-auto" data-env="${esc(env.name)}" onclick="resumeScope(this.dataset.env, null)">Resume environment</button>`
             : `<span class="badge badge-success">Running</span>
                <span class="muted" style="font-size:0.8rem">Polling every ${fmt(s.polling_interval_seconds ?? null, 's')} and exporting normally.</span>
-               <button class="btn btn-outline ml-auto" onclick="askPause('${esc(env.name)}', null)">Pause environment</button>`}
+               <button class="btn btn-outline ml-auto" data-env="${esc(env.name)}" onclick="askPause(this.dataset.env, null)">Pause environment</button>`}
         </div>
       </div>
 

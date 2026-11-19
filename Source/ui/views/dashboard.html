@@ -89,7 +89,7 @@
 <script>
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 async function load() {
@@ -182,7 +182,8 @@ async function loadSyncState() {
         <td class="muted" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
         <td style="text-align:right">
           <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem"
-                  onclick="resetSync('${esc(env.name)}', '${esc(obj.object_name)}')"
+                  data-env="${esc(env.name)}" data-object="${esc(obj.object_name)}"
+                  onclick="resetSync(this.dataset.env, this.dataset.object)"
                   title="Clear the stored version so the next cycle re-initialises this object">Reset</button>
         </td>
       </tr>`);
