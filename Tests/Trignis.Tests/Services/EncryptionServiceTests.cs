@@ -167,8 +167,8 @@ public sealed class EncryptionServiceTests : IDisposable
     [Fact]
     public void EncryptConfigFile_EncryptsSecrets_AndLeavesNoTempFile()
     {
-        var file = Path.Combine(_tempDir, "environments", "prod.json");
-        File.WriteAllText(file, """{"ConnectionStrings":{"Main":"Server=db;Password=secret"}}""");
+        var file = Path.Combine(_tempDir, "environments", "prod.yaml");
+        File.WriteAllText(file, "databases:\n  main: \"Server=db;Password=secret\"\n");
 
         Assert.True(_svc.EncryptConfigFile(file));
 

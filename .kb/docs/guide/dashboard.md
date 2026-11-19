@@ -23,15 +23,15 @@ One thing you can rely on while poking around: credentials never reach the brows
 
 The dashboard lists every tracked object alongside its last processed version and when that version last moved. Watching the timestamps is often enough to spot a problem: an object whose version has not advanced in a while is usually telling you something.
 
-Each row also carries a **Reset** action, which clears the stored version. On the next cycle that object re-initialises according to its `InitialSyncMode`:
+Each row also carries a **Reset** action, which clears the stored version. On the next cycle that object re-initialises according to its `initial_sync`:
 
-- `Incremental`: adopts the current version and carries on, exporting nothing for the gap.
-- `Full`: re-exports every row.
+- `incremental`: adopts the current version and carries on, exporting nothing for the gap.
+- `full`: re-exports every row.
 
 This tends to come in handy after you have fixed a procedure that was returning something wrong, or when a downstream system has lost its copy and would like the whole thing again.
 
 ::: warning
-Resetting a `Full` object re-exports its entire table, which on a large table is a substantial amount of data heading downstream. It is worth glancing at the sync mode before you confirm.
+Resetting a `full` table re-exports its entire table, which on a large table is a substantial amount of data heading downstream. It is worth glancing at the sync mode before you confirm.
 :::
 
 ## Pausing change tracking

@@ -71,11 +71,14 @@ public class EnvironmentConfigService : IDisposable
     {
         if (!Directory.Exists(_envDir)) return;
 
-        _watcher = new FileSystemWatcher(_envDir, "*.json")
+        _watcher = new FileSystemWatcher(_envDir)
         {
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime,
-            EnableRaisingEvents = true
         };
+        _watcher.Filters.Add("*.yaml");
+        // shortcut: JSON files are migrated in v0.5 only, remove in v0.6.
+        _watcher.Filters.Add("*.json");
+        _watcher.EnableRaisingEvents = true;
         _watcher.Changed += OnFileEvent;
         _watcher.Created += OnFileEvent;
         _watcher.Deleted += OnFileDeleted;
@@ -97,6 +100,8 @@ public class EnvironmentConfigService : IDisposable
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
+        // A JSON file counts while no YAML file replaces it (read-only folders).
+        if (!IsYaml(e.Name) && !(IsJson(e.Name) && !File.Exists(Path.ChangeExtension(e.FullPath, ".yaml")))) return;
         var name = Path.GetFileNameWithoutExtension(e.Name ?? "");
         if (string.IsNullOrEmpty(name)) return;
 
@@ -109,7 +114,7 @@ public class EnvironmentConfigService : IDisposable
         }
 
         _loadErrors.TryRemove(name, out _);
-        _appliedHashes.TryRemove(Path.GetFullPath(Path.Combine(_envDir, name + ".json")), out _);
+        _appliedHashes.TryRemove(Path.GetFullPath(Path.Combine(_envDir, name + ".yaml")), out _);
 
         _logger.LogInformation("Environment '{Name}' removed (file deleted)", name);
         ConfigurationChanged?.Invoke(new EnvironmentChangeEvent { Removed = removed });
@@ -118,9 +123,13 @@ public class EnvironmentConfigService : IDisposable
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
         OnFileDeleted(sender, new FileSystemEventArgs(WatcherChangeTypes.Deleted, _envDir, e.OldName));
-        if (e.FullPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        if (IsYaml(e.Name) || e.FullPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
             OnFileEvent(sender, e);
     }
+
+    private static bool IsYaml(string? fileName) => fileName?.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsJson(string? fileName) => fileName?.EndsWith(".json", StringComparison.OrdinalIgnoreCase) == true;
 
     private void HandleFileChange(string fullPath)
     {
@@ -141,8 +150,24 @@ public class EnvironmentConfigService : IDisposable
         // File deleted before the debounce elapsed. Loading a missing file creates an empty environment.
         if (!File.Exists(fullPath)) return;
 
-        // Same treatment a file gets at start-up: secrets encrypted, then validated
-        _encryptionService.EncryptConfigFile(fullPath);
+        if (IsJson(fullPath))
+        {
+            switch (EnvironmentMigration.MigrateFile(fullPath, _globalSettings, _encryptionService.Encrypt, _encryptionService.IsEncrypted))
+            {
+                case EnvironmentMigration.Outcome.ReadOnly:
+                    break; // loaded in memory below
+                case EnvironmentMigration.Outcome.Failed:
+                    _loadErrors[name] = $"{Path.GetFileName(fullPath)} could not be migrated to YAML; see the log";
+                    return;
+                default:
+                    return; // the written YAML file raises its own event
+            }
+        }
+        else
+        {
+            // Same treatment a file gets at start-up: secrets encrypted, then validated
+            _encryptionService.EncryptConfigFile(fullPath);
+        }
 
         string hash;
         try
@@ -229,42 +254,23 @@ public class EnvironmentConfigService : IDisposable
 
         try
         {
-            var cfg = new ConfigurationBuilder()
-                .AddEncryptedJsonFile(relativePath, _encryptionService, optional: false)
-                .Build();
-
-            var connectionStrings = new Dictionary<string, string>();
-            foreach (var cs in cfg.GetSection("ConnectionStrings").GetChildren())
-                if (!string.IsNullOrEmpty(cs.Value))
-                    connectionStrings[cs.Key] = cs.Value;
-
-            var ct = cfg.GetSection("ChangeTracking");
-
-            var trackingObjects = (ct.GetSection("TrackingObjects").Get<TrackingObject[]>() ?? [])
-                .Select(obj => obj with { EnvironmentFile = name })
-                .ToArray();
-
-            var apiEndpoints = (ct.GetSection("ApiEndpoints").Get<ApiEndpoint[]>() ?? [])
-                .Select(ep => ep with { EnvironmentFile = name })
-                .ToArray();
-
-            var envConfig = new EnvironmentConfig
+            // JSON reaches here only from a read-only folder: converted in memory.
+            var yaml = IsJson(fullPath)
+                ? EnvironmentMigration.FromJson(File.ReadAllText(fullPath), _globalSettings)
+                : File.ReadAllText(fullPath);
+            var issues = YamlEnvironment.Validate(yaml);
+            foreach (var warning in issues.Where(i => !i.IsError))
+                _logger.LogWarning("Environment '{Name}': {Path}, {Issue}", name, relativePath, warning);
+            if (issues.Where(i => i.IsError).ToList() is { Count: > 0 } errors)
             {
-                Name = name,
-                Provider = cfg.GetValue<string?>("Provider") ?? "mssql",
-                ConnectionStrings = connectionStrings,
-                ChangeTracking = new EnvironmentChangeTracking
-                {
-                    TrackingObjects = trackingObjects,
-                    ApiEndpoints = apiEndpoints,
-                    PollingIntervalSeconds = ct.GetValue<int?>("PollingIntervalSeconds"),
-                    ExportToFile = ct.GetValue<bool?>("ExportToFile"),
-                    FilePath = ct.GetValue<string?>("FilePath"),
-                    ExportToApi = ct.GetValue<bool?>("ExportToApi"),
-                    RetryCount = ct.GetValue<int?>("RetryCount"),
-                    RetryDelaySeconds = ct.GetValue<int?>("RetryDelaySeconds")
-                }
-            };
+                foreach (var issue in errors)
+                    _logger.LogError("Environment '{Name}': {Path}, {Issue}", name, relativePath, issue);
+                error = $"{relativePath}, {errors[0]}";
+                return null;
+            }
+
+            var envConfig = YamlEnvironment.ToModel(yaml, name,
+                text => _encryptionService.IsEncrypted(text) ? _encryptionService.Decrypt(text) : text);
 
             return envConfig;
         }

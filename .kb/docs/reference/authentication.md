@@ -9,56 +9,50 @@ There are two separate things called authentication in Trignis, and it helps to 
 
 ## Endpoint authentication
 
-Adding an `Auth` block to an HTTP endpoint tells Trignis how to authenticate when it posts your changes. Four types are available, and you can use a different one per endpoint.
+An `auth` block on an HTTP destination sets how Trignis authenticates its requests. Four types are available, per destination.
 
 ### Bearer
 
-```json
-{ "Auth": { "Type": "Bearer", "Token": "your-token" } }
+```yaml
+auth: { type: bearer, token: your-token }
 ```
 
 This sends `Authorization: Bearer <token>` with each request, which suits a static token issued by the receiving service.
 
 ### Basic
 
-```json
-{ "Auth": { "Type": "Basic", "Username": "user", "Password": "secret" } }
+```yaml
+auth: { type: basic, username: user, password: secret }
 ```
 
 The pair is base64 encoded into an `Authorization: Basic` header for you, so you can store the username and password as they are.
 
-### ApiKey
+### API key
 
-```json
-{
-  "Auth": {
-    "Type": "ApiKey",
-    "ApiKey": "your-key",
-    "HeaderName": "X-API-Key"
-  }
-}
+```yaml
+auth:
+  type: apikey
+  api_key: your-key
+  header_name: X-API-Key
 ```
 
-If the receiving service expects a different header, `HeaderName` lets you name it. Left out, it defaults to `X-API-Key`.
+`header_name` sets the header. Left out, it defaults to `X-API-Key`.
 
-### OAuth2ClientCredentials
+### OAuth2 client credentials
 
-```json
-{
-  "Auth": {
-    "Type": "OAuth2ClientCredentials",
-    "TokenEndpoint": "https://id.example.com/oauth2/token",
-    "ClientId": "client-id",
-    "ClientSecret": "client-secret",
-    "Scope": "changes.write",
-    "TokenExpirationSeconds": 3600
-  }
-}
+```yaml
+auth:
+  type: oauth2
+  token_endpoint: https://id.example.com/oauth2/token
+  client_id: client-id
+  client_secret: client-secret
+  scope: changes.write
+  token_expiration: 1h
 ```
 
 Use this option if the receiving side uses an identity provider. Trignis requests a token using `grant_type=client_credentials` and caches it per endpoint and client id, so a busy polling interval does not mean a token request every cycle.
 
-Lifetime is worked out in the order you would expect: `TokenExpirationSeconds` if you set it, otherwise whatever the server reports in `expires_in`, and one hour as a last resort. Refreshes happen a minute ahead of expiry, which keeps a token from lapsing partway through a request.
+The token lifetime is `token_expiration` if set, otherwise the server's `expires_in`, otherwise one hour. Trignis refreshes the token one minute before expiry, or at half its lifetime for tokens shorter than two minutes.
 
 If several exports need the same fresh token at once, they wait on a single request rather than all calling the token endpoint together. Identity providers tend to appreciate that.
 
@@ -68,9 +62,12 @@ You can write secrets into an environment file as plain text, which is by far th
 
 These fields are picked up automatically:
 
-- Every value under `ConnectionStrings`
-- `Auth`: `Token`, `Password`, `ApiKey`, `ClientSecret`, `ClientId`
-- `MessageQueue`: `Password`, `ConnectionString`, `SecretAccessKey`, `AccessKeyId`
+- Every value under `databases`
+- `auth`: `token`, `password`, `api_key`, `client_secret`, `client_id`
+- Every value under `headers`
+- Queue destinations: `password`, `connection_string`, `secret_access_key`, `access_key_id`
+
+Comments and layout are kept: Trignis replaces each secret value in place.
 
 The scheme is hybrid: each value gets its own AES-256 key, which is then wrapped with a 2048-bit RSA key. The RSA private key is stored in `.core/`, encrypted with your `TRIGNIS_ENCRYPTION_KEY`. The practical upshot is that a copy of an environment file, on its own, gives nothing away.
 

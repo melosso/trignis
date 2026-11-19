@@ -19,6 +19,7 @@ document.querySelectorAll('.nav-item').forEach(a => {
 
 fetch('/ui/api/overview').then(r => r.json()).then(d => {
   const v = (d.version ?? '').split('+')[0];
+  if (d.auth_enabled === false) document.querySelector('.btn-logout')?.remove();
   document.getElementById('sidebarVersion').textContent = v ? `v${v}` : '';
 }).catch(() => {});
 

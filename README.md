@@ -76,28 +76,27 @@ Back up the encryption key. A lost key makes the encrypted configuration unrecov
 
 ## Configure
 
-Each file in `environments/` defines one environment. An environment file contains connection strings, tracked objects and destinations:
+Each `.yaml` file in `environments/` defines one environment: databases, tracked tables and destinations.
 
-```json
-{
-  "ConnectionStrings": {
-    "PrimaryDatabase": "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;"
-  },
-  "ChangeTracking": {
-    "ExportToFile": true,
-    "TrackingObjects": [
-      {
-        "Name": "Orders",
-        "Database": "PrimaryDatabase",
-        "TableName": "dbo.Orders",
-        "StoredProcedureName": "dbo.sp_GetOrderChanges"
-      }
-    ]
-  }
-}
+```yaml
+provider: mssql
+
+databases:
+  primary: "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;"
+
+tables:
+  - name: Orders
+    database: primary
+    table: dbo.Orders
+    procedure: dbo.sp_GetOrderChanges
+
+destinations:
+  - name: archive
+    type: file
+    path: "exports/{environment}/{object}/changes-{timestamp}.json"
 ```
 
-Trignis loads new and changed environment files without a restart. The `Provider` setting selects the database: `mssql` (default) or `postgres`.
+Trignis loads new and changed environment files without a restart, and validates each file with line and column numbers. `provider` selects the database: `mssql` (default) or `postgres`. Trignis v0.5 converts v0.4 JSON environment files to YAML on startup.
 
 Each tracked object requires a stored procedure that returns a specific JSON structure. The [stored procedure contract](https://melosso.github.io/trignis/reference/stored-procedure) defines the structure.
 

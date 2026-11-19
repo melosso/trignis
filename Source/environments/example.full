@@ -1,194 +1,132 @@
-{
-  "ConnectionStrings": {
-    "PrimaryDatabase": "Server=localhost;Database=Database1;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;",
-    "SecondaryDatabase": "Server=localhost;Database=Database2;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;"
-  },
-  "ChangeTracking": {
-    "TrackingObjects": [
-      {
-        "Name": "TrainingSessions",
-        "Database": "PrimaryDatabase",
-        "TableName": "dbo.TrainingSessions",
-        "StoredProcedureName": "web.get_trainingsessionsync",
-        "InitialSyncMode": "Full"
-      },
-      {
-        "Name": "TrainingSessionsSecondary",
-        "Database": "SecondaryDatabase",
-        "TableName": "dbo.TrainingSessions",
-        "StoredProcedureName": "web.get_trainingsessionsync",
-        "InitialSyncMode": "Incremental"
-      }
-    ],
-    "ApiEndpoints": [
-      {
-        "Key": "production_webhook1",
-        "Url": "http://portway/v1/api/prod/Webhook/webhook1",
-        "Auth": {
-          "Type": "Bearer",
-          "Token": "<my_token_here>"
-        }
-      },
-      {
-        "Key": "oauth2_api",
-        "Url": "https://api.example.com/webhook",
-        "Auth": {
-          "Type": "OAuth2ClientCredentials",
-          "TokenEndpoint": "https://auth.example.com/oauth/token",
-          "ClientId": "your-client-id",
-          "ClientSecret": "your-client-secret",
-          "Scope": "api.write",
-          "TokenExpirationSeconds": 3600
-        },
-        "CustomHeaders": {
-          "X-Correlation-Id": "{guid}",
-          "X-Source": "trignis-{database}",
-          "X-Timestamp": "{timestamp}",
-          "X-Environment": "{environment}",
-          "X-Object": "{object}"
-        },
-        "EnableCompression": true
-      },
-      {
-        "Key": "rabbitmq_direct_queue",
-        "MessageQueueType": "RabbitMQ",
-        "MessageQueue": {
-          "HostName": "localhost",
-          "Port": 5672,
-          "VirtualHost": "/",
-          "Username": "guest",
-          "Password": "guest",
-          "QueueName": "trignis-demo"
-        }
-      },
-      {
-        "Key": "rabbitmq_exchange_direct",
-        "MessageQueueType": "RabbitMQ",
-        "MessageQueue": {
-          "HostName": "rabbitmq.example.com",
-          "Port": 5672,
-          "VirtualHost": "/",
-          "Username": "trignis",
-          "Password": "PWENC:...",
-          "Exchange": "data-changes",
-          "RoutingKey": "database.trainingsessions"
-        }
-      },
-      {
-        "Key": "rabbitmq_exchange_fanout",
-        "MessageQueueType": "RabbitMQ",
-        "MessageQueue": {
-          "HostName": "rabbitmq.example.com",
-          "Port": 5672,
-          "VirtualHost": "/",
-          "Username": "trignis",
-          "Password": "PWENC:...",
-          "Exchange": "broadcasts"
-        }
-      },
-      {
-        "Key": "azure_servicebus_queue",
-        "MessageQueueType": "AzureServiceBus",
-        "MessageQueue": {
-          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...",
-          "QueueName": "change-tracking"
-        }
-      },
-      {
-        "Key": "azure_servicebus_topic",
-        "MessageQueueType": "AzureServiceBus",
-        "MessageQueue": {
-          "ConnectionString": "PWENC:...",
-          "TopicName": "data-changes"
-        }
-      },
-      {
-        "Key": "aws_sqs_with_credentials",
-        "MessageQueueType": "AWSSQS",
-        "MessageQueue": {
-          "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/change-tracking",
-          "Region": "us-east-1",
-          "AccessKeyId": "AKIA...",
-          "SecretAccessKey": "PWENC:..."
-        }
-      },
-      {
-        "Key": "aws_sqs_iam_role",
-        "MessageQueueType": "AWSSQS",
-        "MessageQueue": {
-          "QueueUrl": "https://sqs.us-east-1.amazonaws.com/123456789/changes",
-          "Region": "us-east-1"
-        }
-      },
-      {
-        "Key": "azure_eventhubs",
-        "MessageQueueType": "AzureEventHubs",
-        "MessageQueue": {
-          "ConnectionString": "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...",
-          "EventHubName": "change-tracking"
-        }
-      },
-      {
-        "Key": "kafka_sasl",
-        "MessageQueueType": "Kafka",
-        "MessageQueue": {
-          "BootstrapServers": "kafka.example.com:9092",
-          "Topic": "db-change-tracking",
-          "Username": "trignis",
-          "Password": "PWENC:...",
-          "SecurityProtocol": "SASL_SSL",
-          "SaslMechanism": "PLAIN"
-        }
-      },
-      {
-        "Key": "kafka_plaintext",
-        "MessageQueueType": "Kafka",
-        "MessageQueue": {
-          "BootstrapServers": "localhost:9092",
-          "Topic": "trignis-changes"
-        }
-      },
-      {
-        "Key": "compressed_webhook",
-        "Url": "https://api.example.com/data/changes",
-        "Auth": {
-          "Type": "Bearer",
-          "Token": "your-bearer-token"
-        },
-        "CustomHeaders": {
-          "X-Request-Id": "{guid}",
-          "X-Environment": "{environment}",
-          "X-Batch-Info": "Batch {batch} of {totalbatches}"
-        },
-        "EnableCompression": true
-      },
-      {
-        "Key": "basic_auth_api",
-        "Url": "https://api.example.com/sync",
-        "Auth": {
-          "Type": "Basic",
-          "Username": "api_user",
-          "Password": "PWENC:..."
-        }
-      },
-      {
-        "Key": "apikey_auth",
-        "Url": "https://api.example.com/data",
-        "Auth": {
-          "Type": "ApiKey",
-          "ApiKey": "PWENC:...",
-          "HeaderName": "X-API-Key"
-        },
-        "CustomHeaders": {
-          "X-Client": "Trignis"
-        }
-      }
-    ],
-    "PollingIntervalSeconds": 60,
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/{database}/changes-{timestamp}.json",
-    "ExportToApi": true,
-    "RetryCount": 5,
-    "RetryDelaySeconds": 10
-  }
-}
+provider: mssql
+
+databases:
+  PrimaryDatabase: "Server=localhost;Database=Database1;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;"
+  SecondaryDatabase: "Server=localhost;Database=Database2;Trusted_Connection=False;TrustServerCertificate=True;UID=sa;PWD=MyS3cr3tP4ssW0Rd#;"
+
+polling:
+  interval: 60s
+
+retry:
+  count: 5
+  delay: 10s
+
+tables:
+  - name: TrainingSessions
+    database: PrimaryDatabase
+    table: dbo.TrainingSessions
+    procedure: web.get_trainingsessionsync
+    initial_sync: full
+  - name: TrainingSessionsSecondary
+    database: SecondaryDatabase
+    table: dbo.TrainingSessions
+    procedure: web.get_trainingsessionsync
+    initial_sync: incremental
+
+destinations:
+  - name: files
+    type: file
+    path: "exports/{environment}/{object}/{database}/changes-{timestamp}.json"
+  - name: production_webhook1
+    type: http
+    url: "http://portway/v1/api/prod/Webhook/webhook1"
+    auth:
+      type: bearer
+      token: "<my_token_here>"
+  - name: oauth2_api
+    type: http
+    url: "https://api.example.com/webhook"
+    compression: true
+    auth:
+      type: oauth2
+      token_endpoint: "https://auth.example.com/oauth/token"
+      client_id: "your-client-id"
+      client_secret: "your-client-secret"
+      scope: "api.write"
+      token_expiration: 3600s
+    headers:
+      X-Correlation-Id: "{guid}"
+      X-Environment: "{environment}"
+      X-Object: "{object}"
+      X-Source: "trignis-{database}"
+      X-Timestamp: "{timestamp}"
+  - name: rabbitmq_direct_queue
+    type: rabbitmq
+    host: localhost
+    username: guest
+    password: "guest"
+    queue: trignis-demo
+  - name: rabbitmq_exchange_direct
+    type: rabbitmq
+    host: rabbitmq.example.com
+    username: trignis
+    password: "PWENC:..."
+    exchange: data-changes
+    routing_key: "database.trainingsessions"
+  - name: rabbitmq_exchange_fanout
+    type: rabbitmq
+    host: rabbitmq.example.com
+    username: trignis
+    password: "PWENC:..."
+    exchange: broadcasts
+  - name: azure_servicebus_queue
+    type: azureservicebus
+    connection_string: "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=..."
+    queue: change-tracking
+  - name: azure_servicebus_topic
+    type: azureservicebus
+    connection_string: "PWENC:..."
+    topic: data-changes
+  - name: aws_sqs_with_credentials
+    type: awssqs
+    queue_url: "https://sqs.us-east-1.amazonaws.com/123456789/change-tracking"
+    region: us-east-1
+    access_key_id: "AKIA..."
+    secret_access_key: "PWENC:..."
+  - name: aws_sqs_iam_role
+    type: awssqs
+    queue_url: "https://sqs.us-east-1.amazonaws.com/123456789/changes"
+    region: us-east-1
+  - name: azure_eventhubs
+    type: azureeventhubs
+    connection_string: "Endpoint=sb://namespace.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=..."
+    event_hub: change-tracking
+  - name: kafka_sasl
+    type: kafka
+    bootstrap_servers: "kafka.example.com:9092"
+    topic: db-change-tracking
+    username: trignis
+    password: "PWENC:..."
+    security_protocol: SASL_SSL
+    sasl_mechanism: PLAIN
+  - name: kafka_plaintext
+    type: kafka
+    bootstrap_servers: "localhost:9092"
+    topic: trignis-changes
+  - name: compressed_webhook
+    type: http
+    url: "https://api.example.com/data/changes"
+    compression: true
+    auth:
+      type: bearer
+      token: "your-bearer-token"
+    headers:
+      X-Batch-Info: "Batch {batch} of {totalbatches}"
+      X-Environment: "{environment}"
+      X-Request-Id: "{guid}"
+  - name: basic_auth_api
+    type: http
+    url: "https://api.example.com/sync"
+    auth:
+      type: basic
+      username: api_user
+      password: "PWENC:..."
+  - name: apikey_auth
+    type: http
+    url: "https://api.example.com/data"
+    auth:
+      type: apikey
+      api_key: "PWENC:..."
+      header_name: X-API-Key
+    headers:
+      X-Client: "Trignis"

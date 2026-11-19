@@ -21,8 +21,8 @@ mkdir -p {environments,log,exports} && done_status "Directories"
 status "Downloading appsettings.json"
 curl -fSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/Source/appsettings.json -o appsettings.json && done_status "appsettings.json"
 
-status "Downloading environments/example.json"
-curl -fSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/Source/environments/example.json -o environments/example.json && done_status "environments/example.json"
+status "Downloading environments/example.yaml"
+curl -fSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/Source/environments/example.yaml -o environments/example.yaml && done_status "environments/example.yaml"
 
 status "Downloading docker-compose.yml"
 curl -fSL https://raw.githubusercontent.com/melosso/trignis/refs/heads/main/docker-compose.yml -o docker-compose.yml && done_status "docker-compose.yml"

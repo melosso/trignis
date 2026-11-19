@@ -259,59 +259,23 @@ namespace Trignis.Services
             if (!Directory.Exists(envDir))
                 return;
 
-            foreach (var file in Directory.GetFiles(envDir, "*.json", SearchOption.TopDirectoryOnly))
+            foreach (var file in Directory.GetFiles(envDir, "*.yaml", SearchOption.TopDirectoryOnly))
                 EncryptConfigFile(file);
         }
 
         /// <summary>
-        /// Encrypts plain secrets in one environment file. Returns true if the file was rewritten. A file without plain secrets is not rewritten: the file watcher does not re-trigger.
+        /// Encrypts plain secrets in one YAML environment file, keeping comments. Returns true if the file was rewritten. A file without plain secrets is not rewritten: the file watcher does not re-trigger.
         /// </summary>
         public bool EncryptConfigFile(string file)
         {
             try
             {
-                var changed = false;
-                string? Encrypt(string key, string value)
-                {
-                    var encrypted = EncryptIfPlain(key, value);
-                    changed |= encrypted != null;
-                    return encrypted;
-                }
-
-                if (JsonNode.Parse(File.ReadAllText(file)) is not JsonObject jsonObject)
-                    return false;
-
-                if (jsonObject.TryGetPropertyValue("ConnectionStrings", out var csNode) && csNode is JsonObject csObj)
-                    JsonSecrets.MapProps(csObj, null, Encrypt);
-
-                if (jsonObject.TryGetPropertyValue("ChangeTracking", out var ctNode) && ctNode is JsonObject ctObj)
-                {
-                    // Legacy ApiAuth
-                    if (ctObj.TryGetPropertyValue("ApiAuth", out var aaNode) && aaNode is JsonObject aaObj)
-                        JsonSecrets.MapProps(aaObj, null, Encrypt);
-
-                    if (ctObj.TryGetPropertyValue("ApiEndpoints", out var aeNode) && aeNode is JsonArray aeArray)
-                    {
-                        foreach (var endpoint in aeArray)
-                        {
-                            if (endpoint is not JsonObject epObj) continue;
-
-                            if (epObj.TryGetPropertyValue("Auth", out var authNode) && authNode is JsonObject authObj)
-                                JsonSecrets.MapProps(authObj, JsonSecrets.AuthProps, Encrypt);
-
-                            if (epObj.TryGetPropertyValue("MessageQueue", out var mqNode) && mqNode is JsonObject mqObj)
-                                JsonSecrets.MapProps(mqObj, JsonSecrets.MessageQueueProps, Encrypt);
-                        }
-                    }
-                }
-
-                if (!changed)
+                if (YamlEnvironment.EncryptSecrets(File.ReadAllText(file), Encrypt, IsEncrypted) is not { } yaml)
                     return false;
 
                 // Atomic: a crash must not lose the only copy.
-                var json = JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions { WriteIndented = true });
                 var temp = file + ".tmp";
-                File.WriteAllText(temp, json);
+                File.WriteAllText(temp, yaml);
                 try
                 {
                     File.Move(temp, file, overwrite: true);
@@ -319,7 +283,7 @@ namespace Trignis.Services
                 catch (IOException)
                 {
                     // Single-file bind mounts reject rename.
-                    File.WriteAllText(file, json);
+                    File.WriteAllText(file, yaml);
                     File.Delete(temp);
                 }
                 Log.Debug("Encrypted config file: {File}", file);
@@ -331,8 +295,5 @@ namespace Trignis.Services
                 return false;
             }
         }
-
-        /// <summary>Returns the encrypted value, or null when it is already encrypted.</summary>
-        private string? EncryptIfPlain(string key, string value) => IsEncrypted(value) ? null : Encrypt(value);
     }
 }

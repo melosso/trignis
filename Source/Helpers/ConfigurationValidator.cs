@@ -126,7 +126,7 @@ public static class ConfigurationValidator
         // Validate tracking objects
         if (env.ChangeTracking.TrackingObjects.Length == 0)
         {
-            warnings.Add($"Environment '{envName}' has no tracking objects configured");
+            warnings.Add($"Environment '{envName}' has no tables configured");
         }
         else
         {
@@ -135,25 +135,25 @@ public static class ConfigurationValidator
                 // Validate required fields
                 if (string.IsNullOrWhiteSpace(obj.Name))
                 {
-                    errors.Add($"Environment '{envName}': Tracking object has no Name specified");
+                    errors.Add($"Environment '{envName}': Table has no name");
                 }
                 if (string.IsNullOrWhiteSpace(obj.Database))
                 {
-                    errors.Add($"Environment '{envName}': Tracking object '{obj.Name}' has no Database specified");
+                    errors.Add($"Environment '{envName}': Table '{obj.Name}' has no database");
                 }
                 if (string.IsNullOrWhiteSpace(obj.TableName))
                 {
-                    errors.Add($"Environment '{envName}': Tracking object '{obj.Name}' has no TableName specified");
+                    errors.Add($"Environment '{envName}': Table '{obj.Name}' has no table");
                 }
                 if (string.IsNullOrWhiteSpace(obj.StoredProcedureName))
                 {
-                    errors.Add($"Environment '{envName}': Tracking object '{obj.Name}' has no StoredProcedureName specified");
+                    errors.Add($"Environment '{envName}': Table '{obj.Name}' has no procedure");
                 }
 
                 // Validate connection string exists in environment
                 if (!env.ConnectionStrings.ContainsKey(obj.Database))
                 {
-                    errors.Add($"Environment '{envName}': Tracking object '{obj.Name}' references database '{obj.Database}' but no connection string found");
+                    errors.Add($"Environment '{envName}': Table '{obj.Name}' references database '{obj.Database}', which is not defined under databases");
                 }
 
                 // Validate InitialSyncMode
@@ -161,7 +161,7 @@ public static class ConfigurationValidator
                     !obj.InitialSyncMode.Equals("Full", StringComparison.OrdinalIgnoreCase) &&
                     !obj.InitialSyncMode.Equals("Incremental", StringComparison.OrdinalIgnoreCase))
                 {
-                    warnings.Add($"Environment '{envName}': Tracking object '{obj.Name}' has invalid InitialSyncMode '{obj.InitialSyncMode}'. Valid values: 'Full', 'Incremental'");
+                    warnings.Add($"Environment '{envName}': Table '{obj.Name}' has invalid initial_sync '{obj.InitialSyncMode}'. Valid values: full, incremental");
                 }
             }
         }
@@ -172,7 +172,7 @@ public static class ConfigurationValidator
         {
             if (env.ChangeTracking.ApiEndpoints.Length == 0)
             {
-                warnings.Add($"Environment '{envName}': ExportToApi is enabled but no API endpoints are configured");
+                warnings.Add($"Environment '{envName}': has no enabled destinations besides files");
             }
             else
             {
@@ -190,7 +190,7 @@ public static class ConfigurationValidator
             var filePath = env.ChangeTracking.FilePath ?? globalSettings.FilePath;
             if (string.IsNullOrWhiteSpace(filePath))
             {
-                warnings.Add($"Environment '{envName}': ExportToFile is enabled but FilePath is not configured");
+                warnings.Add($"Environment '{envName}': has a file destination without a path");
             }
         }
 
@@ -200,11 +200,11 @@ public static class ConfigurationValidator
             var interval = env.ChangeTracking.PollingIntervalSeconds.Value;
             if (interval < 5)
             {
-                warnings.Add($"Environment '{envName}': PollingIntervalSeconds is set to {interval}s which may be too aggressive. Minimum recommended: 5s");
+                warnings.Add($"Environment '{envName}': polling.interval is set to {interval}s which may be too aggressive. Minimum recommended: 5s");
             }
             else if (interval > 3600)
             {
-                warnings.Add($"Environment '{envName}': PollingIntervalSeconds is set to {interval}s which may miss changes. Maximum recommended: 3600s");
+                warnings.Add($"Environment '{envName}': polling.interval is set to {interval}s which may miss changes. Maximum recommended: 3600s");
             }
         }
 
@@ -213,11 +213,11 @@ public static class ConfigurationValidator
             var retryCount = env.ChangeTracking.RetryCount.Value;
             if (retryCount < 0)
             {
-                warnings.Add($"Environment '{envName}': RetryCount is set to {retryCount} which is invalid");
+                warnings.Add($"Environment '{envName}': retry.count is set to {retryCount} which is invalid");
             }
             else if (retryCount > 10)
             {
-                warnings.Add($"Environment '{envName}': RetryCount is set to {retryCount} which may be excessive. Recommended: 3-5");
+                warnings.Add($"Environment '{envName}': retry.count is set to {retryCount} which may be excessive. Recommended: 3-5");
             }
         }
 
@@ -226,7 +226,7 @@ public static class ConfigurationValidator
             var retryDelay = env.ChangeTracking.RetryDelaySeconds.Value;
             if (retryDelay < 1)
             {
-                warnings.Add($"Environment '{envName}': RetryDelaySeconds is set to {retryDelay}s which is too low. Minimum: 1s");
+                warnings.Add($"Environment '{envName}': retry.delay is set to {retryDelay}s which is too low. Minimum: 1s");
             }
         }
     }
@@ -240,7 +240,7 @@ public static class ConfigurationValidator
         {
             if (endpoint.MessageQueue == null)
             {
-                errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has MessageQueueType '{endpoint.MessageQueueType}' but MessageQueue configuration is missing");
+                errors.Add($"Environment '{envName}': Destination '{endpointName}' has type '{endpoint.MessageQueueType}' but no queue settings");
                 return;
             }
 
@@ -251,15 +251,15 @@ public static class ConfigurationValidator
             // HTTP endpoint validation
             if (string.IsNullOrWhiteSpace(endpoint.Url))
             {
-                errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has no Url specified");
+                errors.Add($"Environment '{envName}': Destination '{endpointName}' has no url");
             }
             else if (!Uri.TryCreate(endpoint.Url, UriKind.Absolute, out var uri))
             {
-                errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has invalid Url '{endpoint.Url}'");
+                errors.Add($"Environment '{envName}': Destination '{endpointName}' has invalid url '{endpoint.Url}'");
             }
             else if (uri.Scheme != "http" && uri.Scheme != "https")
             {
-                warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses non-HTTP(S) scheme '{uri.Scheme}'");
+                warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses non-HTTP(S) scheme '{uri.Scheme}'");
             }
 
             // Validate authentication
@@ -273,7 +273,7 @@ public static class ConfigurationValidator
         {
             foreach (var (name, value) in fields)
                 if (string.IsNullOrWhiteSpace(value))
-                    errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has no {name} specified");
+                    errors.Add($"Environment '{envName}': {label} destination '{endpointName}' has no {name}");
         }
 
         // Exactly one of the two; both set is a warning naming the one that wins.
@@ -283,9 +283,9 @@ public static class ConfigurationValidator
             var hasB = !string.IsNullOrWhiteSpace(b.Value);
 
             if (!hasA && !hasB)
-                errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' must specify either {a.Name} or {b.Name}");
+                errors.Add($"Environment '{envName}': {label} destination '{endpointName}' must specify either {a.Name} or {b.Name}");
             else if (hasA && hasB)
-                warnings.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has both {a.Name} and {b.Name} specified. {winner} will be used");
+                warnings.Add($"Environment '{envName}': {label} destination '{endpointName}' has both {a.Name} and {b.Name} specified. {winner} will be used");
         }
 
         // Both or neither; neither is a warning about the fallback.
@@ -295,47 +295,47 @@ public static class ConfigurationValidator
             var hasB = !string.IsNullOrWhiteSpace(b.Value);
 
             if (hasA != hasB)
-                errors.Add($"Environment '{envName}': {label} endpoint '{endpointName}' has incomplete credentials. Both {a.Name} and {b.Name} must be provided, or neither");
+                errors.Add($"Environment '{envName}': {label} destination '{endpointName}' has incomplete credentials. Both {a.Name} and {b.Name} must be provided, or neither");
             else if (!hasA)
-                warnings.Add($"Environment '{envName}': {label} endpoint '{endpointName}' {noneMessage}");
+                warnings.Add($"Environment '{envName}': {label} destination '{endpointName}' {noneMessage}");
         }
 
         switch (queueType.ToLower())
         {
             case "rabbitmq":
-                Required("RabbitMQ", ("HostName", config.HostName));
+                Required("RabbitMQ", ("host", config.HostName));
                 if (config.Port <= 0 || config.Port > 65535)
-                    warnings.Add($"Environment '{envName}': RabbitMQ endpoint '{endpointName}' has invalid Port {config.Port}. Using default 5672");
-                EitherOr("RabbitMQ", ("QueueName", config.QueueName), ("Exchange", config.Exchange), winner: "Exchange");
+                    warnings.Add($"Environment '{envName}': RabbitMQ destination '{endpointName}' has invalid port {config.Port}. Using default 5672");
+                EitherOr("RabbitMQ", ("queue", config.QueueName), ("exchange", config.Exchange), winner: "exchange");
                 break;
 
             case "azureservicebus":
-                Required("Azure Service Bus", ("ConnectionString", config.ConnectionString));
-                EitherOr("Azure Service Bus", ("QueueName", config.QueueName), ("TopicName", config.TopicName), winner: "QueueName");
+                Required("Azure Service Bus", ("connection_string", config.ConnectionString));
+                EitherOr("Azure Service Bus", ("queue", config.QueueName), ("topic", config.TopicName), winner: "queue");
                 break;
 
             case "awssqs":
-                Required("AWS SQS", ("QueueUrl", config.QueueUrl));
+                Required("AWS SQS", ("queue_url", config.QueueUrl));
                 if (!string.IsNullOrWhiteSpace(config.QueueUrl) && !Uri.TryCreate(config.QueueUrl, UriKind.Absolute, out _))
-                    errors.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has invalid QueueUrl '{config.QueueUrl}'");
+                    errors.Add($"Environment '{envName}': AWS SQS destination '{endpointName}' has invalid queue_url '{config.QueueUrl}'");
                 if (string.IsNullOrWhiteSpace(config.Region))
-                    warnings.Add($"Environment '{envName}': AWS SQS endpoint '{endpointName}' has no Region specified. Will use default region");
-                Paired("AWS SQS", ("AccessKeyId", config.AccessKeyId), ("SecretAccessKey", config.SecretAccessKey),
+                    warnings.Add($"Environment '{envName}': AWS SQS destination '{endpointName}' has no region. Will use default region");
+                Paired("AWS SQS", ("access_key_id", config.AccessKeyId), ("secret_access_key", config.SecretAccessKey),
                     "has no explicit credentials. Will use default AWS credential chain");
                 break;
 
             case "azureeventhubs":
-                Required("Azure Event Hubs", ("ConnectionString", config.ConnectionString), ("EventHubName", config.EventHubName));
+                Required("Azure Event Hubs", ("connection_string", config.ConnectionString), ("event_hub", config.EventHubName));
                 break;
 
             case "kafka":
-                Required("Kafka", ("BootstrapServers", config.BootstrapServers), ("Topic", config.Topic));
-                Paired("Kafka", ("Username", config.Username), ("Password", config.Password),
+                Required("Kafka", ("bootstrap_servers", config.BootstrapServers), ("topic", config.Topic));
+                Paired("Kafka", ("username", config.Username), ("password", config.Password),
                     "has no credentials. Connecting without authentication (PLAINTEXT)");
                 break;
 
             default:
-                errors.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported MessageQueueType '{queueType}'. Valid types: RabbitMQ, AzureServiceBus, AWSSQS, AzureEventHubs, Kafka");
+                errors.Add($"Environment '{envName}': Destination '{endpointName}' has unsupported type '{queueType}'. Valid types: rabbitmq, azureservicebus, awssqs, azureeventhubs, kafka");
                 break;
         }
     }
@@ -344,13 +344,13 @@ public static class ConfigurationValidator
     {
         if (auth == null)
         {
-            warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' has no authentication configured");
+            warnings.Add($"Environment '{envName}': Destination '{endpointName}' has no authentication configured");
             return;
         }
 
         if (string.IsNullOrWhiteSpace(auth.Type))
         {
-            warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' has Auth configured but no Type specified");
+            warnings.Add($"Environment '{envName}': Destination '{endpointName}' has auth but no type");
             return;
         }
 
@@ -359,37 +359,37 @@ public static class ConfigurationValidator
             case "bearer":
                 if (string.IsNullOrWhiteSpace(auth.Token))
                 {
-                    warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses Bearer auth but Token is not specified");
+                    warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses bearer auth but token is not set");
                 }
                 break;
 
             case "basic":
                 if (string.IsNullOrWhiteSpace(auth.Username) || string.IsNullOrWhiteSpace(auth.Password))
                 {
-                    warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses Basic auth but Username or Password is not specified");
+                    warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses basic auth but username or password is not set");
                 }
                 break;
 
             case "apikey":
                 if (string.IsNullOrWhiteSpace(auth.ApiKey))
                 {
-                    warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses ApiKey auth but ApiKey is not specified");
+                    warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses apikey auth but api_key is not set");
                 }
                 break;
 
             case "oauth2clientcredentials":
                 if (string.IsNullOrWhiteSpace(auth.TokenEndpoint))
                 {
-                    warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses OAuth2 auth but TokenEndpoint is not specified");
+                    warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses oauth2 auth but token_endpoint is not set");
                 }
                 if (string.IsNullOrWhiteSpace(auth.ClientId) || string.IsNullOrWhiteSpace(auth.ClientSecret))
                 {
-                    warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' uses OAuth2 auth but ClientId or ClientSecret is not specified");
+                    warnings.Add($"Environment '{envName}': Destination '{endpointName}' uses oauth2 auth but client_id or client_secret is not set");
                 }
                 break;
 
             default:
-                warnings.Add($"Environment '{envName}': API endpoint '{endpointName}' has unsupported Auth Type '{auth.Type}'. Valid types: Bearer, Basic, ApiKey, OAuth2ClientCredentials");
+                warnings.Add($"Environment '{envName}': Destination '{endpointName}' has unsupported auth type '{auth.Type}'. Valid types: bearer, basic, apikey, oauth2");
                 break;
         }
     }

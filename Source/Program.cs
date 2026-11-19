@@ -61,8 +61,6 @@ Console.WriteLine("");
 // Initialize encryption service
 var encryptionService = new EncryptionService(AppContext.BaseDirectory);
 
-// Encrypt config files if plain
-encryptionService.EncryptConfigFiles();
 
 try
 {
@@ -73,6 +71,13 @@ try
 
     // Load global settings from appsettings.json first
     var globalSettings = builder.Configuration.GetSection("ChangeTracking:GlobalSettings").Get<GlobalSettings>() ?? new GlobalSettings();
+
+    // shortcut: JSON environment migration ships in v0.5 only, remove in v0.6.
+    var migration = EnvironmentMigration.MigrateDirectory(Path.Combine(AppContext.BaseDirectory, "environments"), globalSettings,
+        encryptionService.Encrypt, encryptionService.IsEncrypted);
+
+    // Encrypt config files if plain
+    encryptionService.EncryptConfigFiles();
 
     // Determine which environment file(s) to load
     const string envDir = "environments";
@@ -121,24 +126,32 @@ try
     var envConfigService = app.Services.GetRequiredService<EnvironmentConfigService>();
 
     List<EnvironmentConfig> environments = [];
+    var invalid = new List<string>();
 
     if (Directory.Exists(envDir))
     {
-        var jsonFiles = Directory.GetFiles(envDir, "*.json").OrderBy(Path.GetFileName).ToList();
+        var envFiles = Directory.GetFiles(envDir, "*.yaml")
+            // Read-only folder: JSON files load in memory.
+            .Concat(migration.Where(m => m.Value == EnvironmentMigration.Outcome.ReadOnly).Select(m => m.Key))
+            .OrderBy(Path.GetFileName).ToList();
+
+        // A JSON file that could not be migrated is an invalid environment.
+        invalid.AddRange(migration.Where(m => m.Value == EnvironmentMigration.Outcome.Failed)
+            .Select(m => $"{Path.GetFileName(m.Key)}: could not be migrated to YAML; see the error above"));
 
         if (!string.IsNullOrEmpty(selectedEnvironment))
         {
-            var targetFile = jsonFiles.FirstOrDefault(f =>
+            var targetFile = envFiles.FirstOrDefault(f =>
                 Path.GetFileNameWithoutExtension(f).Equals(selectedEnvironment, StringComparison.OrdinalIgnoreCase));
 
             if (targetFile != null)
             {
-                jsonFiles = [targetFile];
+                envFiles = [targetFile];
                 Log.Information($"Loading specific environment: {selectedEnvironment}");
             }
             else
             {
-                Log.Warning($"Environment '{selectedEnvironment}' not found. Available: {string.Join(", ", jsonFiles.Select(Path.GetFileNameWithoutExtension))}");
+                Log.Warning($"Environment '{selectedEnvironment}' not found. Available: {string.Join(", ", envFiles.Select(Path.GetFileNameWithoutExtension))}");
                 Log.Information("Loading all environment files...");
             }
         }
@@ -147,10 +160,17 @@ try
             Log.Debug("No specific environment selected. Loading all environment files...");
         }
 
-        foreach (var file in jsonFiles)
+        // One extension: prod.yaml and prod.yml would both be "prod".
+        invalid.AddRange(Directory.GetFiles(envDir, "*.yml").Select(f => $"{Path.GetFileName(f)}: rename it to {Path.GetFileNameWithoutExtension(f)}.yaml"));
+
+        foreach (var file in envFiles)
         {
-            var envConfig = envConfigService.LoadFile(file);
-            if (envConfig == null) continue;
+            var envConfig = envConfigService.LoadFile(file, out var loadError);
+            if (envConfig == null)
+            {
+                invalid.Add(loadError ?? file);
+                continue;
+            }
 
             environments.Add(envConfig);
             Log.Debug($"Loaded environment: {envConfig.Name} ({envConfig.ChangeTracking.TrackingObjects.Length} objects, {envConfig.ChangeTracking.ApiEndpoints.Length} endpoints)");
@@ -160,6 +180,10 @@ try
     {
         Log.Warning($"Environments directory '{envDir}' does not exist. Please create it and add environment configuration files.");
     }
+
+    // Start validation: an invalid environment file stops startup.
+    if (invalid.Count > 0)
+        throw new InvalidOperationException($"{invalid.Count} environment file(s) are invalid: {string.Join("; ", invalid)}");
 
     if (environments.Count == 0)
     {
@@ -555,7 +579,7 @@ try
             app.MapPost("/ui/api/client-errors", async (HttpContext context) =>
             {
                 if (RejectIfCsrfInvalid(context) is { } rejected) return rejected;
-                if (context.Request.ContentLength is null or > 8192)
+                if (context.Request.ContentLength > 8192)
                     return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
                 lock (clientErrorGate)
@@ -566,12 +590,21 @@ try
                         return Results.StatusCode(StatusCodes.Status429TooManyRequests);
                 }
 
+                // Bounded read: chunked bodies carry no Content-Length.
+                var buffer = new byte[8193];
+                var length = 0;
+                for (int read; length < buffer.Length && (read = await context.Request.Body.ReadAsync(buffer.AsMemory(length), context.RequestAborted)) > 0;)
+                    length += read;
+                if (length > 8192)
+                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
                 JsonElement body;
                 try
                 {
-                    body = await context.Request.ReadFromJsonAsync<JsonElement>(context.RequestAborted);
+                    using var document = JsonDocument.Parse(buffer.AsMemory(0, length));
+                    body = document.RootElement.Clone();
                 }
-                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+                catch (JsonException)
                 {
                     return Results.BadRequest();
                 }

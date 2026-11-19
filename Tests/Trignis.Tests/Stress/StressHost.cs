@@ -13,6 +13,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Trignis.Helpers;
 using Trignis.Models;
 using Trignis.Services;
 
@@ -22,6 +23,7 @@ namespace Trignis.Tests.Stress;
 internal sealed class StressHost : IAsyncDisposable
 {
     private readonly string _originalCwd;
+    private readonly IOptions<GlobalSettings> _settings;
     private readonly CancellationTokenSource _stop = new();
     private Task? _execute;
 
@@ -53,7 +55,7 @@ internal sealed class StressHost : IAsyncDisposable
         SqliteConnection.ClearAllPools();
         File.Delete(Path.Combine(AppContext.BaseDirectory, "sinkhole.db"));
 
-        var settings = Options.Create(new GlobalSettings
+        var settings = _settings = Options.Create(new GlobalSettings
         {
             PollingIntervalSeconds = pollingIntervalSeconds,
             RetryCount = 1,
@@ -94,11 +96,12 @@ internal sealed class StressHost : IAsyncDisposable
         Replayer = new DeadLetterReplayer(deadLetters, exports, ConfigService, Pauses);
     }
 
-    public void WriteEnvJson(string name, string json) => File.WriteAllText(EnvFile(name), json);
+    // Tests describe environments in JSON; the converter writes the YAML file the service reads.
+    public void WriteEnvJson(string name, string json) => File.WriteAllText(EnvFile(name), EnvironmentMigration.FromJson(json, _settings.Value));
 
     public async Task StartAsync()
     {
-        var loaded = Directory.GetFiles(EnvDir, "*.json")
+        var loaded = Directory.GetFiles(EnvDir, "*.yaml")
             .Select(ConfigService.LoadFile)
             .Where(x => x is not null)
             .Select(x => x!)
@@ -145,7 +148,7 @@ internal sealed class StressHost : IAsyncDisposable
     public EnvironmentConfig Config(string name) =>
         ConfigService.Environments.First(x => x.Name == name);
 
-    public string EnvFile(string name) => Path.Combine(EnvDir, $"{name}.json");
+    public string EnvFile(string name) => Path.Combine(EnvDir, $"{name}.yaml");
 
     public void WriteEnv(string name, string connectionString, string? storedProcedure, int pollingIntervalSeconds = 1)
     {
@@ -175,7 +178,7 @@ internal sealed class StressHost : IAsyncDisposable
             }
             """;
 
-        File.WriteAllText(EnvFile(name), json);
+        File.WriteAllText(EnvFile(name), EnvironmentMigration.FromJson(json, _settings.Value));
     }
 
     public async Task StopAsync()

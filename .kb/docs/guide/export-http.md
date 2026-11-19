@@ -5,60 +5,55 @@ description: POST changes to an API, with auth, headers and batching
 
 # Export to HTTP endpoints
 
-Set `ExportToApi` and list the endpoints. Every endpoint receives every change for that environment.
+An HTTP destination has `type: http`. Every destination receives every change for that environment.
 
-```json
-{
-  "ChangeTracking": {
-    "ExportToApi": true,
-    "ApiEndpoints": [
-      {
-        "Key": "PowerAutomate",
-        "Url": "https://your-webhook-url",
-        "Auth": {
-          "Type": "Bearer",
-          "Token": "your-token-here"
-        }
-      }
-    ]
-  }
-}
+```yaml
+destinations:
+  - name: PowerAutomate
+    type: http
+    url: https://your-webhook-url
+    auth:
+      type: bearer
+      token: your-token-here
 ```
 
 The payload is the `Data` array from your stored procedure, POSTed as JSON.
 
-`Key` names the endpoint in logs and dead letters. Make it recognisable.
+`name` identifies the destination in logs and dead letters.
 
 ## Authentication
 
-`Bearer`, `Basic`, `ApiKey` and `OAuth2ClientCredentials` are supported. See [Authentication](/reference/authentication) for each one's fields.
+`bearer`, `basic`, `apikey` and `oauth2` are supported. See [Authentication](/reference/authentication) for each one's fields.
 
 Credentials are encrypted in place the first time Trignis reads the file.
 
 ## Custom headers
 
-```json
-{
-  "Key": "webhook",
-  "Url": "https://api.example.com/changes",
-  "CustomHeaders": {
-    "X-Correlation-Id": "{guid}",
-    "X-Source": "trignis-{database}",
-    "X-Environment": "{environment}"
-  },
-  "EnableCompression": true
-}
+```yaml
+destinations:
+  - name: webhook
+    type: http
+    url: https://api.example.com/changes
+    compression: true
+    headers:
+      X-Correlation-Id: "{guid}"
+      X-Source: "trignis-{database}"
+      X-Environment: "{environment}"
 ```
+
+Header values are encrypted in place on first read.
 
 Placeholders: `{guid}`, `{key}`, `{timestamp}`, `{object}`, `{database}`, `{environment}`, plus `{batch}` and `{totalbatches}` when batching.
 
 The URL accepts the same placeholders, URL-encoded.
 
-`EnableCompression` gzips the body and sets `Content-Encoding: gzip`. Confirm the receiver handles it. Most servers do, but not all.
+`compression: true` gzips the body and sets `Content-Encoding: gzip`. Confirm the receiver handles it. Most servers do, but not all.
 
 ## Batching
 
 A full sync of a large table produces one enormous request. Batching splits it:
+
+In `appsettings.json`:
 
 ```json
 {
@@ -85,4 +80,4 @@ It is not retried, because a retry cannot make the body smaller. Lower `MaxRecor
 
 ## Retries
 
-Failed requests retry per `RetryCount` and `RetryDelaySeconds`. Retries cover transport failures and non-success status codes. After the last attempt the payload becomes a [dead letter](/guide/dead-letters).
+Failed requests retry per `retry.count` and `retry.delay`. Retries cover transport failures and non-success status codes. After the last attempt the payload becomes a [dead letter](/guide/dead-letters).

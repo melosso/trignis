@@ -197,55 +197,54 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
 
 ### The environment
 
-`environments/shop.json`:
+`environments/shop.yaml`:
 
 ::: code-group
-```json [SQL Server icon:database]
-{
-  "ConnectionStrings": {
-    "ShopDb": "Server=localhost;Database=ShopDb;Trusted_Connection=True;TrustServerCertificate=True;"
-  },
-  "ChangeTracking": {
-    "PollingIntervalSeconds": 15,
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
-    "TrackingObjects": [
-      {
-        "Name": "Products",
-        "Database": "ShopDb",
-        "TableName": "dbo.Products",
-        "StoredProcedureName": "dbo.get_productssync",
-        "InitialSyncMode": "Full"
-      }
-    ]
-  }
-}
+```yaml [SQL Server icon:database]
+provider: mssql
+
+databases:
+  ShopDb: "Server=localhost;Database=ShopDb;Trusted_Connection=True;TrustServerCertificate=True;"
+
+polling:
+  interval: 15s
+
+tables:
+  - name: Products
+    database: ShopDb
+    table: dbo.Products
+    procedure: dbo.get_productssync
+    initial_sync: full
+
+destinations:
+  - name: files
+    type: file
+    path: "exports/{environment}/{object}/changes-{timestamp}.json"
 ```
-```json [PostgreSQL icon:postgresql]
-{
-  "Provider": "postgres",
-  "ConnectionStrings": {
-    "ShopDb": "Host=localhost;Database=shopdb;Username=trignis;Password=..."
-  },
-  "ChangeTracking": {
-    "PollingIntervalSeconds": 15,
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
-    "TrackingObjects": [
-      {
-        "Name": "Products",
-        "Database": "ShopDb",
-        "TableName": "public.products",
-        "StoredProcedureName": "public.get_productssync",
-        "InitialSyncMode": "Full"
-      }
-    ]
-  }
-}
+```yaml [PostgreSQL icon:postgresql]
+provider: postgres
+
+databases:
+  ShopDb: "Host=localhost;Database=shopdb;Username=trignis;Password=..."
+
+polling:
+  interval: 15s
+
+tables:
+  - name: Products
+    database: ShopDb
+    table: public.products
+    procedure: public.get_productssync
+    initial_sync: full
+
+destinations:
+  - name: files
+    type: file
+    path: "exports/{environment}/{object}/changes-{timestamp}.json"
 ```
 :::
 
-`InitialSyncMode: "Full"` is reasonable here: a product catalogue is small, and the downstream system probably wants the whole thing before it starts receiving updates.
+`initial_sync: full` is reasonable here: a product catalogue is small, and the downstream system probably wants the whole thing before it starts receiving updates.
 
 ### Try it
 
@@ -391,44 +390,39 @@ That filtered full sync has a consequence: an order older than a year is invisib
 
 ### The environment
 
-`environments/adventureworks.json`:
+`environments/adventureworks.yaml`:
 
-```json
-{
-  "ConnectionStrings": {
-    "AdventureWorks": "Server=sql.example.com;Database=AdventureWorks2026;User Id=trignis;Password=changeme;TrustServerCertificate=True;"
-  },
-  "ChangeTracking": {
-    "PollingIntervalSeconds": 60,
-    "ExportToApi": true,
-    "RetryCount": 5,
-    "RetryDelaySeconds": 10,
-    "TrackingObjects": [
-      {
-        "Name": "SalesOrders",
-        "Database": "AdventureWorks",
-        "TableName": "Sales.SalesOrderHeader",
-        "StoredProcedureName": "Sales.get_salesorderssync",
-        "InitialSyncMode": "Full"
-      }
-    ],
-    "ApiEndpoints": [
-      {
-        "Key": "erp_orders",
-        "Url": "https://erp.example.com/api/orders/changes",
-        "Auth": {
-          "Type": "Bearer",
-          "Token": "replace-me"
-        },
-        "CustomHeaders": {
-          "X-Correlation-Id": "{guid}",
-          "X-Source": "trignis-{environment}"
-        },
-        "EnableCompression": true
-      }
-    ]
-  }
-}
+```yaml
+provider: mssql
+
+databases:
+  AdventureWorks: "Server=sql.example.com;Database=AdventureWorks2026;User Id=trignis;Password=changeme;TrustServerCertificate=True;"
+
+polling:
+  interval: 60s
+
+retry:
+  count: 5
+  delay: 10s
+
+tables:
+  - name: SalesOrders
+    database: AdventureWorks
+    table: Sales.SalesOrderHeader
+    procedure: Sales.get_salesorderssync
+    initial_sync: full
+
+destinations:
+  - name: erp_orders
+    type: http
+    url: "https://erp.example.com/api/orders/changes"
+    compression: true
+    auth:
+      type: bearer
+      token: "replace-me"
+    headers:
+      X-Correlation-Id: "{guid}"
+      X-Source: "trignis-{environment}"
 ```
 
 The password is plaintext only until Trignis first reads the file. It is encrypted in place on startup and the file is rewritten, so what stays on disk is a `PWENC:` value.
@@ -458,14 +452,13 @@ Orders usually need their line items. `Sales.SalesOrderDetail` is a second track
 ALTER TABLE Sales.SalesOrderDetail ENABLE CHANGE TRACKING;
 ```
 
-```json
-{
-  "Name": "SalesOrderLines",
-  "Database": "AdventureWorks",
-  "TableName": "Sales.SalesOrderDetail",
-  "StoredProcedureName": "Sales.get_salesorderlinessync",
-  "InitialSyncMode": "Full"
-}
+```yaml
+tables:
+  - name: SalesOrderLines
+    database: AdventureWorks
+    table: Sales.SalesOrderDetail
+    procedure: Sales.get_salesorderlinessync
+    initial_sync: full
 ```
 
 ::: warning

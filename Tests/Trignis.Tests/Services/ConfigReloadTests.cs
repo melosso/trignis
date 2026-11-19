@@ -28,8 +28,8 @@ public sealed class ConfigReloadTests : IDisposable
     public async Task RevertingARejectedEdit_ClearsTheLoadError()
     {
         var envDir = Directory.CreateDirectory(Path.Combine(_root, "environments")).FullName;
-        var file = Path.Combine(envDir, "prod.json");
-        const string valid = """{"ChangeTracking":{"TrackingObjects":[],"ApiEndpoints":[]}}""";
+        var file = Path.Combine(envDir, "prod.yaml");
+        const string valid = "polling:\n  interval: 30s\n";
         File.WriteAllText(file, valid);
 
         using var service = new EnvironmentConfigService(NullLogger<EnvironmentConfigService>.Instance, new EncryptionService(_root));
@@ -39,7 +39,7 @@ public sealed class ConfigReloadTests : IDisposable
         // First save records the applied hash.
         File.WriteAllText(file, valid + " ");
         await Task.Delay(1500);
-        File.WriteAllText(file, "{ broken");
+        File.WriteAllText(file, "polling:\n  interval: [30\n");
         await WaitFor(() => service.LoadErrors.ContainsKey("prod"));
 
         File.WriteAllText(file, valid + " ");

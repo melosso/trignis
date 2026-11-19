@@ -14,7 +14,7 @@ Trignis splits its configuration across two kinds of file, and knowing which is 
 | File | Holds |
 |---|---|
 | `appsettings.json` | Application-wide: global settings, health, web UI, logging |
-| `environments/*.json` | One per environment: connections, tracked objects, destinations |
+| `environments/*.yaml` | One per environment: databases, tables, destinations |
 
 The split is not arbitrary. Environment files are watched, so saving one reloads that environment within about a second and nothing needs restarting. `appsettings.json` is read once at startup, because the things it controls (which ports to bind, how logging is wired) cannot meaningfully change underneath a running process.
 
@@ -28,7 +28,7 @@ A handful of settings appear in both places, which lets you set a sensible defau
 environment value  →  ChangeTracking:GlobalSettings  →  built-in default
 ```
 
-Six settings can be overridden per environment: `PollingIntervalSeconds`, `ExportToFile`, `FilePath`, `ExportToApi`, `RetryCount` and `RetryDelaySeconds`. Everything else stays global, which keeps the surface small enough to reason about.
+Three settings can be overridden per environment: `polling.interval`, `retry.count` and `retry.delay`. Exports are set per environment by `destinations`; the global `ExportToFile`, `ExportToApi` and `FilePath` apply only to the v0.5 migration of JSON files.
 
 A common shape is a slow polling interval globally with one busy environment turned up, rather than repeating the same value in every file.
 

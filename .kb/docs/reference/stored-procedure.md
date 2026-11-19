@@ -22,7 +22,7 @@ One JSON parameter:
 | `fromVersion` | Last version Trignis processed, or `0` on a first run or after a reset |
 | `mode` | `sync` normally, `seed` when Trignis is establishing a starting point |
 
-`mode` is `seed` only on the very first cycle of an object set to `InitialSyncMode: Incremental`, on providers where Trignis cannot read a watermark from the server. It means **report your current version and return no rows**. Trignis discards any rows returned during a seed and logs a warning, so a procedure that ignores `mode` degrades to "skips the first batch" rather than flooding every destination with history.
+`mode` is `seed` only on the very first cycle of an object set to `initial_sync: incremental`, on providers where Trignis cannot read a watermark from the server. It means **report your current version and return no rows**. Trignis discards any rows returned during a seed and logs a warning, so a procedure that ignores `mode` degrades to "skips the first batch" rather than flooding every destination with history.
 
 On SQL Server `mode` is always `sync`, because the server reports the watermark itself. Procedures written before `mode` existed keep working untouched.
 
@@ -289,23 +289,18 @@ $$ LANGUAGE plpgsql;
 
 Point an environment at it:
 
-```json
-{
-  "Provider": "postgres",
-  "ConnectionStrings": {
-    "PrimaryDatabase": "Host=pg.example.com;Database=primary;Username=trignis;Password=..."
-  },
-  "ChangeTracking": {
-    "TrackingObjects": [
-      {
-        "Name": "Items",
-        "Database": "PrimaryDatabase",
-        "TableName": "public.items",
-        "StoredProcedureName": "get_item_changes"
-      }
-    ]
-  }
-}
+```yaml
+provider: postgres
+
+databases:
+  PrimaryDatabase: "Host=pg.example.com;Database=primary;Username=trignis;Password=..."
+
+tables:
+  - name: Items
+    database: PrimaryDatabase
+    table: public.items
+    procedure: get_item_changes
+    initial_sync: incremental
 ```
 
 ### Column-level tracking
@@ -350,7 +345,7 @@ ALTER FUNCTION get_item_changes(json) SET search_path = public, pg_temp;
 
 **Malformed JSON.** Parse failures are logged with the payload length and its first and last 200 characters. At `Debug` level the full response is written to `debug/` for inspection.
 
-**Nothing exported.** With `InitialSyncMode: Incremental`, the first run records the current version and exports nothing. That is intended. Use `Full`, or change a row and wait for the next cycle.
+**Nothing exported.** With `initial_sync: incremental`, the first run records the current version and exports nothing. That is intended. Use `Full`, or change a row and wait for the next cycle.
 
 **"returned rows during an incremental seed; discarding them".** The procedure ignored `mode: "seed"`. Return no rows in that case, or set `InitialSyncMode` to `Full` if you did want the history.
 

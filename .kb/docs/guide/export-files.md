@@ -7,14 +7,14 @@ description: Write changes to disk as JSON
 
 The simplest destination, and the easiest to debug. You can open the output.
 
-```json
-{
-  "ChangeTracking": {
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/{database}/changes-{timestamp}.json"
-  }
-}
+```yaml
+destinations:
+  - name: archive
+    type: file
+    path: "exports/{environment}/{object}/{database}/changes-{timestamp}.json"
 ```
+
+One enabled file destination is supported per environment.
 
 Each export cycle that finds changes writes one file.
 
@@ -23,8 +23,8 @@ Each export cycle that finds changes writes one file.
 | Placeholder | Replaced with |
 |---|---|
 | `{timestamp}` | UTC time, `yyyyMMddHHmmss` |
-| `{object}` | Tracking object name |
-| `{database}` | Connection string key |
+| `{object}` | Table name |
+| `{database}` | Database name |
 | `{environment}` | Environment name |
 
 If the file name exists: Trignis appends `-1`, `-2` before the extension. The application temporarily writes each file to `.trignis-tmp/` before moving it to the destination.
@@ -33,7 +33,7 @@ Directories are created as needed.
 
 ## Keeping the directory in check
 
-`FilePathSizeLimit` (MB, default 500) caps the export directory. Once over, oldest files are deleted until it fits.
+`FilePathSizeLimit` in `appsettings.json` (MB, default 500) caps the export directory. Once over, oldest files are deleted until it fits.
 
 ```json
 {
@@ -45,23 +45,24 @@ Directories are created as needed.
 }
 ```
 
-The limit applies to the fixed part of your `FilePath`: the text before the first placeholder. With `exports/{environment}/...` that is `exports/`.
+The limit applies to the fixed part of `path`: the text before the first placeholder. With `exports/{environment}/...` that is `exports/`.
 
 ::: warning
-If `FilePath` has no directory before the first placeholder (`"{object}-{timestamp}.json"`), cleanup is skipped entirely rather than sweeping the working directory. Keep a directory prefix if you want the limit enforced.
+If `path` has no directory before the first placeholder (`"{object}-{timestamp}.json"`), cleanup is skipped entirely rather than sweeping the working directory. Keep a directory prefix if you want the limit enforced.
 :::
 
 ## Combining destinations
 
 File export is independent of the others. Both of these run in the same cycle:
 
-```json
-{
-  "ChangeTracking": {
-    "ExportToFile": true,
-    "ExportToApi": true
-  }
-}
+```yaml
+destinations:
+  - name: archive
+    type: file
+    path: "exports/{object}/changes-{timestamp}.json"
+  - name: webhook
+    type: http
+    url: https://api.example.com/changes
 ```
 
 Each destination is attempted separately. One failing does not stop the others. The failure becomes a [dead letter](/guide/dead-letters) on its own.

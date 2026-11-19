@@ -57,7 +57,7 @@ public static class ConfigurationLogger
             var totalObjects = env.ChangeTracking.TrackingObjects.Length;
             var totalEndpoints = env.ChangeTracking.ApiEndpoints.Length;
 
-            Log.Information($"│  {envPrefix} Environment: [{env.Name}] ({totalObjects} objects, {totalEndpoints} endpoints)");
+            Log.Information($"│  {envPrefix} Environment: [{env.Name}] ({totalObjects} tables, {totalEndpoints} destinations)");
 
             // Environment-specific settings
             var pollingInterval = env.ChangeTracking.PollingIntervalSeconds ?? globalSettings.PollingIntervalSeconds;
@@ -71,7 +71,7 @@ public static class ConfigurationLogger
 
             // Connection Strings
             Log.Information($"│  {envVertical}  ├─ Provider: {(SqlDialect.TryParse(env.Provider, out var dialect) ? dialect.Name : $"{env.Provider} (unknown)")}");
-            Log.Information($"│  {envVertical}  ├─ Connection Strings: {env.ConnectionStrings.Count}");
+            Log.Information($"│  {envVertical}  ├─ Databases: {env.ConnectionStrings.Count}");
             var connIndex = 0;
             foreach (var conn in env.ConnectionStrings)
             {
@@ -91,7 +91,7 @@ public static class ConfigurationLogger
             }
 
             // Tracking Objects
-            Log.Information($"│  {envVertical}  ├─ Tracking Objects: {totalObjects}");
+            Log.Information($"│  {envVertical}  ├─ Tables: {totalObjects}");
             for (int i = 0; i < env.ChangeTracking.TrackingObjects.Length; i++)
             {
                 var obj = env.ChangeTracking.TrackingObjects[i];
@@ -110,7 +110,7 @@ public static class ConfigurationLogger
             }
 
             // API Endpoints
-            Log.Information($"│  {envVertical}  └─ API Endpoints: {totalEndpoints}");
+            Log.Information($"│  {envVertical}  └─ Destinations: {totalEndpoints}");
             for (int i = 0; i < env.ChangeTracking.ApiEndpoints.Length; i++)
             {
                 var endpoint = env.ChangeTracking.ApiEndpoints[i];
@@ -118,7 +118,7 @@ public static class ConfigurationLogger
                 var epPrefix = isLastEndpoint ? "└─" : "├─";
                 var epVertical = isLastEndpoint ? " " : "│";
 
-                Log.Information($"│  {envVertical}     {epPrefix} Endpoint '{endpoint.Key ?? $"#{i + 1}"}'");
+                Log.Information($"│  {envVertical}     {epPrefix} Destination '{endpoint.Key ?? $"#{i + 1}"}'");
 
                 // Message Queue endpoint
                 if (!string.IsNullOrEmpty(endpoint.MessageQueueType))

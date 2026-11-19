@@ -141,52 +141,48 @@ Full contract, including column-level tracking, is in the [reference](/reference
 
 ## 2. Describe the environment
 
-Create `environments/production.json`:
+Create `environments/production.yaml`:
 
 ::: code-group
-```json [SQL Server icon:database]
-{
-  "Provider": "mssql",
-  "ConnectionStrings": {
-    "PrimaryDatabase": "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;"
-  },
-  "ChangeTracking": {
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
-    "TrackingObjects": [
-      {
-        "Name": "Items",
-        "Database": "PrimaryDatabase",
-        "TableName": "dbo.Items",
-        "StoredProcedureName": "web.get_itemssync"
-      }
-    ]
-  }
-}
+```yaml [SQL Server icon:database]
+provider: mssql
+
+databases:
+  PrimaryDatabase: "Server=prod-sql.company.com;Database=PrimaryDB;Trusted_Connection=True;"
+
+tables:
+  - name: Items
+    database: PrimaryDatabase
+    table: dbo.Items
+    procedure: web.get_itemssync
+    initial_sync: incremental
+
+destinations:
+  - name: files
+    type: file
+    path: "exports/{environment}/{object}/changes-{timestamp}.json"
 ```
-```json [PostgreSQL icon:postgresql]
-{
-  "Provider": "postgres",
-  "ConnectionStrings": {
-    "PrimaryDatabase": "Host=prod-pg.company.com;Database=primarydb;Username=trignis;Password=..."
-  },
-  "ChangeTracking": {
-    "ExportToFile": true,
-    "FilePath": "exports/{environment}/{object}/changes-{timestamp}.json",
-    "TrackingObjects": [
-      {
-        "Name": "Items",
-        "Database": "PrimaryDatabase",
-        "TableName": "public.items",
-        "StoredProcedureName": "web.get_itemssync"
-      }
-    ]
-  }
-}
+```yaml [PostgreSQL icon:postgresql]
+provider: postgres
+
+databases:
+  PrimaryDatabase: "Host=prod-pg.company.com;Database=primarydb;Username=trignis;Password=..."
+
+tables:
+  - name: Items
+    database: PrimaryDatabase
+    table: public.items
+    procedure: web.get_itemssync
+    initial_sync: incremental
+
+destinations:
+  - name: files
+    type: file
+    path: "exports/{environment}/{object}/changes-{timestamp}.json"
 ```
 :::
 
-The filename becomes the environment name. `Database` refers to a key in `ConnectionStrings`, not a server-side database name.
+The filename becomes the environment name. `database` refers to a name under `databases`, not a server-side database name.
 
 ## 3. Start it
 
@@ -199,10 +195,10 @@ Trignis picks the file up without a restart, because it watches the folder. On s
 
 ## 4. Watch the first cycle
 
-The first run has no stored version, so behaviour depends on `InitialSyncMode`:
+The first run has no stored version, so behaviour depends on `initial_sync`:
 
-- **`Incremental`** (default): records the current version and exports nothing. Only future changes are sent.
-- **`Full`**: exports every row first, then continues incrementally.
+- **`incremental`** (default): records the current version and exports nothing. Only future changes are sent.
+- **`full`**: exports every row first, then continues incrementally.
 
 Default is deliberate: pointing Trignis at a large table should not immediately dump the whole thing downstream.
 
