@@ -250,7 +250,10 @@ public class ConnectionHealthCheckService : BackgroundService
         ServiceBusClient? client = null;
         try
         {
-            client = new ServiceBusClient(config.ConnectionString);
+            client = new ServiceBusClient(config.ConnectionString, new ServiceBusClientOptions
+            {
+                RetryOptions = new ServiceBusRetryOptions { MaxRetries = 0, TryTimeout = ProbeTimeout }
+            });
 
             // Try to create a sender to verify connection
             ServiceBusSender? sender = null;
@@ -269,7 +272,8 @@ public class ConnectionHealthCheckService : BackgroundService
                     return false;
                 }
 
-                // Just creating the sender verifies the connection is valid
+                // Opens the link; CreateSender alone is lazy.
+                using var batch = await sender.CreateMessageBatchAsync();
                 return true;
             }
             finally
