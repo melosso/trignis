@@ -918,11 +918,7 @@ try
                     kvp => new
                     {
                         is_healthy = kvp.Value.IsHealthy,
-                        last_error = kvp.Value.IsHealthy
-                            ? null
-                            : kvp.Value.ConsecutiveFailures > 0
-                                ? $"{kvp.Value.ConsecutiveFailures} consecutive failure(s)"
-                                : "Unhealthy"
+                        last_error = kvp.Value.IsHealthy ? null : $"{kvp.Value.ConsecutiveFailures} consecutive failure(s)"
                     });
                 return Results.Json(result);
             });

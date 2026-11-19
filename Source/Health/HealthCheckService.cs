@@ -45,7 +45,7 @@ public class HealthCheckService
         _exports = exports;
         _startTime = DateTime.UtcNow;
         _version = (typeof(HealthCheckService).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0").Split('+')[0];
-        _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 10);
+        _cacheDurationSeconds = _config.GetValue<int>("Health:CacheDurationSeconds", 120);
     }
 
     public async Task<string> GetHealthStatusAsync(CancellationToken cancellationToken = default)
