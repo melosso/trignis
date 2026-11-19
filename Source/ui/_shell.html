@@ -7,6 +7,15 @@
   <link href="/css/fonts.css" rel="stylesheet" />
   <link href="/css/site.css" rel="stylesheet" />
   <script src="/js/theme.js"></script>
+  <script>
+  // Expired session: API calls return 401.
+  const fetchOnce = window.fetch;
+  window.fetch = async (...args) => {
+    const res = await fetchOnce(...args);
+    if (res.status === 401) window.location.href = '/ui/login';
+    return res;
+  };
+  </script>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
 </head>
 <body>

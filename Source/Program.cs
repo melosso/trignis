@@ -284,7 +284,11 @@ try
             if (!context.Request.Cookies.TryGetValue(AuthCookieName, out var cookie) ||
                 !ValidateAuthToken(cookie))
             {
-                context.Response.Redirect("/ui/login");
+                // Fetch callers need a status, not a login page.
+                if (path.StartsWithSegments("/ui/api"))
+                    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                else
+                    context.Response.Redirect("/ui/login");
                 return;
             }
             await next();
