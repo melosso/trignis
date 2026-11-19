@@ -27,6 +27,8 @@ Each export cycle that finds changes writes one file.
 | `{database}` | Connection string key |
 | `{environment}` | Environment name |
 
+If the file name exists: Trignis appends `-1`, `-2` before the extension. Files are written to a `.tmp` file first and renamed when complete.
+
 Directories are created as needed.
 
 ## Keeping the directory in check

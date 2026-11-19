@@ -212,7 +212,7 @@ public sealed class ExportService
         }
 
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(filePath, json);
+        filePath = await WriteNewFileAsync(filePath, json);
 
         // Don't log here - caller logs with proper context
 
@@ -374,12 +374,41 @@ public sealed class ExportService
         // Don't log here - caller logs with proper context
     }
 
+    /// <summary>Writes atomically; suffixes -1, -2 when the name is taken.</summary>
+    internal static async Task<string> WriteNewFileAsync(string filePath, string content)
+    {
+        var temp = $"{filePath}.{Guid.NewGuid():N}.tmp";
+        await File.WriteAllTextAsync(temp, content);
+
+        var directory = Path.GetDirectoryName(filePath) ?? "";
+        var name = Path.GetFileNameWithoutExtension(filePath);
+        var extension = Path.GetExtension(filePath);
+        for (var attempt = 0; ; attempt++)
+        {
+            var target = attempt == 0 ? filePath : Path.Combine(directory, $"{name}-{attempt}{extension}");
+            try
+            {
+                File.Move(temp, target, overwrite: false);
+                return target;
+            }
+            catch (IOException) when (File.Exists(target) && attempt < 100)
+            {
+            }
+            catch
+            {
+                File.Delete(temp);
+                throw;
+            }
+        }
+    }
+
     private void CleanupOldFiles(string basePath, long maxSizeBytes)
     {
         if (!Directory.Exists(basePath))
             return;
 
         var allFiles = Directory.EnumerateFiles(basePath, "*", SearchOption.AllDirectories)
+            .Where(f => !f.EndsWith(".tmp", StringComparison.Ordinal)) // In-flight writes.
             .Select(f => new FileInfo(f))
             .OrderBy(f => f.CreationTime)
             .ToList();
