@@ -212,11 +212,11 @@ public sealed class ExportService
         }
 
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-        filePath = await WriteNewFileAsync(filePath, json);
+        var exportRoot = ExportRoot(filePathTemplate);
+        filePath = await WriteNewFileAsync(filePath, json, Path.Combine(exportRoot ?? directory ?? ".", TempDirName));
 
         // Don't log here - caller logs with proper context
 
-        var exportRoot = ExportRoot(filePathTemplate);
         if (exportRoot != null)
             CleanupOldFiles(exportRoot, _maxExportDirectorySizeBytes);
 
@@ -374,10 +374,18 @@ public sealed class ExportService
         // Don't log here - caller logs with proper context
     }
 
+    /// <summary>Unfinished exports; outside the folders consumers watch.</summary>
+    internal const string TempDirName = ".trignis-tmp";
+
     /// <summary>Writes atomically; suffixes -1, -2 when the name is taken.</summary>
-    internal static async Task<string> WriteNewFileAsync(string filePath, string content)
+    internal static async Task<string> WriteNewFileAsync(string filePath, string content, string tempDir)
     {
-        var temp = $"{filePath}.{Guid.NewGuid():N}.tmp";
+        // Same volume as the export root: the rename is atomic.
+        var tempInfo = Directory.CreateDirectory(tempDir);
+        // The dot prefix hides it elsewhere.
+        if (OperatingSystem.IsWindows() && !tempInfo.Attributes.HasFlag(FileAttributes.Hidden))
+            tempInfo.Attributes |= FileAttributes.Hidden;
+        var temp = Path.Combine(tempDir, $"{Guid.NewGuid():N}.tmp");
         await File.WriteAllTextAsync(temp, content);
 
         var directory = Path.GetDirectoryName(filePath) ?? "";
@@ -408,7 +416,7 @@ public sealed class ExportService
             return;
 
         var allFiles = Directory.EnumerateFiles(basePath, "*", SearchOption.AllDirectories)
-            .Where(f => !f.EndsWith(".tmp", StringComparison.Ordinal)) // In-flight writes.
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}{TempDirName}{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Select(f => new FileInfo(f))
             .OrderBy(f => f.CreationTime)
             .ToList();
