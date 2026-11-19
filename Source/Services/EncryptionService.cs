@@ -4,8 +4,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Linq;
 using Serilog;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Trignis.Helpers;
 
 namespace Trignis.Services
@@ -18,13 +16,14 @@ namespace Trignis.Services
         private readonly string _projectRoot;
         private string _currentPublicKeyPem = string.Empty;
 
-        // Fallback key - only used if no environment variable is set
-        private const string _fallbackKey = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
+        // Public in this repository: it protects nothing. Kept so installs that never set a key can still read their private key and move to a real one.
+        internal const string FallbackKey = "$XTSI5gTEf1wq3G2uOdWTsFUrgZ6mkCBGrdr0fsRTegXwis68HxGEoCsIBpgbPl5swwY9BQ0qiXG6CaeEPJzp3SPyGebl0ZyHL3jLACKIuSw7G1ufAZ5XATtetKatH0sr#";
 
         private readonly string _encryptionKey;
 
         /// <param name="corePath">Key folder. Null: <c>.core</c> in the project root found from <paramref name="rootPath"/>.</param>
-        public EncryptionService(string rootPath, string? corePath = null)
+        /// <param name="encryptionKey">Null: <c>TRIGNIS_ENCRYPTION_KEY</c>, else the fallback key.</param>
+        public EncryptionService(string rootPath, string? corePath = null, string? encryptionKey = null)
         {
             _projectRoot = FindProjectRoot(rootPath);
             _certsPath = corePath ?? Path.Combine(_projectRoot, ".core");
@@ -39,7 +38,7 @@ namespace Trignis.Services
             }
 
             // Load encryption key from environment variable or .env file
-            _encryptionKey = LoadEncryptionKey();
+            _encryptionKey = encryptionKey ?? LoadEncryptionKey();
 
             InitializeKeyPair();
         }
@@ -48,6 +47,8 @@ namespace Trignis.Services
         {
             // Process env includes machine variables.
             var envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY");
+            if (envKey == "YourEncryptionKeyHere")
+                Log.Error("TRIGNIS_ENCRYPTION_KEY is the placeholder from the example compose file. Anyone with that file can read your private key; set a random key");
             if (!string.IsNullOrWhiteSpace(envKey))
             {
                 Log.Debug("Using encryption key from process environment variable");
@@ -57,10 +58,10 @@ namespace Trignis.Services
             // .env is not read here. Program.cs loads it into the process environment first
 
             // Fallback key, with a warning.
-            Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +
-                        "For production, set TRIGNIS_ENCRYPTION_KEY environment variable or create .env file.");
+            Log.Error("No TRIGNIS_ENCRYPTION_KEY set. The fallback key is public, so the private key in .core is effectively unprotected. " +
+                      "Set TRIGNIS_ENCRYPTION_KEY in the environment or .env; the private key is re-encrypted with it on the next start. Version 1.0 refuses to start without it.");
 
-            return _fallbackKey;
+            return FallbackKey;
         }
 
         private static string FindProjectRoot(string startPath)
@@ -92,7 +93,7 @@ namespace Trignis.Services
                 using var rsa = RSA.Create(2048);
                 var privateKeyPem = ExportPrivateKeyPem(rsa);
 
-                File.WriteAllText(privateKeyPath, EncryptPrivateKey(privateKeyPem));
+                File.WriteAllText(privateKeyPath, EncryptPrivateKey(privateKeyPem, _encryptionKey));
                 Log.Debug("Private key saved to: {PrivateKeyPath}", privateKeyPath);
 
                 _currentPublicKeyPem = ExportPublicKeyPem(rsa);
@@ -103,8 +104,7 @@ namespace Trignis.Services
                 // Private key exists, derive public key from it
                 try
                 {
-                    var encrypted = File.ReadAllText(privateKeyPath);
-                    var privateKeyPem = DecryptPrivateKey(encrypted);
+                    var privateKeyPem = DecryptOrRekey(privateKeyPath);
                     using var rsa = RSA.Create();
                     rsa.ImportFromPem(privateKeyPem);
                     _currentPublicKeyPem = ExportPublicKeyPem(rsa);
@@ -135,7 +135,7 @@ namespace Trignis.Services
             }
 
             var encrypted = File.ReadAllText(privateKeyPath);
-            var privateKey = DecryptPrivateKey(encrypted);
+            var privateKey = DecryptPrivateKey(encrypted, _encryptionKey);
             return Decrypt(encryptedContent, privateKey);
         }
 
@@ -225,10 +225,35 @@ namespace Trignis.Services
             return builder.ToString();
         }
 
-        private string EncryptPrivateKey(string pem)
+        /// <summary>
+        /// Reads the private key. A file written under the fallback key is re-encrypted with the configured key, so setting TRIGNIS_ENCRYPTION_KEY needs no reset of .core.
+        /// </summary>
+        private string DecryptOrRekey(string privateKeyPath)
+        {
+            var encrypted = File.ReadAllText(privateKeyPath);
+            try
+            {
+                return Pem(DecryptPrivateKey(encrypted, _encryptionKey));
+            }
+            catch (Exception) when (_encryptionKey != FallbackKey)
+            {
+                // Throws as well when neither key fits; the caller reports that
+                var pem = Pem(DecryptPrivateKey(encrypted, FallbackKey));
+                File.WriteAllText(privateKeyPath, EncryptPrivateKey(pem, _encryptionKey));
+                Log.Warning("The private key was stored under the fallback key; re-encrypted it with TRIGNIS_ENCRYPTION_KEY");
+                return pem;
+            }
+        }
+
+        // AES-CBC has no integrity check: a wrong key can pass the padding check and return noise
+        private static string Pem(string text) => text.StartsWith("-----BEGIN", StringComparison.Ordinal)
+            ? text
+            : throw new CryptographicException("Decrypted private key is not PEM");
+
+        private static string EncryptPrivateKey(string pem, string key)
         {
             using var aes = Aes.Create();
-            aes.Key = Encoding.UTF8.GetBytes(_encryptionKey.PadRight(32).Substring(0, 32));
+            aes.Key = Encoding.UTF8.GetBytes(key.PadRight(32).Substring(0, 32));
             aes.GenerateIV();
             var iv = aes.IV;
             using var ms = new MemoryStream();
@@ -240,14 +265,14 @@ namespace Trignis.Services
             return Convert.ToBase64String(ms.ToArray());
         }
 
-        private string DecryptPrivateKey(string encrypted)
+        private static string DecryptPrivateKey(string encrypted, string key)
         {
             var bytes = Convert.FromBase64String(encrypted);
             using var ms = new MemoryStream(bytes);
             var iv = new byte[16];
             ms.Read(iv, 0, 16);
             using var aes = Aes.Create();
-            aes.Key = Encoding.UTF8.GetBytes(_encryptionKey.PadRight(32).Substring(0, 32));
+            aes.Key = Encoding.UTF8.GetBytes(key.PadRight(32).Substring(0, 32));
             aes.IV = iv;
             using var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read);
             using var sr = new StreamReader(cs);
