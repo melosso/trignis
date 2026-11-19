@@ -976,6 +976,10 @@ try
                 return Results.Content(health, "application/json");
             });
 
+            app.MapGet("/metrics", async (EnvironmentConfigService environments, PauseService pauses, ExportService exports, System.Threading.CancellationToken ct) =>
+                Results.Text(await Trignis.Health.Metrics.RenderAsync(DataPaths.State(builder.Configuration), DataPaths.Sinkhole(builder.Configuration),
+                    environments, pauses, exports, ct), "text/plain; version=0.0.4"));
+
             app.MapGet("/health/deadletters", async (DeadLetterQueueMonitor dlqMonitor) =>
             {
                 var stats = await dlqMonitor.GetStatsAsync();

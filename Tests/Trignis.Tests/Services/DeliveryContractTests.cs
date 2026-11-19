@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json;
+using Trignis.Health;
 using Trignis.Services;
 using Xunit;
 
@@ -24,4 +26,18 @@ public sealed class DeliveryContractTests
         // Reference value from Python: hmac.new(b"secret", b'1700000000.[{"a":1}]', hashlib.sha256).hexdigest()
         Assert.Equal("t=1700000000,v1=516856209dea79008d72e48f00c1c767cd294a440ae742a16140cd7375ced090",
             ExportService.Signature("secret", 1700000000, """[{"a":1}]"""));
+
+    [Fact]
+    public void Metrics_WriteEscapedLabels_InPrometheusTextFormat()
+    {
+        var text = new StringBuilder();
+        Metrics.Write(text, "trignis_dead_letters", "gauge", "Help.", [new("prod", "say \"hi\"\\", "HTTP:x", 2.5)]);
+
+        Assert.Equal("""
+            # HELP trignis_dead_letters Help.
+            # TYPE trignis_dead_letters gauge
+            trignis_dead_letters{environment="prod",table="say \"hi\"\\",destination="HTTP:x"} 2.5
+
+            """.Replace("\r\n", "\n"), text.ToString());
+    }
 }

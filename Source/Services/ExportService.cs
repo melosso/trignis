@@ -53,6 +53,19 @@ public sealed class ExportService
 
     private readonly ConcurrentDictionary<string, DateTime> _failingHttpEndpoints = new();
 
+    /// <summary>Key of the export counters served on <c>/metrics</c>: environment, table, destination.</summary>
+    public readonly record struct ExportKey(string Environment, string Table, string Destination);
+
+    // In memory: reset on restart, which Prometheus counters allow
+    private readonly ConcurrentDictionary<ExportKey, long> _rowsExported = new();
+    private readonly ConcurrentDictionary<ExportKey, long> _exportFailures = new();
+
+    public IReadOnlyDictionary<ExportKey, long> RowsExported => _rowsExported;
+    public IReadOnlyDictionary<ExportKey, long> ExportFailures => _exportFailures;
+
+    private static void Count(ConcurrentDictionary<ExportKey, long> counter, EnvironmentConfig environment, TrackingObject trackingObject, string target, long n) =>
+        counter.AddOrUpdate(new ExportKey(environment.Name, trackingObject.Name, target), n, (_, total) => total + n);
+
     /// <summary>Health key for an HTTP endpoint.</summary>
     public static string HttpHealthKey(EnvironmentConfig environment, ApiEndpoint endpoint) =>
         $"http:{environment.Name}/{endpoint.Key ?? "unnamed"}";
@@ -95,6 +108,7 @@ public sealed class ExportService
         var apiEndpoints = EnabledEndpoints(environment).Where(e => Wanted(TargetName(e))).ToArray();
         var totalExports = (exportToFile ? 1 : 0) + apiEndpoints.Length;
         var currentExportIndex = 0;
+        var rows = data.ValueKind == JsonValueKind.Array ? data.GetArrayLength() : 1;
 
         // Same payload, same id: a replay sends the stored payload again, so receivers can drop the duplicate
         var payloadHash = DeadLetterService.PayloadHash(JsonSerializer.Serialize(data));
@@ -110,6 +124,7 @@ public sealed class ExportService
                 var filePath = await retryPolicy.ExecuteAsync(
                     async _ => await ExportToFileAsync(environment, trackingObject, data), stoppingToken);
                 _logger.LogInformation($"[{environment.Name}]  {prefix} [FILE] Exported to: {filePath}");
+                Count(_rowsExported, environment, trackingObject, FileTarget, rows);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -120,6 +135,7 @@ public sealed class ExportService
             {
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [FILE] Export FAILED: {ex.Message}");
                 failures.Add(new ExportFailure(FileTarget, ex));
+                Count(_exportFailures, environment, trackingObject, FileTarget, 1);
             }
         }
 
@@ -179,6 +195,7 @@ public sealed class ExportService
                     _failingHttpEndpoints.TryRemove(HttpHealthKey(environment, endpoint), out _);
                     _logger.LogInformation($"[{environment.Name}]  {prefix} [HTTP] Exported to endpoint '{endpoint.Key ?? "unnamed"}': {endpoint.Url}");
                 }
+                Count(_rowsExported, environment, trackingObject, TargetName(endpoint), rows);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -192,6 +209,7 @@ public sealed class ExportService
                     _failingHttpEndpoints[HttpHealthKey(environment, endpoint)] = DateTime.UtcNow;
                 _logger.LogError(ex, $"[{environment.Name}]  {prefix} [{exportType}] Export FAILED: {ex.Message}");
                 failures.Add(new ExportFailure(TargetName(endpoint), ex));
+                Count(_exportFailures, environment, trackingObject, TargetName(endpoint), 1);
             }
         }
 
