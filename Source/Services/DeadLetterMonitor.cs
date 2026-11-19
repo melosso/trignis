@@ -33,7 +33,7 @@ public class DeadLetterQueueMonitor : BackgroundService
     {
         _logger = logger;
         _deadLetterService = deadLetterService;
-        _sinkholeConnectionString = "Data Source=sinkhole.db";
+        _sinkholeConnectionString = deadLetterService.SinkholeConnectionString;
 
         var settings = globalSettings.Value;
         _thresholdCount = settings.DeadLetterThreshold;

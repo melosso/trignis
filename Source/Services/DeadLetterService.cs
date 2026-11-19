@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -8,8 +7,10 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Trignis.Helpers;
 using Trignis.Models;
 
 namespace Trignis.Services;
@@ -18,14 +19,18 @@ public class DeadLetterService
 {
     private readonly ILogger<DeadLetterService> _logger;
     private readonly string _sinkholeConnectionString;
+
+    /// <summary>Connection string of sinkhole.db, for readers outside this service.</summary>
+    public string SinkholeConnectionString => _sinkholeConnectionString;
     private readonly int _retentionDays;
 
     public DeadLetterService(
         ILogger<DeadLetterService> logger,
-        IOptions<GlobalSettings> globalSettings)
+        IOptions<GlobalSettings> globalSettings,
+        IConfiguration? config = null)
     {
         _logger = logger;
-        _sinkholeConnectionString = "Data Source=sinkhole.db";
+        _sinkholeConnectionString = $"Data Source={(config is null ? "sinkhole.db" : DataPaths.Sinkhole(config))}";
         _retentionDays = globalSettings.Value.DeadletterRetentionDays;
     }
 

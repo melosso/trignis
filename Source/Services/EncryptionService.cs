@@ -15,6 +15,7 @@ namespace Trignis.Services
         private const string EncryptedHeader = "PWENC:";
         private const string PrivateKeyFileName = "recovery.baklz4";
         private readonly string _certsPath;
+        private readonly string _projectRoot;
         private string _currentPublicKeyPem = string.Empty;
 
         // Fallback key - only used if no environment variable is set
@@ -22,11 +23,11 @@ namespace Trignis.Services
 
         private readonly string _encryptionKey;
 
-        public EncryptionService(string rootPath)
+        /// <param name="corePath">Key folder. Null: <c>.core</c> in the project root found from <paramref name="rootPath"/>.</param>
+        public EncryptionService(string rootPath, string? corePath = null)
         {
-            // Find the project root by searching upwards for Trignis.csproj
-            var projectRoot = FindProjectRoot(rootPath);
-            _certsPath = Path.Combine(projectRoot, ".core");
+            _projectRoot = FindProjectRoot(rootPath);
+            _certsPath = corePath ?? Path.Combine(_projectRoot, ".core");
             Directory.CreateDirectory(_certsPath);
             if (OperatingSystem.IsWindows())
             {
@@ -255,7 +256,7 @@ namespace Trignis.Services
 
         public void EncryptConfigFiles()
         {
-            var envDir = Path.Combine(Path.GetDirectoryName(_certsPath)!, "environments");
+            var envDir = Path.Combine(_projectRoot, "environments");
             if (!Directory.Exists(envDir))
                 return;
 

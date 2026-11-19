@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using Trignis.Helpers;
 using Microsoft.Extensions.Configuration;
 
 namespace Trignis.Services;
@@ -16,8 +17,7 @@ public sealed class PauseService
 
     public PauseService(IConfiguration config)
     {
-        var stateDbPath = config.GetValue<string>("ChangeTracking:StateDbPath", "state.db");
-        _stateConnectionString = $"Data Source={stateDbPath}";
+        _stateConnectionString = $"Data Source={DataPaths.State(config)}";
     }
 
     /// <summary>Holds every object in the environment, including ones added while it is paused.</summary>

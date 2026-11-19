@@ -30,11 +30,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 	&& rm -rf /var/lib/apt/lists/*
 
 # Create directories used by the application
-RUN mkdir -p /app/environments /app/log /app/exports
+RUN mkdir -p /app/environments /app/log /app/exports /app/data
 
 # Set environment variables
-ENV ASPNETCORE_URLS=http://+:80
 ENV ASPNETCORE_ENVIRONMENT=Production
+
+# state.db, sinkhole.db and .core files will be stored in /app/data
+ENV ChangeTracking__DataPath=/app/data
 
 # Copy published output
 COPY --from=build /app/publish .
@@ -48,9 +50,10 @@ RUN chmod -R 755 /app
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:80/health || exit 1
+  CMD curl -f http://localhost:2455/health || exit 1
 
-EXPOSE 80
+# Health:Port; the app binds it itself, so ASPNETCORE_URLS would be ignored
+EXPOSE 2455
 
 ENTRYPOINT ["dotnet", "Trignis.dll"]
 
