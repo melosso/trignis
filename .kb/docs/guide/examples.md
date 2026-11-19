@@ -14,7 +14,7 @@ Both follow the same four steps: create or pick a table, enable change tracking,
 ### The table
 
 ::: code-group
-```sql [SQL Server]
+```sql [SQL Server icon:database]
 CREATE TABLE dbo.Products
 (
     ProductId     INT             NOT NULL IDENTITY(1,1),
@@ -29,7 +29,7 @@ CREATE TABLE dbo.Products
     CONSTRAINT UQ_Products_Sku UNIQUE (Sku)
 );
 ```
-```sql [PostgreSQL]
+```sql [PostgreSQL icon:postgresql]
 CREATE TABLE public.products
 (
     product_id    INT            GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -48,13 +48,13 @@ Change tracking needs a primary key. `ProductId` is it, and it is the value that
 ### Enable change tracking
 
 ::: code-group
-```sql [SQL Server]
+```sql [SQL Server icon:database]
 ALTER DATABASE ShopDb
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
 ALTER TABLE dbo.Products ENABLE CHANGE TRACKING;
 ```
-```sql [PostgreSQL]
+```sql [PostgreSQL icon:postgresql]
 -- One outbox row per change, deletes included.
 CREATE TABLE public.products_outbox
 (
@@ -82,7 +82,7 @@ On SQL Server, `CHANGE_RETENTION` is how long history survives. If Trignis is st
 ### The procedure
 
 ::: code-group
-```sql [SQL Server]
+```sql [SQL Server icon:database]
 CREATE OR ALTER PROCEDURE dbo.get_productssync
     @Json NVARCHAR(MAX)
 AS
@@ -151,7 +151,7 @@ BEGIN
     COMMIT TRAN;
 END
 ```
-```sql [PostgreSQL]
+```sql [PostgreSQL icon:postgresql]
 CREATE OR REPLACE FUNCTION public.get_productssync(payload json) RETURNS json AS $$
 DECLARE
     from_version BIGINT := COALESCE((payload ->> 'fromVersion')::BIGINT, 0);
@@ -200,7 +200,7 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
 `environments/shop.json`:
 
 ::: code-group
-```json [SQL Server]
+```json [SQL Server icon:database]
 {
   "ConnectionStrings": {
     "ShopDb": "Server=localhost;Database=ShopDb;Trusted_Connection=True;TrustServerCertificate=True;"
@@ -221,7 +221,7 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
   }
 }
 ```
-```json [PostgreSQL]
+```json [PostgreSQL icon:postgresql]
 {
   "Provider": "postgres",
   "ConnectionStrings": {
@@ -250,7 +250,7 @@ For a delete, only `$operation`, `$version` and `ProductId` carry values. Every 
 ### Try it
 
 ::: code-group
-```sql [SQL Server]
+```sql [SQL Server icon:database]
 INSERT INTO dbo.Products (Sku, Name, Category, UnitPrice)
 VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
        ('SKU-002', 'Red Widget',  'Widgets', 12.50);
@@ -258,7 +258,7 @@ VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
 UPDATE dbo.Products SET UnitPrice = 11.00 WHERE Sku = 'SKU-001';
 DELETE FROM dbo.Products WHERE Sku = 'SKU-002';
 ```
-```sql [PostgreSQL]
+```sql [PostgreSQL icon:postgresql]
 INSERT INTO public.products (sku, name, category, unit_price)
 VALUES ('SKU-001', 'Blue Widget', 'Widgets', 9.99),
        ('SKU-002', 'Red Widget',  'Widgets', 12.50);

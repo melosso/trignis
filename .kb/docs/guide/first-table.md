@@ -16,7 +16,7 @@ Trignis asks your procedure for changes since a version, and it answers in JSON.
 For an items table with `ItemCode`, `Description`, `Assortment` and `sysguid`:
 
 ::: code-group
-```sql [SQL Server]
+```sql [SQL Server icon:database]
 CREATE OR ALTER PROCEDURE web.get_itemssync
     @json NVARCHAR(MAX)
 AS
@@ -75,7 +75,7 @@ BEGIN
     COMMIT TRAN;
 END
 ```
-```sql [PostgreSQL]
+```sql [PostgreSQL icon:postgresql]
 -- One outbox row per change, deletes included.
 CREATE TABLE public.items_outbox
 (
@@ -144,7 +144,7 @@ Full contract, including column-level tracking, is in the [reference](/reference
 Create `environments/production.json`:
 
 ::: code-group
-```json [SQL Server]
+```json [SQL Server icon:database]
 {
   "Provider": "mssql",
   "ConnectionStrings": {
@@ -164,7 +164,7 @@ Create `environments/production.json`:
   }
 }
 ```
-```json [PostgreSQL]
+```json [PostgreSQL icon:postgresql]
 {
   "Provider": "postgres",
   "ConnectionStrings": {

@@ -17,7 +17,7 @@ public sealed class DocsSnippetTests
     private static readonly string Guide = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../.kb/docs/guide"));
 
     private static List<string> PostgresBlocks(string page) =>
-        Regex.Matches(File.ReadAllText(Path.Combine(Guide, page)), @"```sql \[PostgreSQL\]\n(.*?)\n```", RegexOptions.Singleline)
+        Regex.Matches(File.ReadAllText(Path.Combine(Guide, page)), @"```sql \[PostgreSQL[^\]]*\]\n(.*?)\n```", RegexOptions.Singleline)
             .Select(m => m.Groups[1].Value).ToList();
 
     [ParityFact]
