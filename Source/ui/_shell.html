@@ -7,7 +7,20 @@
   <link href="/css/fonts.css" rel="stylesheet" />
   <link href="/css/site.css" rel="stylesheet" />
   <script src="/js/theme.js"></script>
+  <script type="module" src="/js/lit.js"></script>
   <script>
+  // Lit escapes interpolations; replaces all children.
+  function paint(el, template) {
+    const fragment = document.createDocumentFragment();
+    render(template, fragment);
+    el.replaceChildren(fragment);
+  }
+
+  // Views render after the lit module loads.
+  function onReady(fn) {
+    document.addEventListener('DOMContentLoaded', fn, { once: true });
+  }
+
   // Expired session: API calls return 401.
   const fetchOnce = window.fetch;
   window.fetch = async (...args) => {

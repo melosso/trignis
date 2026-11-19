@@ -53,18 +53,13 @@
 </main>
 
 <script>
-function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
 function settingItem(label, value, desc) {
-  return `<div class="settings-item">
+  return html`<div class="settings-item">
     <div>
       <div class="settings-item-label">${label}</div>
-      ${desc ? `<div class="settings-item-desc">${desc}</div>` : ''}
+      ${desc ? html`<div class="settings-item-desc">${desc}</div>` : nothing}
     </div>
-    <span class="settings-item-value">${esc(value)}</span>
+    <span class="settings-item-value">${value}</span>
   </div>`;
 }
 
@@ -79,7 +74,7 @@ async function load() {
     const srv = d.server ?? {};
     const log = d.logging ?? {};
 
-    document.getElementById('globalSettingsBody').innerHTML = [
+    paint(document.getElementById('globalSettingsBody'), html`${[
       settingItem('Polling Interval', g.PollingIntervalSeconds != null ? `${g.PollingIntervalSeconds}s` : '-'),
       boolItem('Export to File', g.ExportToFile),
       boolItem('Export to API', g.ExportToApi),
@@ -88,33 +83,32 @@ async function load() {
       boolItem('Payload Batching', g.EnablePayloadBatching),
       settingItem('Max Records / Batch', g.MaxRecordsPerBatch ?? '-'),
       settingItem('Max Payload Size', g.MaxPayloadSizeBytes != null ? `${Math.round(g.MaxPayloadSizeBytes / 1024 / 1024)}MB` : '-'),
-    ].join('');
+    ]}`);
 
-    document.getElementById('serverBody').innerHTML = [
+    paint(document.getElementById('serverBody'), html`${[
       settingItem('Host', srv.host ?? '-'),
       settingItem('Port', srv.port ?? '-'),
       settingItem('Cache Duration', srv.cache_duration_seconds != null ? `${srv.cache_duration_seconds}s` : '-'),
-    ].join('');
+    ]}`);
 
-    document.getElementById('dlqBody').innerHTML = [
+    paint(document.getElementById('dlqBody'), html`${[
       settingItem('Retention', g.DeadletterRetentionDays != null ? `${g.DeadletterRetentionDays} days` : '-'),
       boolItem('Monitor', g.DeadLetterMonitorEnabled),
       settingItem('Threshold', g.DeadLetterThreshold ?? '-'),
       settingItem('Check Interval', g.DeadLetterCheckIntervalMinutes != null ? `${g.DeadLetterCheckIntervalMinutes}min` : '-'),
-    ].join('');
+    ]}`);
 
-    document.getElementById('loggingBody').innerHTML = [
+    paint(document.getElementById('loggingBody'), html`${[
       settingItem('Minimum Level', log.min_level ?? '-'),
       settingItem('Sinks', (log.sinks ?? []).join(', ') || '-'),
-    ].join('');
+    ]}`);
 
   } catch(e) {
-    const msg = `<div class="muted" style="font-size:0.8rem">Failed to load: ${esc(e.message)}</div>`;
     ['globalSettingsBody','serverBody','dlqBody','loggingBody'].forEach(id => {
-      document.getElementById(id).innerHTML = msg;
+      paint(document.getElementById(id), html`<div class="muted" style="font-size:0.8rem">Failed to load: ${e.message}</div>`);
     });
   }
 }
 
-load();
+onReady(load);
 </script>

@@ -56,16 +56,13 @@
 </div>
 
 <script>
-function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
 function fmt(v, suffix = '') {
-  return v != null ? esc(String(v)) + suffix : '<span class="muted">-</span>';
+  return v != null ? `${v}${suffix}` : html`<span class="muted">-</span>`;
 }
 
 function renderEnv(env, idx) {
+  const resumeIcon = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>`;
+  const pauseIcon = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>`;
   const objects = env.tracking_objects ?? [];
   const endpoints = env.api_endpoints ?? [];
   const connKeys = env.connection_string_keys ?? [];
@@ -79,41 +76,36 @@ function renderEnv(env, idx) {
   ].filter(Boolean);
 
   const objectRows = objects.length
-    ? objects.map(o => `<tr>
-        <td>${esc(o.name)}${o.paused ? ' <span class="badge badge-warning">Paused</span>' : ''}</td>
-        <td class="muted">${esc(o.table_name)}</td>
-        <td>${o.database ? `<span class="pill">${esc(o.database)}</span>` : '<span class="muted">-</span>'}</td>
-        <td class="col-mono" style="font-size:0.7rem">${esc(o.stored_procedure_name ?? '-')}</td>
-        <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${esc(o.initial_sync_mode ?? 'Incremental')}</span></td>
+    ? objects.map(o => html`<tr>
+        <td>${o.name}${o.paused ? html` <span class="badge badge-warning">Paused</span>` : nothing}</td>
+        <td class="muted">${o.table_name}</td>
+        <td>${o.database ? html`<span class="pill">${o.database}</span>` : html`<span class="muted">-</span>`}</td>
+        <td class="col-mono" style="font-size:0.7rem">${o.stored_procedure_name ?? '-'}</td>
+        <td><span class="badge ${o.initial_sync_mode === 'Full' ? 'badge-info' : 'badge-muted'}">${o.initial_sync_mode ?? 'Incremental'}</span></td>
         <td style="text-align:right">${
           o.paused
-            ? `<button class="btn-icon" aria-label="Resume this object" data-tippy-content="Resume this object" data-env="${esc(env.name)}" data-object="${esc(o.name)}" onclick="resumeScope(this.dataset.env, this.dataset.object)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg></button>`
-            : `<button class="btn-icon" aria-label="Pause this object" data-tippy-content="Pause this object" data-env="${esc(env.name)}" data-object="${esc(o.name)}" onclick="askPause(this.dataset.env, this.dataset.object)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg></button>`
+            ? html`<button class="btn-icon" aria-label="Resume this object" data-tippy-content="Resume this object" @click=${() => resumeScope(env.name, o.name)}>${resumeIcon}</button>`
+            : html`<button class="btn-icon" aria-label="Pause this object" data-tippy-content="Pause this object" @click=${() => askPause(env.name, o.name)}>${pauseIcon}</button>`
         }</td>
-      </tr>`).join('')
-    : '<tr><td colspan="6" class="empty-state">No tracking objects</td></tr>';
+      </tr>`)
+    : html`<tr><td colspan="6" class="empty-state">No tracking objects</td></tr>`;
 
   const endpointRows = endpoints.length
-    ? endpoints.map(e => {
-        const type = e.mq_type ? e.mq_type : 'HTTP';
-        const target = e.mq_type ? '' : esc(e.url ?? '');
-        const auth = e.auth_type ? `<span class="badge badge-muted">${esc(e.auth_type)}</span>` : '';
-        return `<tr>
-          <td>${e.key ? `<span class="badge badge-muted">${esc(e.key)}</span>` : '<span class="muted">-</span>'}</td>
-          <td><span class="badge badge-info">${esc(type)}</span></td>
-          <td class="col-mono truncate" style="max-width:200px" title="${esc(e.url ?? '')}">${target}</td>
-          <td>${auth}</td>
-        </tr>`;
-      }).join('')
-    : '<tr><td colspan="4" class="empty-state">No endpoints</td></tr>';
+    ? endpoints.map(e => html`<tr>
+          <td>${e.key ? html`<span class="badge badge-muted">${e.key}</span>` : html`<span class="muted">-</span>`}</td>
+          <td><span class="badge badge-info">${e.mq_type || 'HTTP'}</span></td>
+          <td class="col-mono truncate" style="max-width:200px" title=${e.url ?? ''}>${e.mq_type ? '' : e.url ?? ''}</td>
+          <td>${e.auth_type ? html`<span class="badge badge-muted">${e.auth_type}</span>` : nothing}</td>
+        </tr>`)
+    : html`<tr><td colspan="4" class="empty-state">No endpoints</td></tr>`;
 
-  return `<div class="accordion" id="acc-${idx}">
-    <button class="accordion-trigger" onclick="toggleAccordion(${idx})">
+  return html`<div class="accordion" id="acc-${idx}">
+    <button class="accordion-trigger" @click=${() => toggleAccordion(idx)}>
       <span class="accordion-trigger-left">
-        <span class="badge badge-muted">${esc(env.name)}</span>
-        ${env.paused ? '<span class="badge badge-warning">Paused</span>' : ''}
-        ${env.config_error ? `<span class="badge badge-warning" title="${esc(env.config_error)}">Edit rejected, running previous config</span>` : ''}
-        ${env.provider && env.provider !== 'mssql' ? `<span class="pill">${esc(env.provider)}</span>` : ''}
+        <span class="badge badge-muted">${env.name}</span>
+        ${env.paused ? html`<span class="badge badge-warning">Paused</span>` : nothing}
+        ${env.config_error ? html`<span class="badge badge-warning" title=${env.config_error}>Edit rejected, running previous config</span>` : nothing}
+        ${env.provider && env.provider !== 'mssql' ? html`<span class="pill">${env.provider}</span>` : nothing}
         <span style="font-size:0.8rem;font-weight:400;color:hsl(var(--muted-foreground))">${objects.length} objects · ${endpoints.length} endpoints</span>
       </span>
       <svg class="accordion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
@@ -124,26 +116,26 @@ function renderEnv(env, idx) {
         <div class="accordion-section-title">Status</div>
         <div class="flex items-center gap-2" style="flex-wrap:wrap">
           ${env.paused
-            ? `<span class="badge badge-warning">Paused</span>
+            ? html`<span class="badge badge-warning">Paused</span>
                <span class="muted" style="font-size:0.8rem">Changes are accumulating in the source database and nothing is being exported.</span>
-               <button class="btn btn-primary ml-auto" data-env="${esc(env.name)}" onclick="resumeScope(this.dataset.env, null)">Resume environment</button>`
-            : `<span class="badge badge-success">Running</span>
+               <button class="btn btn-primary ml-auto" @click=${() => resumeScope(env.name, null)}>Resume environment</button>`
+            : html`<span class="badge badge-success">Running</span>
                <span class="muted" style="font-size:0.8rem">Polling every ${fmt(s.polling_interval_seconds ?? null, 's')} and exporting normally.</span>
-               <button class="btn btn-outline ml-auto" data-env="${esc(env.name)}" onclick="askPause(this.dataset.env, null)">Pause environment</button>`}
+               <button class="btn btn-outline ml-auto" @click=${() => askPause(env.name, null)}>Pause environment</button>`}
         </div>
       </div>
 
       <div class="accordion-section">
         <div class="accordion-section-title">Connection Strings</div>
         <div class="pill-list">
-          ${connKeys.length ? connKeys.map(k => `<span class="pill">${esc(k)}</span>`).join('') : '<span class="muted" style="font-size:0.8rem">None</span>'}
+          ${connKeys.length ? connKeys.map(k => html`<span class="pill">${k}</span>`) : html`<span class="muted" style="font-size:0.8rem">None</span>`}
         </div>
       </div>
 
-      ${overrides.length ? `<div class="accordion-section">
+      ${overrides.length ? html`<div class="accordion-section">
         <div class="accordion-section-title">Overrides</div>
-        <div class="pill-list">${overrides.map(o => `<span class="pill">${esc(o)}</span>`).join('')}</div>
-      </div>` : ''}
+        <div class="pill-list">${overrides.map(o => html`<span class="pill">${o}</span>`)}</div>
+      </div>` : nothing}
 
       <div class="accordion-section">
         <div class="accordion-section-title">Tracking Objects (${objects.length})</div>
@@ -277,13 +269,13 @@ async function load() {
     const envs = await fetch('/ui/api/environments').then(r => r.json());
     const arr = Array.isArray(envs) ? envs : [];
     document.getElementById('envCount').textContent = `${arr.length} environment${arr.length !== 1 ? 's' : ''}`;
-    list.innerHTML = arr.length
-      ? arr.map((env, i) => renderEnv(env, i)).join('')
-      : '<div class="muted" style="font-size:0.875rem">No environments configured</div>';
+    paint(list, arr.length
+      ? html`${arr.map((env, i) => renderEnv(env, i))}`
+      : html`<div class="muted" style="font-size:0.875rem">No environments configured</div>`);
   } catch(e) {
-    list.innerHTML = `<div class="muted" style="font-size:0.875rem">Failed to load environments: ${esc(e.message)}</div>`;
+    paint(list, html`<div class="muted" style="font-size:0.875rem">Failed to load environments: ${e.message}</div>`);
   }
 }
 
-load();
+onReady(load);
 </script>

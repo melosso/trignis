@@ -87,11 +87,6 @@
 </main>
 
 <script>
-function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
 async function load() {
   await Promise.all([loadOverview(), loadHealth(), loadConnections(), loadSyncState()]);
 }
@@ -136,18 +131,16 @@ async function loadConnections() {
     const d = await fetch('/health/connections').then(r => r.json());
     const entries = Object.entries(d);
     if (!entries.length) {
-      el.innerHTML = '<span class="muted" style="font-size:0.8rem">No connections monitored</span>';
+      paint(el, html`<span class="muted" style="font-size:0.8rem">No connections monitored</span>`);
       return;
     }
-    el.innerHTML = '<div class="kv-grid">' + entries.map(([k, v]) => {
+    paint(el, html`<div class="kv-grid">${entries.map(([k, v]) => {
       const ok = v?.is_healthy;
-      const dot = `<span class="status-dot ${ok ? 'ok' : 'err'}"></span>`;
-      const label = ok ? 'Healthy' : esc(v?.last_error ?? 'Unhealthy');
-      return `<span class="kv-key">${esc(k)}</span>
-              <span class="kv-val flex items-center gap-2">${dot} ${label}</span>`;
-    }).join('') + '</div>';
+      return html`<span class="kv-key">${k}</span>
+              <span class="kv-val flex items-center gap-2"><span class="status-dot ${ok ? 'ok' : 'err'}"></span> ${ok ? 'Healthy' : v?.last_error}</span>`;
+    })}</div>`);
   } catch(e) {
-    el.innerHTML = '<span class="muted" style="font-size:0.8rem">Health endpoint unavailable</span>';
+    paint(el, html`<span class="muted" style="font-size:0.8rem">Health endpoint unavailable</span>`);
   }
 }
 
@@ -171,30 +164,29 @@ async function loadSyncState() {
 
     const rows = envs.flatMap(env => {
       const objs = env.objects ?? [];
-      const header = `<tr class="sync-env-row">
-        <td colspan="4"><span class="badge badge-muted">${esc(env.name)}</span>
+      const header = html`<tr class="sync-env-row">
+        <td colspan="4"><span class="badge badge-muted">${env.name}</span>
           <span class="muted" style="font-size:0.75rem;margin-left:0.5rem">${objs.length} object${objs.length !== 1 ? 's' : ''}</span>
         </td>
       </tr>`;
-      const objRows = objs.map(obj => `<tr>
-        <td>${esc(obj.object_name)}</td>
+      const objRows = objs.map(obj => html`<tr>
+        <td>${obj.object_name}</td>
         <td class="muted">${obj.last_version ?? '-'}</td>
-        <td class="muted" title="${esc(obj.last_updated ?? '')}">${reltime(obj.last_updated)}</td>
+        <td class="muted" title=${obj.last_updated ?? ''}>${reltime(obj.last_updated)}</td>
         <td style="text-align:right">
           <button class="btn btn-ghost" style="height:1.75rem;font-size:0.75rem"
-                  data-env="${esc(env.name)}" data-object="${esc(obj.object_name)}"
-                  onclick="resetSync(this.dataset.env, this.dataset.object)"
+                  @click=${() => resetSync(env.name, obj.object_name)}
                   title="Clear the stored version so the next cycle re-initialises this object">Reset</button>
         </td>
       </tr>`);
       return [header, ...objRows];
     });
 
-    body.innerHTML = rows.length
-      ? rows.join('')
-      : '<tr><td colspan="4" class="empty-state">No objects tracked yet</td></tr>';
+    paint(body, rows.length
+      ? html`${rows}`
+      : html`<tr><td colspan="4" class="empty-state">No objects tracked yet</td></tr>`);
   } catch(e) {
-    body.innerHTML = '<tr><td colspan="4" class="empty-state muted">Sync state unavailable</td></tr>';
+    paint(body, html`<tr><td colspan="4" class="empty-state muted">Sync state unavailable</td></tr>`);
   }
 }
 
@@ -218,5 +210,5 @@ async function resetSync(envName, objectName) {
   }
 }
 
-load();
+onReady(load);
 </script>

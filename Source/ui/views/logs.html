@@ -49,11 +49,6 @@ let logOffset = 0;
 let hasMoreLogs = false;
 let currentLogs = [];
 
-function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
 function setLevel(level) {
   activeLevel = level;
   const levels = ['ALL','INF','WRN','ERR','DBG'];
@@ -104,28 +99,22 @@ async function load(append = false) {
 
     const viewer = document.getElementById('logViewer');
     if (!currentLogs.length) {
-      viewer.innerHTML = '<div class="log-line"><span class="log-msg muted">No log entries found</span></div>';
+      paint(viewer, html`<div class="log-line"><span class="log-msg muted">No log entries found</span></div>`);
       return;
     }
 
     // Render oldest→newest (top→bottom) so multi-line tree structures read naturally
-    viewer.innerHTML = [...currentLogs].reverse().map(line => {
+    paint(viewer, html`${[...currentLogs].reverse().map(line => {
       const lvl = (line.level ?? 'INF').substring(0, 3).toUpperCase();
-      const ts = esc(line.timestamp ?? '');
-      const msg = esc(line.message ?? '');
-      return `<div class="log-line">` +
-        `<span class="log-ts">${ts}</span> ` +
-        `<span class="log-lvl-${lvl}">[${lvl}]</span> ` +
-        `<span class="log-msg">${msg}</span>` +
-        `</div>`;
-    }).join('');
+      return html`<div class="log-line"><span class="log-ts">${line.timestamp ?? ''}</span> <span class="log-lvl-${lvl}">[${lvl}]</span> <span class="log-msg">${line.message ?? ''}</span></div>`;
+    })}`);
     // On first load (not "load more"), scroll to bottom so newest entries are visible
     if (!append) viewer.scrollTop = viewer.scrollHeight;
   } catch(e) {
-    document.getElementById('logViewer').innerHTML =
-      `<div class="log-line"><span class="log-lvl-ERR">[ERR]</span> <span class="log-msg">Failed to load logs: ${esc(e.message)}</span></div>`;
+    paint(document.getElementById('logViewer'),
+      html`<div class="log-line"><span class="log-lvl-ERR">[ERR]</span> <span class="log-msg">Failed to load logs: ${e.message}</span></div>`);
   }
 }
 
-load();
+onReady(() => load());
 </script>
