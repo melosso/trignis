@@ -22,10 +22,12 @@ In practice that means you can iterate freely on what you track and where it goe
 
 ## Precedence
 
-A handful of settings appear in both places, which lets you set a sensible default once and let a single environment differ. When Trignis needs a value it walks this chain and takes the first thing it finds:
+A setting defined in both `appsettings.json` and an environment file resolves in this order. Trignis uses the first value that is set:
 
-```
-environment value  →  ChangeTracking:GlobalSettings  →  built-in default
+```mermaid
+flowchart LR
+    A[Environment file] -->|not set| B[ChangeTracking:GlobalSettings]
+    B -->|not set| C[Built-in default]
 ```
 
 Three settings can be overridden per environment: `polling.interval`, `retry.count` and `retry.delay`. `destinations` in each environment file defines its exports. `ExportToFile`, `ExportToApi` and `FilePath` in `appsettings.json` have no effect on YAML environment files. The JSON migration writes their effective values to `destinations`.
