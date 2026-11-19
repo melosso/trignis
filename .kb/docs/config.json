@@ -3,9 +3,80 @@
   "titleTemplate": ":title · :siteName",
   "description": "Change tracking for SQL Server and PostgreSQL: export changes to files, APIs and message queues",
   "lang": "en",
+  "versions": {
+    "items": [
+      { "text": "Latest", "link": "/" },
+      {
+        "text": "v0.4",
+        "link": "/v0.4/",
+        "sidebar": {
+          "/guide/": [
+            { "title": "What is Trignis?", "path": "guide/" },
+            {
+              "title": "Introduction",
+              "collapsed": false,
+              "items": [
+                { "title": "Install", "path": "guide/install" },
+                { "title": "Track your first table", "path": "guide/first-table" }
+              ]
+            },
+            {
+              "title": "Exporting",
+              "collapsed": false,
+              "items": [
+                { "title": "Files", "path": "guide/export-files" },
+                { "title": "HTTP endpoints", "path": "guide/export-http" },
+                { "title": "Message queues", "path": "guide/export-queues" }
+              ]
+            },
+            {
+              "title": "Operations",
+              "collapsed": false,
+              "items": [
+                { "title": "Deployment", "path": "guide/deployment" },
+                { "title": "Dashboard", "path": "guide/dashboard" },
+                { "title": "Dead letters", "path": "guide/dead-letters" }
+              ]
+            },
+            {
+              "items": [
+                { "title": "Examples", "path": "guide/examples" },
+                { "title": "Reference", "path": "reference/" }
+              ]
+            }
+          ],
+          "/reference/": [
+            {
+              "title": "Reference",
+              "items": [
+                { "title": "Overview", "path": "reference/" },
+                { "title": "Environment files", "path": "reference/environment" },
+                { "title": "Global settings", "path": "reference/global-settings" },
+                { "title": "Authentication", "path": "reference/authentication" },
+                {
+                  "title": "Contracts",
+                  "items": [
+                    { "title": "Procedure contract", "path": "reference/stored-procedure" },
+                    { "title": "Health endpoints", "path": "reference/health" }
+                  ]
+                }
+              ]
+            },
+            {
+              "items": [
+                { "title": "Examples", "path": "guide/examples" },
+                { "title": "Guide", "path": "guide/" }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
   "brand": "Trignis",
   "favicon": "📇",
   "lastUpdated": true,
+  "promo": "**Version 0.5** uses YAML environment files. Running v0.4? Read the [v0.4 documentation](/v0.4/).",
   "footer": "© {year} Melosso.com · Licensed under [EUPL 1.2](https://github.com/melosso/trignis/blob/main/LICENSE). Built with [Bark](https://github.com/melosso/bark/).",
   "topNav": [
     { "text": "Home", "link": "/" },
