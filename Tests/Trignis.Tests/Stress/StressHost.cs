@@ -18,7 +18,7 @@ using Trignis.Services;
 
 namespace Trignis.Tests.Stress;
 
-// Runs a real ChangeTrackingBackgroundService over a throwaway working directory
+// Runs ChangeTrackingBackgroundService over a throwaway working directory
 internal sealed class StressHost : IAsyncDisposable
 {
     private readonly string _originalCwd;

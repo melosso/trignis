@@ -24,7 +24,7 @@ public sealed class BrokerFactAttribute : FactAttribute
     }
 }
 
-/// <summary>The connection probe and a real send agree for each broker type.</summary>
+/// <summary>The connection probe and a broker send agree for each broker type.</summary>
 public sealed class BrokerParityTests
 {
     private const string EmulatorKey = "SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;";

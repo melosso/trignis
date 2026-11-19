@@ -85,7 +85,7 @@ Unmatched names are logged and all environments load anyway, so a typo does not 
 - `WebHost.Host` set to `localhost` or `127.0.0.1` restricts `/ui` to loopback; anything else is refused with 403.
 
 ::: danger
-`AdminApiKey` ships with a placeholder. Empty or unchanged means the UI is unauthenticated. Set a real key before exposing the port, and put TLS in front of it. See [Authentication](/reference/authentication).
+`AdminApiKey` ships with a placeholder. Empty or unchanged means the UI is unauthenticated. Set a unique key before exposing the port, and put TLS in front of it. See [Authentication](/reference/authentication).
 :::
 
 ## Logs

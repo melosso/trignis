@@ -45,16 +45,8 @@ namespace Trignis.Services
 
         private string LoadEncryptionKey()
         {
-            // Priority 1: Check Windows environment variable
-            var envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", EnvironmentVariableTarget.Machine);
-            if (!string.IsNullOrWhiteSpace(envKey))
-            {
-                Log.Debug("Using encryption key from Windows system environment variable");
-                return envKey;
-            }
-
-            // Priority 2: Check process environment variable
-            envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY", EnvironmentVariableTarget.Process);
+            // Process env includes machine variables.
+            var envKey = Environment.GetEnvironmentVariable("TRIGNIS_ENCRYPTION_KEY");
             if (!string.IsNullOrWhiteSpace(envKey))
             {
                 Log.Debug("Using encryption key from process environment variable");
@@ -63,7 +55,7 @@ namespace Trignis.Services
 
             // .env is not read here. Program.cs loads it into the process environment first
 
-            // Priority 3: Fallback to hardcoded key (with warning)
+            // Fallback key, with a warning.
             Log.Warning("No TRIGNIS_ENCRYPTION_KEY found in environment or .env file. Using fallback key. " +
                         "For production, set TRIGNIS_ENCRYPTION_KEY environment variable or create .env file.");
 

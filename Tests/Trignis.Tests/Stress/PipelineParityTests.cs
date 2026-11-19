@@ -10,7 +10,7 @@ using Xunit;
 namespace Trignis.Tests.Stress;
 
 /// <summary>
-/// Runs the pipeline against real databases and real HTTP destinations. Assertions use the requests that the destinations received. Every scenario runs on every platform.
+/// Runs the pipeline against database containers and HTTP sinks. Assertions use the requests that the destinations received. Every scenario runs on every platform.
 /// </summary>
 [Collection("SqliteTests")]
 public sealed class PipelineParityTests

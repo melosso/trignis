@@ -21,7 +21,7 @@ public sealed class WebUiAuth
     private readonly ConcurrentDictionary<string, DateTime> _csrfTokens = new();
     private long _lastPruneTicks = DateTime.UtcNow.Ticks;
 
-    // Enough for every real login form in flight; a flood past this evicts the oldest instead of growing
+    // Bounded: a flood evicts the oldest tokens.
     private const int MaxCsrfTokens = 10_000;
 
     private readonly ConcurrentDictionary<string, DateTime> _revokedSessions = new();

@@ -7,6 +7,8 @@ description: Every appsettings.json key
 
 `appsettings.json` contains the settings that apply to your whole installation: how often Trignis polls, what it does when an export fails, whether the dashboard is served at all. Unlike the environment files, this one is read once when the service starts, so a change here needs a restart before it takes effect.
 
+Environment variables override `appsettings.json` (`Trignis__AdminApiKey` sets `Trignis:AdminApiKey`). A `.env` file next to the executable sets unset environment variables. Environment variables override `.env` values.
+
 Here is the whole file with its defaults, so you can see the shape before working through the sections below:
 
 ```json
@@ -121,7 +123,7 @@ Deleting the file is a valid way to start over: every object re-initialises acco
 | `Host` | `*` | Binding host |
 | `CacheDurationSeconds` | 120 | How long `/health` is cached |
 
-`/health` opens a real connection to each configured database rather than reporting a cached guess, which is what makes it trustworthy. That honesty has a cost, so the response is cached: a monitoring system polling every few seconds will not turn your health check into a load generator.
+`/health` opens a connection to each configured database. The response is cached for `CacheDurationSeconds`. Frequent polling does not add database load.
 
 ## WebHost
 

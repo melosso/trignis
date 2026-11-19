@@ -172,7 +172,7 @@ Two changes, not three. The insert and the update to `SKU-001` collapse into one
 
 ## Example 2: `Sales.SalesOrderHeader` from AdventureWorks
 
-A real table, wider, with computed columns and foreign keys. Restore the AdventureWorks sample database first.
+A wider table with computed columns and foreign keys. Restore the AdventureWorks sample database first.
 
 ### Enable change tracking
 

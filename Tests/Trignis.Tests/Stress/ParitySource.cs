@@ -20,7 +20,7 @@ public sealed class ParityTheoryAttribute : TheoryAttribute
 }
 
 /// <summary>
-/// A tracked table and its change procedure on a real server, one per test. Contract: {"Metadata":{"Sync":{"Version":n}},"Data":[{..,"$version":n}]}.
+/// A tracked table and its change procedure on a database server, one per test. Contract: {"Metadata":{"Sync":{"Version":n}},"Data":[{..,"$version":n}]}.
 /// </summary>
 internal sealed class ParitySource : IAsyncDisposable
 {
