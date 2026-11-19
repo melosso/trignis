@@ -8,17 +8,15 @@ GO
 -- Enable change tracking on the database if not already enabled
 IF NOT EXISTS (SELECT * FROM sys.change_tracking_databases WHERE database_id = DB_ID())
 BEGIN
-    DECLARE @dbname sysname = DB_NAME();
-    EXEC('ALTER DATABASE [' + @dbname + '] SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 30 DAYS, AUTO_CLEANUP = ON)');
+    ALTER DATABASE CURRENT SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 30 DAYS, AUTO_CLEANUP = ON);
 END
 GO
 
--- Enable snapshot isolation
-ALTER DATABASE CURRENT  
-SET ALLOW_SNAPSHOT_ISOLATION ON  
-GO 
+-- Enable snapshot isolation; the procedure reads the version and the rows in one snapshot
+ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION ON;
+GO
 
--- Drop and recreate the pwruc table
+-- Create the table if missing
 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE Name = 'pwruc')
 BEGIN 
     CREATE TABLE [dbo].[pwruc](
@@ -52,7 +50,7 @@ CREATE OR ALTER PROCEDURE web.get_pwrucsync
     @json NVARCHAR(MAX)
 AS
 BEGIN
-    DECLARE @fromVersion INT = JSON_VALUE(@json, '$.fromVersion');
+    DECLARE @fromVersion BIGINT = JSON_VALUE(@json, '$.fromVersion');
 
     SET XACT_ABORT ON;
     SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
@@ -60,8 +58,8 @@ BEGIN
     BEGIN TRAN;
         DECLARE @reason INT;
 
-        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
-        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.pwruc'));
+        DECLARE @curVer BIGINT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer BIGINT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.pwruc'));
 
         IF (@fromVersion = 0)
         BEGIN
@@ -80,9 +78,11 @@ BEGIN
                 'Full' AS 'Metadata.Sync.Type',
                 @reason AS 'Metadata.Sync.ReasonCode',
                 [Data] = JSON_QUERY((
-                    SELECT ID, res_id, role_id, rolelevel, Division, syscreated, syscreator, sysmodified, sysmodifier, sysguid, timestamp
-                    FROM dbo.pwruc
-                    FOR JSON AUTO
+                    SELECT p.ID, p.res_id, p.role_id, p.rolelevel, p.Division, p.syscreated, p.syscreator, p.sysmodified, p.sysmodifier, p.sysguid,
+                        b.bedrnr AS CompanyNumber
+                    FROM dbo.pwruc AS p
+                    CROSS JOIN dbo.bedryf AS b
+                    FOR JSON PATH
                 ))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
         END
@@ -95,21 +95,11 @@ BEGIN
                     SELECT
                         ct.SYS_CHANGE_OPERATION AS '$operation',
                         ct.SYS_CHANGE_VERSION AS '$version',
-                        ct.ID,
-                        p.res_id,
-                        p.role_id,
-                        p.rolelevel,
-                        p.Division,
-                        p.syscreated,
-                        p.syscreator,
-                        p.sysmodified,
-                        p.sysmodifier,
-                        p.sysguid,
-                        b.bedrnr As CompanyNumber
-                    FROM dbo.pwruc AS p
-					CROSS JOIN dbo.bedryf b
-                    RIGHT OUTER JOIN
-                        CHANGETABLE(CHANGES dbo.pwruc, @fromVersion) AS ct ON ct.ID = p.ID
+                        ct.ID, p.res_id, p.role_id, p.rolelevel, p.Division, p.syscreated, p.syscreator, p.sysmodified, p.sysmodifier, p.sysguid,
+                        b.bedrnr AS CompanyNumber
+                    FROM CHANGETABLE(CHANGES dbo.pwruc, @fromVersion) AS ct
+                    LEFT OUTER JOIN dbo.pwruc AS p ON p.ID = ct.ID
+                    CROSS JOIN dbo.bedryf AS b
                     FOR JSON PATH
                 ))
             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;

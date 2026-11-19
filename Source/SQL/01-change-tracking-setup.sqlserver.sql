@@ -59,6 +59,10 @@ BEGIN
 END
 GO
 
+-- Enable snapshot isolation; the procedures in 02 read the version and the rows in one snapshot
+ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION ON;
+GO
+
 -- Enable change tracking on the TrainingSessions table if not already enabled
 IF NOT EXISTS (SELECT * FROM sys.change_tracking_tables WHERE object_id = OBJECT_ID('dbo.TrainingSessions'))
 BEGIN

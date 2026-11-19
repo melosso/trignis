@@ -22,7 +22,7 @@ CREATE OR ALTER PROCEDURE web.get_itemssync
     @json NVARCHAR(MAX)
 AS
 BEGIN
-    DECLARE @fromVersion INT = JSON_VALUE(@json, '$.fromVersion');
+    DECLARE @fromVersion BIGINT = JSON_VALUE(@json, '$.fromVersion');
 
     -- Column IDs for change tracking (used to check which columns changed in updates)
     DECLARE @Description INT = COLUMNPROPERTY(OBJECT_ID('dbo.Items'), 'Description', 'ColumnId');
@@ -35,8 +35,8 @@ BEGIN
     BEGIN TRAN;
         DECLARE @reason INT;
 
-        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
-        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
+        DECLARE @curVer BIGINT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer BIGINT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Items'));
 
         IF (@fromVersion = 0)
         BEGIN

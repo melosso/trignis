@@ -8,4 +8,4 @@ docker compose -f Tests/parity/docker-compose.yml up -d --wait
 export TRIGNIS_PARITY_MSSQL='Server=127.0.0.1,14333;User ID=sa;Password=Parity_Test_1433!;Encrypt=False;TrustServerCertificate=True'
 export TRIGNIS_PARITY_POSTGRES='Host=127.0.0.1;Port=54329;Username=postgres;Password=parity_test;Database=postgres'
 
-dotnet test trignis.sln --filter "FullyQualifiedName~PipelineParityTests|FullyQualifiedName~TransactionParityTests|FullyQualifiedName~ShippedProcedureTests|FullyQualifiedName~DocsSnippetTests" "$@"
+dotnet test trignis.sln --filter "FullyQualifiedName~PipelineParityTests|FullyQualifiedName~TransactionParityTests|FullyQualifiedName~ShippedProcedureTests|FullyQualifiedName~ExampleProcedureTests|FullyQualifiedName~DocsSnippetTests" "$@"

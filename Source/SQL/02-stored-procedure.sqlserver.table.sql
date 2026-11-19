@@ -2,15 +2,15 @@ create or alter procedure web.get_trainingsessionsync
 @json nvarchar(max)
 as
 
-declare @fromVersion int = json_value(@json, '$.fromVersion')
+declare @fromVersion bigint = json_value(@json, '$.fromVersion')
 
 set xact_abort on
 set transaction isolation level snapshot;  
 begin tran 
     declare @reason int
 
-    declare @curVer int = change_tracking_current_version();
-    declare @minVer int = change_tracking_min_valid_version(object_id('dbo.TrainingSessions'));
+    declare @curVer bigint = change_tracking_current_version();
+    declare @minVer bigint = change_tracking_min_valid_version(object_id('dbo.TrainingSessions'));
 
     if (@fromVersion = 0) begin
         set @reason = 0 -- First Sync

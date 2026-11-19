@@ -52,7 +52,9 @@ Change tracking needs a primary key. `ProductId` is it, and it is the value that
 ALTER DATABASE ShopDb
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
-ALTER TABLE dbo.Products ENABLE CHANGE TRACKING;
+ALTER DATABASE ShopDb SET ALLOW_SNAPSHOT_ISOLATION ON;
+
+ALTER TABLE dbo.Products ENABLE CHANGE_TRACKING;
 ```
 ```sql [PostgreSQL icon:postgresql]
 -- One outbox row per change, deletes included.
@@ -291,7 +293,7 @@ A wider table with computed columns and foreign keys. Restore the AdventureWorks
 ALTER DATABASE AdventureWorks2026
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 3 DAYS, AUTO_CLEANUP = ON);
 
-ALTER TABLE Sales.SalesOrderHeader ENABLE CHANGE TRACKING;
+ALTER TABLE Sales.SalesOrderHeader ENABLE CHANGE_TRACKING;
 ```
 
 ### The procedure
@@ -455,7 +457,7 @@ The receiver gets several POSTs, each carrying `X-Batch-Number` and `X-Total-Bat
 Orders usually need their line items. `Sales.SalesOrderDetail` is a second tracked object, not extra columns on the first:
 
 ```sql
-ALTER TABLE Sales.SalesOrderDetail ENABLE CHANGE TRACKING;
+ALTER TABLE Sales.SalesOrderDetail ENABLE CHANGE_TRACKING;
 ```
 
 ```json

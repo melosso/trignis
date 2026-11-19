@@ -58,7 +58,7 @@ ALTER DATABASE YourDatabase
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
 -- Per table
-ALTER TABLE dbo.YourTable ENABLE CHANGE TRACKING;
+ALTER TABLE dbo.YourTable ENABLE CHANGE_TRACKING;
 ```
 
 If your procedures use snapshot isolation, which the [contract reference](/reference/stored-procedure#sql-server) recommends, it also needs allowing once per database:

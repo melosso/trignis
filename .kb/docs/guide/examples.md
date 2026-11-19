@@ -52,7 +52,9 @@ Change tracking needs a primary key. `ProductId` is it, and it is the value that
 ALTER DATABASE ShopDb
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
 
-ALTER TABLE dbo.Products ENABLE CHANGE TRACKING;
+ALTER DATABASE ShopDb SET ALLOW_SNAPSHOT_ISOLATION ON;
+
+ALTER TABLE dbo.Products ENABLE CHANGE_TRACKING;
 ```
 ```sql [PostgreSQL icon:postgresql]
 -- One outbox row per change, deletes included.
@@ -88,15 +90,15 @@ CREATE OR ALTER PROCEDURE dbo.get_productssync
 AS
 BEGIN
     SET NOCOUNT ON;
-    DECLARE @fromVersion INT = JSON_VALUE(@Json, '$.fromVersion');
+    DECLARE @fromVersion BIGINT = JSON_VALUE(@Json, '$.fromVersion');
 
     SET XACT_ABORT ON;
     SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
 
     BEGIN TRAN;
         DECLARE @reason INT = 0;
-        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
-        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Products'));
+        DECLARE @curVer BIGINT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer BIGINT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('dbo.Products'));
 
         IF (@fromVersion > 0 AND @fromVersion < @minVer)
         BEGIN
@@ -290,7 +292,7 @@ A wider table with computed columns and foreign keys. Restore the AdventureWorks
 ALTER DATABASE AdventureWorks2026
   SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 3 DAYS, AUTO_CLEANUP = ON);
 
-ALTER TABLE Sales.SalesOrderHeader ENABLE CHANGE TRACKING;
+ALTER TABLE Sales.SalesOrderHeader ENABLE CHANGE_TRACKING;
 ```
 
 ### The procedure
@@ -303,15 +305,15 @@ CREATE OR ALTER PROCEDURE Sales.get_salesorderssync
 AS
 BEGIN
     SET NOCOUNT ON;
-    DECLARE @fromVersion INT = JSON_VALUE(@Json, '$.fromVersion');
+    DECLARE @fromVersion BIGINT = JSON_VALUE(@Json, '$.fromVersion');
 
     SET XACT_ABORT ON;
     SET TRANSACTION ISOLATION LEVEL SNAPSHOT;
 
     BEGIN TRAN;
         DECLARE @reason INT = 0;
-        DECLARE @curVer INT = CHANGE_TRACKING_CURRENT_VERSION();
-        DECLARE @minVer INT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('Sales.SalesOrderHeader'));
+        DECLARE @curVer BIGINT = CHANGE_TRACKING_CURRENT_VERSION();
+        DECLARE @minVer BIGINT = CHANGE_TRACKING_MIN_VALID_VERSION(OBJECT_ID('Sales.SalesOrderHeader'));
 
         IF (@fromVersion > 0 AND @fromVersion < @minVer)
         BEGIN
@@ -449,7 +451,7 @@ The receiver gets several POSTs, each carrying `X-Batch-Number` and `X-Total-Bat
 Orders usually need their line items. `Sales.SalesOrderDetail` is a second tracked object, not extra columns on the first:
 
 ```sql
-ALTER TABLE Sales.SalesOrderDetail ENABLE CHANGE TRACKING;
+ALTER TABLE Sales.SalesOrderDetail ENABLE CHANGE_TRACKING;
 ```
 
 ```yaml

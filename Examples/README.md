@@ -1,14 +1,34 @@
 TRIGNIS EXAMPLE FOLDER
 ======================
 
-This contains tested examples that can and may be used with the respective application. Melosso can't be held liable for any misuse or damages caused by these examples.
+SQL Server scripts for Exact Globe and Exact Synergy tables. Melosso can't be held liable for any misuse or damages caused by these examples.
 
-These script will contain basic examples, which may include:
+Each script performs these steps on the current database:
 
-- Schema creation if missing
-- Enabling change tracking on the database
-- Enabling snapshot isolation
-- Enabling change tracking on the table
-- Creating the sync stored procedure
+- Creates the `web` schema.
+- Enables change tracking and snapshot isolation on the database.
+- Enables change tracking on the table.
+- Creates the sync procedure.
 
-Use this example as a reference for implementing change tracking in your own applications, but make sure to adjust them to fit your (environments) requirements.
+Each script is idempotent.
+
+| Script | Table | Procedure | Tracking |
+|---|---|---|---|
+| `Exact Globe/column-tracking_dbo.Items.sql` | `dbo.Items` | `web.get_itemssync` | Column level, with `$changed` |
+| `Exact Globe/table-tracking_dbo.pwruc.sql` | `dbo.pwruc` | `web.get_pwrucsync` | Row level |
+| `Exact Synergy/table-tracking_dbo.HRRoles.sql` | `dbo.HRRoles` | `web.get_hrrolessync` | Row level |
+
+An environment file registers a procedure under `tables:`:
+
+```yaml
+tables:
+  - name: Items
+    database: ExactGlobe
+    table: dbo.Items
+    procedure: web.get_itemssync
+    initial_sync: incremental
+```
+
+`Tests/Trignis.Tests/Stress/ExampleProcedureTests.cs` runs every script on SQL Server 2022 (`Tests/parity/run.sh`).
+
+Procedure contract: https://melosso.github.io/trignis/reference/stored-procedure
