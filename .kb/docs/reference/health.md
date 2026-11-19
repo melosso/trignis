@@ -120,6 +120,34 @@ A count of what has failed to export recently.
 
 `MostCommonError` looks at the last 24 hours, which usually points straight at whatever is currently broken. On a fresh install `sinkhole.db` does not exist yet, and you will get zeroes rather than an error.
 
+## GET /metrics
+
+The same signals in the Prometheus text format, for Prometheus, Grafana Agent or any scraper that reads it.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `trignis_last_cycle_age_seconds` | gauge | `environment`, `table` | Seconds since the last successful read of the table. This is the lag. |
+| `trignis_paused` | gauge | `environment`, `table` | `1` when the table or its environment is paused. |
+| `trignis_rows_exported_total` | counter | `environment`, `table`, `destination` | Rows exported since start. |
+| `trignis_export_failures_total` | counter | `environment`, `table`, `destination` | Failed exports since start. |
+| `trignis_dead_letters` | gauge | `environment`, `table` | Dead letters waiting for replay or review. |
+
+The counters live in memory and start from zero after a restart, which Prometheus handles by design. Tables removed from the configuration are left out, even if their state row remains.
+
+Two alert rules cover most failures. Adjust `90` to three times your polling interval:
+
+```yaml
+groups:
+  - name: trignis
+    rules:
+      - alert: TrignisLagging
+        expr: trignis_last_cycle_age_seconds > 90 and on (environment, table) trignis_paused == 0
+        for: 5m
+      - alert: TrignisDeadLetters
+        expr: trignis_dead_letters > 0
+        for: 15m
+```
+
 ## GET /
 
 With the dashboard turned off, the root path serves a small JSON index of the routes above, which makes discovery easier for anyone poking at the service for the first time. When `WebHost:Enabled` is on, it redirects to `/ui` instead.
