@@ -12,6 +12,8 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "Serilog.AspNetCore"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "Npgsql*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
