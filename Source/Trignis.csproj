@@ -45,7 +45,7 @@
     <PackageReference Include="Serilog.Sinks.EventLog" Version="4.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
-    <PackageReference Include="SharpYaml" Version="3.17.0" />
+    <PackageReference Include="SharpYaml" Version="3.18.0" />
   </ItemGroup>
 
   <ItemGroup>
